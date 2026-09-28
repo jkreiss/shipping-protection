@@ -121,12 +121,15 @@ offer to create services for these npm workspaces; use the root app instead.
    tile**, then **Settings**. Connect the repository under **Service Source** if
    needed. Leave **Root Directory** blank or set it to `/`; it is a separate
    setting from Service Source. Generate a domain under **Public Networking**.
-   Use its `https://` URL as the app origin. If Railway already created services
+   If asked for a target port before the first deployment, enter `3000` (the
+   port exposed by the Dockerfile). Use the domain's `https://` URL as the app
+   origin. If Railway already created services
    from the two extension directories, confirm their root directories and
    retire them after the root service is working.
 3. In the root service's **Variables** tab, set the real values below. The
-   placeholders in `.env.example` do not configure Railway. Railway supplies
-   `PORT` automatically, and the app reads it.
+   placeholders in `.env.example` do not configure Railway. When you set the
+   domain target port manually to `3000`, also set `PORT=3000` here so the app
+   listens on the same internal port.
 
    | Variable | Value |
    | --- | --- |
@@ -137,6 +140,7 @@ offer to create services for these npm workspaces; use the root app instead.
    | `DATABASE_URL` | Supabase Session pooler URL, port 5432, with `schema=public&sslmode=require` |
    | `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated random secret of at least 16 characters |
    | `NODE_ENV` | `production` |
+   | `PORT` | `3000`, matching the manually selected domain target port |
 
    Copy the pooler URL from Supabase **Connect** and URL-encode any special
    characters in its password. Prisma connects to Supabase PostgreSQL directly;
@@ -144,17 +148,18 @@ offer to create services for these npm workspaces; use the root app instead.
 4. Set Railway's **Pre-Deploy Command** to `npx prisma migrate deploy`. Leave the
    start command at the Dockerfile default, `npm run start`. This applies
    migrations before a new deployment starts rather than on every restart.
-5. Once the domain is known, set `application_url` in the Shopify app config to
-   that HTTPS origin and `[auth].redirect_urls` to its `/auth/callback` URL.
-   The backend's auth prefix is `/auth`. Use a separate production Shopify
-   config if you also use `shopify app dev`; set
-   `automatically_update_urls_on_dev = false` in production. Validate the config
-   with `shopify app config validate --json --config production`, then publish
-   its configuration and both extensions with
-   `shopify app deploy --config production`. Use the default config instead of
-   `--config production` if you intentionally deploy `shopify.app.toml`.
-   Shopify CLI does not host the backend.
-6. Open the Railway HTTPS URL and install the app on a development store.
+5. The `shopify.app.production.toml` config points at the Railway HTTPS origin
+   and its `/auth/callback` route. From a local terminal in the repository root,
+   validate it with `shopify app config validate --json --config production`,
+   then publish the configuration and both extensions with
+   `shopify app deploy --config production`. Shopify CLI is not installed in the
+   Railway container and does not host the backend.
+6. In Shopify's Dev Dashboard, open the app's **Distribution** card and choose
+   **Public** for this multi-merchant app. Shopify does not let you change the
+   distribution method later. The backend uses `AppDistribution.AppStore` to
+   match this choice. A custom-distribution app is limited to one store or one
+   Plus organization.
+7. Open the Railway HTTPS URL and install the app on a development store.
    Confirm the embedded Admin pages load, add the checkout block in Shopify's
    Checkout Editor, and place a paid protection test order. Check Railway logs
    for webhook errors and confirm exactly one protection purchase is recorded

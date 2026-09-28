@@ -1,0 +1,57 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "96f5fc78f8240440dd885872ce8c11cb"
+name = "insurance"
+application_url = "https://insurance-backend-production-82be.up.railway.app"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = false
+include_config_on_deploy = true
+
+[webhooks]
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/privacy"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/paid"
+  topics = [ "orders/paid" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/cancelled"
+  topics = [ "orders/cancelled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/updated"
+  topics = [ "orders/updated" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/refunds/create"
+  topics = [ "refunds/create" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products,write_metaobjects,write_metaobject_definitions,read_orders,write_publications,write_cart_transforms"
+
+[auth]
+redirect_urls = [ "https://insurance-backend-production-82be.up.railway.app/auth/callback" ]
+
+[shop.metafields.app.shipping_protection_config]
+type = "json"
+name = "Shipping protection configuration"
+description = "Checkout-only shipping protection product and pricing contract"

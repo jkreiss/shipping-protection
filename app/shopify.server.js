@@ -54,7 +54,7 @@ const shopify = shopifyApp({
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
   sessionStorage: new ShopAwareSessionStorage(prisma),
-  distribution: AppDistribution.SingleMerchant,
+  distribution: AppDistribution.AppStore,
   future: {
     expiringOfflineAccessTokens: true,
   },
