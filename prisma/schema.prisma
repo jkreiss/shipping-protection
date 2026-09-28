@@ -36,12 +36,51 @@ enum ProtectionAttachmentStrategy {
   THEME_CART
 }
 
+enum PricingBasis {
+  SHIPPABLE_PRE_DISCOUNT
+}
+
+enum ProtectionRefundStatus {
+  PENDING
+  CONFIRMED
+  UNATTRIBUTED
+}
+
+enum ClaimType {
+  LOST
+  STOLEN
+  DAMAGED
+}
+
+enum ClaimStatus {
+  SUBMITTED
+  VALIDATING
+  AUTO_APPROVED
+  REVIEW_REQUIRED
+  MERCHANT_APPROVED
+  MERCHANT_REJECTED
+  RESOLUTION_PENDING
+  RESOLVED
+}
+
+enum ClaimEventType {
+  SUBMITTED
+  VALIDATION_COMPLETED
+  AUTO_APPROVED
+  REVIEW_REQUESTED
+  MERCHANT_APPROVED
+  MERCHANT_REJECTED
+  RESOLUTION_REQUESTED
+  RESOLVED
+}
+
 model Shop {
   id                        String                @id @default(cuid())
   shopDomain                String                @unique
   shopGid                   String?               @unique
   installationState         ShopInstallationState @default(INSTALLED)
-  activePricingRuleId       String?               @unique
+  activePricingRuleId       String?
+  activePricingRuleShopId   String?
   installedAt               DateTime              @default(now())
   uninstalledAt             DateTime?
   orderReconciliationSince  DateTime?
@@ -50,13 +89,17 @@ model Shop {
   createdAt                 DateTime              @default(now())
   updatedAt                 DateTime              @updatedAt
 
-  activePricingRule PricingRule?      @relation("ActivePricingRule", fields: [activePricingRuleId], references: [id], onDelete: SetNull)
+  activePricingRule PricingRule?      @relation("ActivePricingRule", fields: [activePricingRuleId, activePricingRuleShopId], references: [id, shopId], onDelete: SetNull)
   pricingRules      PricingRule[]     @relation("ShopPricingRules")
   sessions          Session[]
   webhookDeliveries WebhookDelivery[]
   orders            Order[]
   configuration     ShopConfiguration?
   purchases         ProtectionPurchase[]
+  claims            Claim[]
+  claimEvents       ClaimEvent[]
+
+  @@unique([activePricingRuleId, activePricingRuleShopId])
 }
 
 model ShopConfiguration {
@@ -81,12 +124,12 @@ model ShopConfiguration {
 model PricingRule {
   id              String           @id @default(cuid())
   shopId          String
-  ruleId          String           @unique
+  ruleId          String
   version         Int
   productId       String
   variantId       String
   rateBasisPoints Int
-  basis           String
+  basis           PricingBasis
   state           PricingRuleState @default(PENDING)
   effectiveAt     DateTime
   publishedAt     DateTime?
@@ -101,6 +144,7 @@ model PricingRule {
   purchases ProtectionPurchase[]
 
   @@unique([shopId, version])
+  @@unique([shopId, ruleId])
   @@unique([id, shopId])
   @@index([shopId, state])
 }
@@ -168,7 +212,7 @@ model ProtectionRefund {
   shopId          String
   orderId         String
   shopifyRefundId String
-  status          String
+  status          ProtectionRefundStatus
   amount          Decimal  @default(0) @db.Decimal(20, 4)
   currencyCode    String
   succeededAt     DateTime?
@@ -178,11 +222,13 @@ model ProtectionRefund {
   order Order @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
 
   @@unique([shopId, shopifyRefundId])
+  @@index([shopId, orderId])
   @@index([shopId, status])
 }
 
 model OrderLine {
   id                  String   @id @default(cuid())
+  shopId              String
   orderId             String
   shopifyLineItemId   String
   productId           String?
@@ -198,15 +244,15 @@ model OrderLine {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
 
-  @@unique([orderId, shopifyLineItemId])
-  @@index([orderId, isProtection])
+  @@unique([shopId, orderId, shopifyLineItemId])
+  @@index([shopId, orderId, isProtection])
 }
 
 model ProtectionPurchase {
   id                     String                      @id @default(cuid())
-  orderId                String                      @unique
+  orderId                String
   shopId                 String
   pricingRuleId          String?
   ruleId                 String?
@@ -214,20 +260,60 @@ model ProtectionPurchase {
   rateBasisPoints        Int?
   basis                  String?
   currencyCode           String
-  eligibleSubtotalAmount Decimal                     @db.Decimal(20, 4)
+  eligibleSubtotalAmount Decimal?                    @db.Decimal(20, 4)
   feeAmount              Decimal                     @db.Decimal(20, 4)
+  protectionLineIds      String[]                    @default([])
+  pricingContractVersion Int?
+  purchasedAt            DateTime?
   attributionStatus      ProtectionAttributionStatus
   createdAt              DateTime                    @default(now())
   updatedAt              DateTime                    @updatedAt
 
   order       Order        @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
   shop        Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  pricingRule PricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
+  pricingRule PricingRule? @relation(fields: [pricingRuleId, shopId], references: [id, shopId], onDelete: NoAction)
+  claims      Claim[]
 
-  @@index([pricingRuleId])
-  @@index([shopId])
+  @@unique([shopId, id])
   @@unique([orderId, shopId])
-  @@index([attributionStatus])
+  @@index([shopId, pricingRuleId])
+  @@index([shopId, attributionStatus])
+}
+
+model Claim {
+  id                   String      @id @default(cuid())
+  shopId               String
+  protectionPurchaseId String
+  type                 ClaimType
+  status               ClaimStatus @default(SUBMITTED)
+  description          String?
+  submittedAt          DateTime    @default(now())
+  resolvedAt           DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  shop               Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  protectionPurchase ProtectionPurchase @relation(fields: [shopId, protectionPurchaseId], references: [shopId, id], onDelete: Cascade)
+  events             ClaimEvent[]
+
+  @@unique([shopId, id])
+  @@index([shopId, status, submittedAt])
+  @@index([shopId, protectionPurchaseId])
+}
+
+model ClaimEvent {
+  id        String         @id @default(cuid())
+  shopId    String
+  claimId   String
+  type      ClaimEventType
+  actorRef  String?
+  reason    String?
+  createdAt DateTime       @default(now())
+
+  shop  Shop  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  claim Claim @relation(fields: [shopId, claimId], references: [shopId, id], onDelete: Cascade)
+
+  @@index([shopId, claimId, createdAt, id])
 }
 
 model Session {

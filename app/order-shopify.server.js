@@ -1,4 +1,4 @@
-import { adminGraphql } from "./shopify/admin-graphql.server";
+import { adminGraphql } from "./shopify/admin-graphql.server.js";
 
 // Keep this selection shared by direct webhook refreshes and reconciliation.
 export const ORDER_FIELDS = `

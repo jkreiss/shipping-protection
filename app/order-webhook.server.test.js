@@ -96,8 +96,13 @@ function memoryDatabase({ failOrders = false } = {}) {
     pricingRule: { findMany: vi.fn().mockResolvedValue([]) },
     order,
     orderLine: { deleteMany: vi.fn(), createMany: vi.fn() },
-    protectionPurchase: { deleteMany: vi.fn(), upsert: vi.fn() },
+    protectionPurchase: { findUnique: vi.fn().mockResolvedValue(null), deleteMany: vi.fn(), upsert: vi.fn() },
   };
+  order.update = vi.fn(async ({ data }) => {
+    const record = [...orders.values()].at(-1);
+    Object.assign(record, data);
+    return record;
+  });
   return {
     database: {
       ...transaction,

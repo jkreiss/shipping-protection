@@ -64,12 +64,14 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
     if (!inRange(date)) continue;
     if (order.currencyCode !== currencyCode) { currencyMismatch += 1; continue; }
     if (order.paidEligible) eligibleOrders += 1;
-    if (order.paidProtected) {
+    const purchase = order.protectionPurchase?.purchasedAt ? order.protectionPurchase : null;
+    if (purchase && inRange(calendarDate(purchase.purchasedAt, timeZone))) {
+      if (purchase.currencyCode !== currencyCode) { currencyMismatch += 1; continue; }
       protectedOrders += 1;
       if (order.paidEligible) protectedEligibleOrders += 1;
-      const amount = moneyToScaled(order.paidProtectionFee);
+      const amount = moneyToScaled(purchase.feeAmount);
       revenue += amount;
-      bucket(date).revenue += amount;
+      bucket(calendarDate(purchase.purchasedAt, timeZone)).revenue += amount;
     }
   }
   const unresolvedRefunds = { pending: 0, unattributed: 0 };

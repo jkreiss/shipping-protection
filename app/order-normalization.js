@@ -5,6 +5,7 @@ export const PROTECTION_ATTRIBUTE_NAMES = Object.freeze([
   "_yasas_protection_rule_version",
   "_yasas_protection_rate_bps",
   "_yasas_protection_basis",
+  "_yasas_protection_contract_version",
 ]);
 
 const MONEY_SCALE = 10_000n;

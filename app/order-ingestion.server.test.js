@@ -62,8 +62,14 @@ function normalizedOrder(protectionAttributes = null) {
 }
 
 function transaction(rules = [rule]) {
-  const purchaseUpsert = vi.fn();
-  const purchaseDeleteMany = vi.fn();
+  let storedPurchase = null;
+  const purchaseUpsert = vi.fn(async ({ create, update }) => {
+    storedPurchase = storedPurchase ? { ...storedPurchase, ...update } : { id: "purchase-1", ...create };
+    return storedPurchase;
+  });
+  const purchaseDeleteMany = vi.fn(async ({ where }) => {
+    if (storedPurchase && storedPurchase.purchasedAt === where.purchasedAt) storedPurchase = null;
+  });
   const createMany = vi.fn();
   let storedOrder = null;
   return {
@@ -77,6 +83,10 @@ function transaction(rules = [rule]) {
       updateMany: vi.fn(async ({ data }) => {
         if (!storedOrder.firstPaidAt) storedOrder = { ...storedOrder, ...data };
       }),
+      update: vi.fn(async ({ data }) => {
+        storedOrder = { ...storedOrder, ...data };
+        return storedOrder;
+      }),
     },
     orderLine: {
       deleteMany: vi.fn(),
@@ -85,11 +95,13 @@ function transaction(rules = [rule]) {
     protectionPurchase: {
       upsert: purchaseUpsert,
       deleteMany: purchaseDeleteMany,
+      findUnique: vi.fn(async () => storedPurchase),
     },
     purchaseUpsert,
     purchaseDeleteMany,
     createMany,
     storedOrder: () => storedOrder,
+    storedPurchase: () => storedPurchase,
   };
 }
 
@@ -99,7 +111,7 @@ describe("normalized order persistence", () => {
     await persistNormalizedOrder(tx, shop, normalizedOrder());
     expect(tx.createMany).toHaveBeenCalledOnce();
     expect(tx.purchaseDeleteMany).toHaveBeenCalledWith({
-      where: { orderId: "order-1", shopId: "shop-1" },
+      where: { orderId: "order-1", shopId: "shop-1", purchasedAt: null },
     });
     expect(tx.purchaseUpsert).not.toHaveBeenCalled();
   });
@@ -114,6 +126,7 @@ describe("normalized order persistence", () => {
         _yasas_protection_rule_version: "1",
         _yasas_protection_rate_bps: "25",
         _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+        _yasas_protection_contract_version: "2",
       }),
     );
     expect(tx.purchaseUpsert).toHaveBeenCalledWith(
@@ -123,12 +136,16 @@ describe("normalized order persistence", () => {
           pricingRuleId: "pricing-1",
           eligibleSubtotalAmount: "100.0000",
           feeAmount: "0.2500",
+          pricingContractVersion: 2,
           attributionStatus: "ATTRIBUTED",
         }),
       }),
     );
     expect(tx.purchaseUpsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { orderId_shopId: { orderId: "order-1", shopId: "shop-1" } },
+    }));
+    expect(tx.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.arrayContaining([expect.objectContaining({ shopId: "shop-1" })]),
     }));
   });
 
@@ -143,6 +160,18 @@ describe("normalized order persistence", () => {
         }),
       }),
     );
+  });
+
+  test("does not attribute an unknown pricing contract version", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, normalizedOrder({
+      _yasas_protection_rule_id: "rule-1",
+      _yasas_protection_rule_version: "1",
+      _yasas_protection_rate_bps: "25",
+      _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+      _yasas_protection_contract_version: "999",
+    }));
+    expect(tx.storedPurchase().attributionStatus).toBe("UNATTRIBUTED");
   });
 
   test("scopes rule detection to the current shop", async () => {
@@ -160,6 +189,7 @@ describe("normalized order persistence", () => {
     const paid = normalizedOrder({});
     paid.paidAt = new Date("2026-09-23T00:02:00Z");
     await persistNormalizedOrder(tx, shop, paid);
+    const frozenPurchase = { ...tx.storedPurchase() };
     expect(tx.storedOrder()).toMatchObject({
       paidEligible: true, paidProtected: true, paidProtectionFee: "0.2500",
       paidProtectionLineIds: ["gid://shopify/LineItem/2"],
@@ -170,7 +200,36 @@ describe("normalized order persistence", () => {
     await persistNormalizedOrder(tx, shop, edited);
     expect(tx.storedOrder().paidProtectionFee).toBe("0.2500");
     expect(tx.storedOrder().paidProtected).toBe(true);
-    expect(tx.purchaseDeleteMany).toHaveBeenCalled();
+    expect(tx.storedPurchase()).toEqual(frozenPurchase);
+    expect(tx.purchaseDeleteMany).not.toHaveBeenCalled();
+  });
+
+  test("replaces provisional purchase details until payment, then freezes the paid fee", async () => {
+    const tx = transaction();
+    const provisional = normalizedOrder({});
+    await persistNormalizedOrder(tx, shop, provisional);
+    expect(tx.storedPurchase().purchasedAt).toBeNull();
+    const paid = normalizedOrder({});
+    paid.paidAt = new Date("2026-09-23T00:02:00Z");
+    paid.shopifyUpdatedAt = new Date("2026-09-23T00:03:00Z");
+    paid.lines[1].finalAmount = "0.3000";
+    await persistNormalizedOrder(tx, shop, paid);
+    expect(tx.storedPurchase()).toMatchObject({ feeAmount: "0.3000", purchasedAt: paid.paidAt });
+    const edited = normalizedOrder({});
+    edited.shopifyUpdatedAt = new Date("2026-09-24T00:00:00Z");
+    edited.lines[1].finalAmount = "0.5000";
+    await persistNormalizedOrder(tx, shop, edited);
+    expect(tx.storedPurchase().feeAmount).toBe("0.3000");
+    expect(tx.storedOrder().paidProtectionFee).toBe("0.3000");
+  });
+
+  test("removes an unpaid provisional purchase when the line disappears", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, normalizedOrder({}));
+    const edited = normalizedOrder();
+    edited.shopifyUpdatedAt = new Date("2026-09-24T00:00:00Z");
+    await persistNormalizedOrder(tx, shop, edited);
+    expect(tx.storedPurchase()).toBeNull();
   });
 
   test("ignores an older order snapshot delivered after a newer one", async () => {

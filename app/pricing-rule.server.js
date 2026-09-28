@@ -33,7 +33,7 @@ async function finalizeRule(database, shopId, ruleId, now = new Date()) {
     });
     await transaction.shop.update({
       where: { id: shopId },
-      data: { activePricingRuleId: ruleId },
+      data: { activePricingRuleId: ruleId, activePricingRuleShopId: shopId },
     });
     return active;
   });

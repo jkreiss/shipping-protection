@@ -79,6 +79,21 @@ protection and revenue. The checkout selection alone is not a purchase record.
 The app's webhook routes are declared in `shopify.app.toml`; order
 reconciliation can fill gaps after missed or delayed deliveries.
 
+The confirmed `ProtectionPurchase` row is the durable paid record. It freezes
+the first verified payment time, fee, protection line IDs, and any observed rule
+snapshot. Unpaid rows remain provisional and can change with order edits. The
+paid fields on `Order` are synchronized caches; analytics and refund attribution
+read the confirmed purchase. Historical purchases recovered from paid order
+snapshots have unknown eligible subtotal and pricing provenance left null. Claim
+and claim event tables are present for later work; there is no claim intake or
+resolution endpoint yet. Versioned coverage terms and checkout provenance are
+needed before automated claim decisions.
+
+The database prevents updates and ordinary deletion of confirmed purchases,
+and only allows claims against confirmed purchases. Claim events are append-only.
+Shop data redaction removes these records in dependency order inside one
+transaction.
+
 ## Merchant analytics
 
 The embedded Analytics page opens to the last 30 merchant-local calendar days.
@@ -104,6 +119,21 @@ npm run build
 `typecheck` generates React Router and Cart Transform types before checking the
 app and both extensions; it needs the Shopify CLI to access its local
 preferences.
+
+### Coordinated durable-protection migration
+
+This release changes database constraints and the application code together.
+Back up the PostgreSQL database and verify the backup, pause incoming app and
+webhook traffic, then run `npx prisma migrate deploy` from the matching release.
+The migration stops on cross-shop links, invalid refund states, or inconsistent
+paid-order snapshots; repair those records against Shopify and retry rather than
+reassigning them. Deploy the matching backend and checkout extension, resume
+traffic, and run order reconciliation before relying on analytics. Verify the
+Supabase **Data API** is disabled in the project dashboard; local
+`supabase/config.toml` also has `[api] enabled = false`. Prisma owns these tables
+and accesses PostgreSQL from the backend only. See the [Prisma 6 migration
+workflow](https://www.prisma.io/docs/orm/v6/prisma-migrate/workflows/development-and-production)
+and [Supabase Prisma guide](https://supabase.com/docs/guides/database/prisma).
 
 ### Deploy the backend on Railway
 

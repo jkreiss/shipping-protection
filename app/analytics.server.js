@@ -15,8 +15,9 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
   const includeTest = search.get("test") === "1";
   const [orders, refunds] = await Promise.all([
     database.order.findMany({ where: { shopId: shop.id }, select: {
-      firstPaidAt: true, paidEligible: true, paidProtected: true, paidProtectionFee: true,
+      firstPaidAt: true, paidEligible: true,
       currencyCode: true, isTest: true, financialStatus: true,
+      protectionPurchase: { select: { purchasedAt: true, feeAmount: true, currencyCode: true } },
     } }),
     database.protectionRefund.findMany({ where: { shopId: shop.id }, select: {
       status: true, amount: true, currencyCode: true, succeededAt: true,

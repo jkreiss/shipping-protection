@@ -115,6 +115,7 @@ describe("pricing rule publication", () => {
     expect(publishSnapshot).toHaveBeenCalledOnce();
     expect(result.rule.state).toBe("ACTIVE");
     expect(state.shop.activePricingRuleId).toBe(result.rule.id);
+    expect(state.shop.activePricingRuleShopId).toBe(state.shop.id);
   });
 
   test("marks the pending rule failed when Shopify rejects the write", async () => {

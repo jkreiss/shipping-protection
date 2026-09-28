@@ -9,6 +9,7 @@ export const PROTECTION_ATTRIBUTE_KEYS = [
   "_yasas_protection_rule_version",
   "_yasas_protection_rate_bps",
   "_yasas_protection_basis",
+  "_yasas_protection_contract_version",
 ];
 const ALLOWED_DELIVERY_TYPES = new Set(["shipping", "local", "pickupPoint"]);
 const ZERO_MINOR_UNIT_CURRENCIES = new Set([
@@ -138,6 +139,10 @@ export function protectionAttributes(configuration) {
     {
       key: "_yasas_protection_basis",
       value: configuration.basis,
+    },
+    {
+      key: "_yasas_protection_contract_version",
+      value: String(configuration.schemaVersion),
     },
   ];
 }

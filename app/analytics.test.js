@@ -5,7 +5,8 @@ const timeZone = "Australia/Sydney";
 const range = { start: "2026-09-01", end: "2026-09-30" };
 const order = (changes = {}) => ({
   firstPaidAt: new Date("2026-09-01T14:30:00Z"),
-  paidEligible: true, paidProtected: true, paidProtectionFee: "0.2500",
+  paidEligible: true,
+  protectionPurchase: { purchasedAt: new Date("2026-09-01T14:30:00Z"), feeAmount: "0.2500", currencyCode: "AUD" },
   currencyCode: "AUD", isTest: false, financialStatus: "REFUNDED", ...changes,
 });
 const refund = (changes = {}) => ({
@@ -24,7 +25,7 @@ describe("merchant analytics", () => {
 
   test("counts paid protection once, including later cancelled or refunded orders", () => {
     const result = aggregateAnalytics({
-      orders: [order(), order({ paidProtected: false }), order({ isTest: true }), order({ currencyCode: "USD" })],
+      orders: [order(), order({ protectionPurchase: null }), order({ isTest: true }), order({ currencyCode: "USD" })],
       refunds: [refund(), refund({ status: "PENDING" }), refund({ status: "UNATTRIBUTED" }), refund({ currencyCode: "USD" })],
       timeZone, currencyCode: "AUD", range,
     });
@@ -43,5 +44,14 @@ describe("merchant analytics", () => {
     const input = { orders: [order({ isTest: true })], refunds: [refund({ order: { isTest: true } })], timeZone, currencyCode: "AUD", range };
     expect(aggregateAnalytics(input)).toMatchObject({ revenue: "0.0000", hiddenTestOrders: 1 });
     expect(aggregateAnalytics({ ...input, includeTest: true })).toMatchObject({ revenue: "0.2500", hiddenTestOrders: 0 });
+  });
+
+  test("uses the confirmed purchase instead of the order cache", () => {
+    const result = aggregateAnalytics({
+      orders: [order({ paidProtected: false, paidProtectionFee: "0.0000" }),
+        order({ paidProtected: true, paidProtectionFee: "5.0000", protectionPurchase: null })],
+      refunds: [], timeZone, currencyCode: "AUD", range,
+    });
+    expect(result).toMatchObject({ protectedOrders: 1, revenue: "0.2500" });
   });
 });

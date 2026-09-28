@@ -3,6 +3,7 @@ import prisma from "../app/db.server.js";
 import { persistNormalizedOrder } from "../app/order-ingestion.server.js";
 import { normalizeGraphqlOrder } from "../app/order-normalization.js";
 import { reconcileOrders } from "../app/order-reconciliation.server.js";
+import { redactShopData } from "../app/shop.server.js";
 
 const rollback = new Error("POSTGRES_VERIFICATION_ROLLBACK");
 const timestamp = new Date("2026-09-23T00:00:00.000Z");
@@ -124,7 +125,7 @@ try {
     });
     await transaction.shop.update({
       where: { id: shop.id },
-      data: { activePricingRuleId: rule.id },
+      data: { activePricingRuleId: rule.id, activePricingRuleShopId: shop.id },
     });
 
     const protectedOrder = normalizedOrder({
@@ -158,6 +159,8 @@ try {
       "100.0000",
     );
     assert.equal(orders[0].protectionPurchase?.feeAmount.toFixed(4), "0.2500");
+    assert.equal(orders[0].protectionPurchase?.purchasedAt, null);
+    assert.equal(orders[0].lines.every((line) => line.shopId === shop.id), true);
     assert.equal(orders[1].lines.length, 1);
     assert.equal(orders[1].protectionPurchase, null);
 
@@ -185,14 +188,37 @@ try {
     });
     assert.equal(paidOrder.paidProtectionFee.toFixed(4), "0.2500");
     assert.equal(paidOrder.paidEligible, true);
+    const paidPurchase = await transaction.protectionPurchase.findUnique({
+      where: { orderId_shopId: { orderId: paidOrder.id, shopId: shop.id } },
+    });
+    assert.equal(paidPurchase.purchasedAt.toISOString(), "2026-09-23T02:00:00.000Z");
+    assert.deepEqual(paidPurchase.protectionLineIds, ["gid://shopify/Order/9001/LineItem/2"]);
     await persistNormalizedOrder(transaction, shop, normalizeGraphqlOrder(graphqlOrder("gid://shopify/Order/9001", true)));
     assert.equal(await transaction.protectionRefund.count({ where: { shopId: shop.id } }), 1);
+    assert.equal((await transaction.protectionRefund.findFirst({ where: { shopId: shop.id } })).status, "CONFIRMED");
+
+    const edited = normalizedOrder({ id: "gid://shopify/Order/9001", name: "#9001", protectedOrder: false });
+    edited.shopifyUpdatedAt = new Date("2026-09-24T00:00:00Z");
+    edited.refunds = graphqlOrder("gid://shopify/Order/9001", true).refunds;
+    await persistNormalizedOrder(transaction, shop, edited);
+    const afterEdit = await transaction.protectionPurchase.findUnique({
+      where: { orderId_shopId: { orderId: paidOrder.id, shopId: shop.id } },
+    });
+    assert.equal(afterEdit.id, paidPurchase.id);
+    assert.equal(afterEdit.feeAmount.toFixed(4), "0.2500");
+    assert.deepEqual(afterEdit.protectionLineIds, paidPurchase.protectionLineIds);
+    assert.equal((await transaction.order.findUnique({ where: { id: paidOrder.id } })).paidProtected, true);
     assert.equal((await transaction.protectionRefund.findFirst({ where: { shopId: shop.id } })).status, "CONFIRMED");
 
     const otherShop = await transaction.shop.create({ data: { shopDomain: "postgres-verification-other.invalid" } });
     const otherOrder = await persistNormalizedOrder(transaction, otherShop, normalizedOrder({
       id: "gid://shopify/Order/9001", name: "#9001", protectedOrder: false,
     }));
+    await transaction.pricingRule.create({ data: {
+      shopId: otherShop.id, ruleId: rule.ruleId, version: 1,
+      productId: rule.productId, variantId: rule.variantId,
+      rateBasisPoints: 25, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: timestamp,
+    } });
     await transaction.protectionRefund.create({ data: {
       shopId: otherShop.id, orderId: otherOrder.id, shopifyRefundId: "gid://shopify/Refund/777",
       status: "PENDING", amount: "0.0000", currencyCode: "AUD",
@@ -205,6 +231,29 @@ try {
     } }));
     await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT purchase_tenant_check');
     await transaction.$executeRawUnsafe('RELEASE SAVEPOINT purchase_tenant_check');
+    await transaction.$executeRawUnsafe('SAVEPOINT rule_tenant_check');
+    await assert.rejects(transaction.protectionPurchase.create({ data: {
+      shopId: otherShop.id, orderId: otherOrder.id, pricingRuleId: rule.id,
+      currencyCode: "AUD", feeAmount: "0.2500", attributionStatus: "UNATTRIBUTED",
+    } }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT rule_tenant_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT rule_tenant_check');
+    await transaction.$executeRawUnsafe('SAVEPOINT line_tenant_check');
+    await assert.rejects(transaction.orderLine.create({ data: {
+      shopId: shop.id, orderId: otherOrder.id, shopifyLineItemId: "gid://shopify/LineItem/cross-shop",
+      quantity: 1, requiresShipping: true, currencyCode: "AUD",
+      originalUnitAmount: "1.0000", preDiscountAmount: "1.0000",
+      totalDiscountAmount: "0.0000", finalAmount: "1.0000",
+    } }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT line_tenant_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT line_tenant_check');
+    await transaction.$executeRawUnsafe('SAVEPOINT active_rule_tenant_check');
+    await assert.rejects(transaction.shop.update({
+      where: { id: otherShop.id },
+      data: { activePricingRuleId: rule.id, activePricingRuleShopId: otherShop.id },
+    }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT active_rule_tenant_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT active_rule_tenant_check');
     await transaction.$executeRawUnsafe('SAVEPOINT refund_tenant_check');
     await assert.rejects(transaction.protectionRefund.create({ data: {
       shopId: shop.id, orderId: otherOrder.id,
@@ -213,9 +262,51 @@ try {
     } }));
     await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT refund_tenant_check');
     await transaction.$executeRawUnsafe('RELEASE SAVEPOINT refund_tenant_check');
-    assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 2);
+    await transaction.$executeRawUnsafe('SAVEPOINT paid_purchase_immutable_check');
+    await assert.rejects(transaction.protectionPurchase.update({
+      where: { id: paidPurchase.id }, data: { feeAmount: "1.0000" },
+    }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT paid_purchase_immutable_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT paid_purchase_immutable_check');
+    const provisional = await transaction.protectionPurchase.create({ data: {
+      shopId: otherShop.id, orderId: otherOrder.id, currencyCode: "AUD",
+      eligibleSubtotalAmount: "100.0000", feeAmount: "0.2500",
+      attributionStatus: "UNATTRIBUTED",
+    } });
+    await transaction.$executeRawUnsafe('SAVEPOINT provisional_claim_check');
+    await assert.rejects(transaction.claim.create({ data: {
+      shopId: otherShop.id, protectionPurchaseId: provisional.id, type: "LOST",
+    } }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT provisional_claim_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT provisional_claim_check');
+    const claim = await transaction.claim.create({ data: {
+      shopId: shop.id, protectionPurchaseId: paidPurchase.id, type: "LOST",
+    } });
+    await transaction.claimEvent.create({ data: {
+      shopId: shop.id, claimId: claim.id, type: "SUBMITTED",
+    } });
+    assert.equal(await transaction.claimEvent.count({ where: { shopId: shop.id, claimId: claim.id } }), 1);
+    await transaction.$executeRawUnsafe('SAVEPOINT claim_tenant_check');
+    await assert.rejects(transaction.claim.create({ data: {
+      shopId: otherShop.id, protectionPurchaseId: paidPurchase.id, type: "LOST",
+    } }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT claim_tenant_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT claim_tenant_check');
+    await transaction.$executeRawUnsafe('SAVEPOINT event_append_check');
+    await assert.rejects(transaction.claimEvent.updateMany({
+      where: { shopId: shop.id, claimId: claim.id }, data: { reason: "changed" },
+    }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT event_append_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT event_append_check');
+    await redactShopData(transaction, shop.shopDomain);
+    assert.equal(await transaction.shop.count({ where: { id: shop.id } }), 0);
+    assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 0);
+    assert.equal(await transaction.protectionPurchase.count({ where: { shopId: shop.id } }), 0);
+    assert.equal(await transaction.claimEvent.count({ where: { shopId: shop.id } }), 0);
+    assert.equal(await transaction.shop.count({ where: { id: otherShop.id } }), 1);
+    assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 0);
     assert.equal(await transaction.order.count({ where: { shopId: otherShop.id } }), 1);
-    assert.equal(await transaction.protectionRefund.count({ where: { shopId: shop.id } }), 1);
+    assert.equal(await transaction.protectionRefund.count({ where: { shopId: shop.id } }), 0);
     assert.equal(await transaction.protectionRefund.count({ where: { shopId: otherShop.id } }), 1);
 
     throw rollback;
@@ -233,5 +324,5 @@ try {
 }
 
 console.log(
-  "PostgreSQL verification passed: paid snapshots, resumable reconciliation, refund deduplication, and database tenant keys.",
+  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, and event redaction.",
 );
