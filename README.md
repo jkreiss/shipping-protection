@@ -51,6 +51,29 @@ README](extensions/insurance-ext/README.md) for eligibility and activation
 steps. After deploying the app version, add the block to the order summary in
 the Checkout Editor and save it. Shop Pay activation is separate.
 
+Each shop has a `ShopConfiguration` row. New shops default to protection off,
+attachment strategy `NONE`, and all returns, claim-intake, and auto-approval
+flags off. Successful setup enables the shop metafield and Cart Transform
+pricing used by the checkout block, with the existing loss, theft, and damage
+offer. Historical rates stay on pricing rules and protection purchases.
+Existing shops with an active pricing rule are backfilled during migration.
+A healthy legacy Shopify metafield without a database rule is adopted during
+the next setup read.
+
+The app checks the shop's Shopify Plus plan and Cart Transform `updateOperation`
+eligibility before setup. The only implemented strategy is
+`CHECKOUT_UI_CART_TRANSFORM`; `THEME_CART` is reserved and resolves as
+unavailable. Backend health checks cannot confirm that a merchant placed the
+checkout block. The merchant must add the block in Checkout Editor, activate
+Shop Pay separately if used, and place a test order. Shopify documents the
+[checkout UI plan requirement](https://shopify.dev/docs/api/checkout-ui-extensions/latest)
+and [Cart Transform price-update restrictions](https://shopify.dev/docs/api/functions/latest/cart-transform).
+
+The current app uses single-merchant distribution. This refactor prepares
+shop-scoped data and configuration in one backend and database; unrelated
+merchants would need a separately planned public-distribution app because
+[Shopify distribution methods cannot be changed after selection](https://shopify.dev/docs/apps/launch/distribution/select-distribution-method).
+
 Shopify orders, refunds, and webhook data are the source of truth for paid
 protection and revenue. The checkout selection alone is not a purchase record.
 The app's webhook routes are declared in `shopify.app.toml`; order

@@ -152,6 +152,7 @@ try {
     assert.equal(orders.length, 2);
     assert.equal(orders[0].lines.length, 2);
     assert.equal(orders[0].protectionPurchase?.attributionStatus, "ATTRIBUTED");
+    assert.equal(orders[0].protectionPurchase?.shopId, shop.id);
     assert.equal(
       orders[0].protectionPurchase?.eligibleSubtotalAmount.toFixed(4),
       "100.0000",
@@ -196,6 +197,22 @@ try {
       shopId: otherShop.id, orderId: otherOrder.id, shopifyRefundId: "gid://shopify/Refund/777",
       status: "PENDING", amount: "0.0000", currencyCode: "AUD",
     } });
+    await transaction.$executeRawUnsafe('SAVEPOINT purchase_tenant_check');
+    await assert.rejects(transaction.protectionPurchase.create({ data: {
+      shopId: shop.id, orderId: otherOrder.id, currencyCode: "AUD",
+      eligibleSubtotalAmount: "100.0000", feeAmount: "0.2500",
+      attributionStatus: "UNATTRIBUTED",
+    } }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT purchase_tenant_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT purchase_tenant_check');
+    await transaction.$executeRawUnsafe('SAVEPOINT refund_tenant_check');
+    await assert.rejects(transaction.protectionRefund.create({ data: {
+      shopId: shop.id, orderId: otherOrder.id,
+      shopifyRefundId: "gid://shopify/Refund/778", status: "PENDING",
+      amount: "0.0000", currencyCode: "AUD",
+    } }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT refund_tenant_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT refund_tenant_check');
     assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 2);
     assert.equal(await transaction.order.count({ where: { shopId: otherShop.id } }), 1);
     assert.equal(await transaction.protectionRefund.count({ where: { shopId: shop.id } }), 1);
@@ -216,5 +233,5 @@ try {
 }
 
 console.log(
-  "PostgreSQL verification passed: paid snapshots, resumable reconciliation, refund deduplication, and tenant isolation.",
+  "PostgreSQL verification passed: paid snapshots, resumable reconciliation, refund deduplication, and database tenant keys.",
 );

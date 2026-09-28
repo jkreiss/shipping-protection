@@ -22,7 +22,7 @@ async function finalizeRule(database, shopId, ruleId, now = new Date()) {
       data: { state: "SUPERSEDED" },
     });
     const active = await transaction.pricingRule.update({
-      where: { id: ruleId },
+      where: { id_shopId: { id: ruleId, shopId } },
       data: {
         state: "ACTIVE",
         publishedAt: now,
@@ -142,5 +142,7 @@ export async function getActivePricingRule(shopDomain, database = prisma) {
       where: { shopDomain },
       include: { activePricingRule: true },
     })
-    .then((shop) => shop?.activePricingRule ?? null);
+    .then((shop) => shop?.activePricingRule?.shopId === shop?.id
+      ? shop.activePricingRule
+      : null);
 }

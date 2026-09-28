@@ -30,6 +30,12 @@ enum ProtectionAttributionStatus {
   UNATTRIBUTED
 }
 
+enum ProtectionAttachmentStrategy {
+  NONE
+  CHECKOUT_UI_CART_TRANSFORM
+  THEME_CART
+}
+
 model Shop {
   id                        String                @id @default(cuid())
   shopDomain                String                @unique
@@ -49,6 +55,27 @@ model Shop {
   sessions          Session[]
   webhookDeliveries WebhookDelivery[]
   orders            Order[]
+  configuration     ShopConfiguration?
+  purchases         ProtectionPurchase[]
+}
+
+model ShopConfiguration {
+  shopId             String @id
+  protectionEnabled  Boolean @default(false)
+  stolenCoverageEnabled Boolean @default(false)
+  lostCoverageEnabled Boolean @default(false)
+  damagedCoverageEnabled Boolean @default(false)
+  returnsEnabled     Boolean @default(false)
+  freeReturnsEnabled Boolean @default(false)
+  attachmentStrategy ProtectionAttachmentStrategy @default(NONE)
+  emailClaimIntakeEnabled Boolean @default(false)
+  formClaimIntakeEnabled Boolean @default(false)
+  adminClaimIntakeEnabled Boolean @default(false)
+  autoApprovalEnabled Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 }
 
 model PricingRule {
@@ -74,6 +101,7 @@ model PricingRule {
   purchases ProtectionPurchase[]
 
   @@unique([shopId, version])
+  @@unique([id, shopId])
   @@index([shopId, state])
 }
 
@@ -130,6 +158,7 @@ model Order {
   protectionRefunds  ProtectionRefund[]
 
   @@unique([shopId, shopifyOrderId])
+  @@unique([id, shopId])
   @@index([shopId, shopifyUpdatedAt, shopifyOrderId])
   @@index([shopId, firstPaidAt])
 }
@@ -146,7 +175,7 @@ model ProtectionRefund {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
 
   @@unique([shopId, shopifyRefundId])
   @@index([shopId, status])
@@ -178,6 +207,7 @@ model OrderLine {
 model ProtectionPurchase {
   id                     String                      @id @default(cuid())
   orderId                String                      @unique
+  shopId                 String
   pricingRuleId          String?
   ruleId                 String?
   ruleVersion            Int?
@@ -190,10 +220,13 @@ model ProtectionPurchase {
   createdAt              DateTime                    @default(now())
   updatedAt              DateTime                    @updatedAt
 
-  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order       Order        @relation(fields: [orderId, shopId], references: [id, shopId], onDelete: Cascade)
+  shop        Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
   pricingRule PricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
 
   @@index([pricingRuleId])
+  @@index([shopId])
+  @@unique([orderId, shopId])
   @@index([attributionStatus])
 }
 

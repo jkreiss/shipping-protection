@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   createAndPublishPricingRule,
+  getActivePricingRule,
   reconcilePublishedPricingRule,
 } from "./pricing-rule.server";
 
@@ -59,7 +60,10 @@ function inMemoryDatabase() {
       return { count: 1 };
     }),
     update: vi.fn(async ({ where, data }) => {
-      const rule = state.rules.find(({ id }) => id === where.id);
+      const rule = state.rules.find(({ id, shopId }) =>
+        where.id_shopId
+          ? id === where.id_shopId.id && shopId === where.id_shopId.shopId
+          : id === where.id);
       if (!rule) throw new Error("missing rule");
       Object.assign(rule, data);
       return rule;
@@ -166,5 +170,11 @@ describe("pricing rule publication", () => {
         database,
       ),
     ).toBeNull();
+  });
+
+  test("does not return an active rule from another shop", async () => {
+    const { database, state } = inMemoryDatabase();
+    state.shop.activePricingRule = { id: "other-rule", shopId: "shop-2" };
+    expect(await getActivePricingRule(shopDomain, database)).toBeNull();
   });
 });

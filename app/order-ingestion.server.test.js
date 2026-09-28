@@ -99,7 +99,7 @@ describe("normalized order persistence", () => {
     await persistNormalizedOrder(tx, shop, normalizedOrder());
     expect(tx.createMany).toHaveBeenCalledOnce();
     expect(tx.purchaseDeleteMany).toHaveBeenCalledWith({
-      where: { orderId: "order-1" },
+      where: { orderId: "order-1", shopId: "shop-1" },
     });
     expect(tx.purchaseUpsert).not.toHaveBeenCalled();
   });
@@ -119,6 +119,7 @@ describe("normalized order persistence", () => {
     expect(tx.purchaseUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({
+          shopId: "shop-1",
           pricingRuleId: "pricing-1",
           eligibleSubtotalAmount: "100.0000",
           feeAmount: "0.2500",
@@ -126,6 +127,9 @@ describe("normalized order persistence", () => {
         }),
       }),
     );
+    expect(tx.purchaseUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { orderId_shopId: { orderId: "order-1", shopId: "shop-1" } },
+    }));
   });
 
   test("keeps protection with missing provenance as unattributed", async () => {

@@ -123,7 +123,7 @@ export async function persistNormalizedOrder(
   const protectionLines = protectedLines;
   if (protectionLines.length === 0) {
     await transaction.protectionPurchase.deleteMany({
-      where: { orderId: order.id },
+      where: { orderId: order.id, shopId: shop.id },
     });
     await persistOrderRefunds(transaction, shop, order, normalized, lines, existing, paidSnapshot);
     return order;
@@ -168,8 +168,8 @@ export async function persistNormalizedOrder(
     attributionStatus: selected.status,
   };
   await transaction.protectionPurchase.upsert({
-    where: { orderId: order.id },
-    create: { orderId: order.id, ...purchase },
+    where: { orderId_shopId: { orderId: order.id, shopId: shop.id } },
+    create: { orderId: order.id, shopId: shop.id, ...purchase },
     update: purchase,
   });
   await persistOrderRefunds(transaction, shop, order, normalized, lines, existing, paidSnapshot);

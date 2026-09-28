@@ -93,9 +93,10 @@ export default function Index() {
         slot="primary-action"
         variant="primary"
         onClick={runSetup}
+        disabled={!state.capabilities.checkoutUiSupported || !state.capabilities.cartTransformUpdateSupported}
         {...(isLoading ? { loading: true } : {})}
       >
-        {state.ready
+        {state.configuration.protectionEnabled
           ? "Repair shipping protection"
           : "Set up shipping protection"}
       </s-button>
@@ -108,25 +109,33 @@ export default function Index() {
 
       {fetcher.data?.success && (
         <s-banner heading="Setup complete" tone="success">
-          The checkout offer and its blocking price transform are enabled.
+          The app configuration and price transform are enabled. Add and test the checkout block in the Checkout Editor.
         </s-banner>
       )}
 
       <s-section heading="Status">
         <s-stack direction="block" gap="base">
           <s-paragraph>
-            This app offers optional shipping protection in checkout and prices
+            When enabled, this app offers optional shipping protection in checkout and prices
             it at {state.pricing?.percentage ?? "0.25%"} of eligible shipped
             merchandise before discounts.
           </s-paragraph>
           <s-banner
-            heading={state.ready ? "Ready" : "Setup or repair required"}
-            tone={state.ready ? "success" : "warning"}
+            heading={state.configuration.protectionEnabled ? "App configuration ready" : "Setup or repair required"}
+            tone={state.configuration.protectionEnabled ? "success" : "warning"}
           >
-            {state.ready
-              ? "All app-side health checks pass."
-              : "Run setup after deploying the app version, then review any failing checks."}
+            {state.configuration.protectionEnabled
+              ? "App-side checks pass. Add and test the checkout block before offering protection."
+              : "Review the checks and shop capabilities before running setup."}
           </s-banner>
+          <s-paragraph>
+            Attachment: {state.configuration.strategy === "CHECKOUT_UI_CART_TRANSFORM"
+              ? "Checkout block with Cart Transform"
+              : "Unavailable"}. Checkout block placement requires merchant activation.
+          </s-paragraph>
+          {state.configuration.reasons.map((reason) => (
+            <s-paragraph key={reason}>{reason}</s-paragraph>
+          ))}
           <s-stack direction="block" gap="small-200">
             {state.checks.map((check) => (
               <s-box
@@ -170,6 +179,7 @@ export default function Index() {
               type="submit"
               name="intent"
               value="activate-rule"
+              disabled={!state.configuration.protectionEnabled}
               {...(isLoading ? { loading: true } : {})}
             >
               Publish new rule version
@@ -225,8 +235,8 @@ export default function Index() {
 
       <s-section slot="aside" heading="Important">
         <s-paragraph>
-          Checkout UI extensions and dynamic Cart Transform pricing require
-          Shopify Plus for this design. Tax may increase the final order total
+          Live checkout blocks require Shopify Plus. Shopify limits Cart Transform
+          price updates to Plus or development stores. Tax may increase the final order total
           above the displayed protection fee.
         </s-paragraph>
       </s-section>

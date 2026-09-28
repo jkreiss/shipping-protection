@@ -1,3 +1,5 @@
+import { adminGraphql } from "./shopify/admin-graphql.server";
+
 // Keep this selection shared by direct webhook refreshes and reconciliation.
 export const ORDER_FIELDS = `
   id name checkoutToken createdAt updatedAt processedAt currencyCode
@@ -45,21 +47,7 @@ export const ORDERS_QUERY = `#graphql
   }
 `;
 
-export async function adminGraphql(admin, query, variables) {
-  const response = await admin.graphql(query, { variables });
-  const payload = await response.json();
-  if (payload.errors?.length) {
-    throw new Error(payload.errors.map(({ message }) => message).join("; "));
-  }
-  const searchWarnings = Array.isArray(payload.extensions?.search)
-    ? payload.extensions.search.flatMap(({ warnings }) => warnings ?? [])
-    : [];
-  if (searchWarnings.length) {
-    throw new Error(`Shopify search warning: ${searchWarnings.map(({ message }) => message).join("; ")}`);
-  }
-  if (!payload.data) throw new Error("Shopify returned no GraphQL data.");
-  return payload.data;
-}
+export { adminGraphql };
 
 export function assertCompleteOrder(order) {
   if (!order) throw new Error("Shopify order is unavailable to this app.");
