@@ -1,0 +1,44 @@
+[
+  {
+    "name": "USD 100 at default rate",
+    "amounts": ["100.00"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.25"
+  },
+  {
+    "name": "USD rounds half up",
+    "amounts": ["2.00"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.01"
+  },
+  {
+    "name": "USD rounds below half down",
+    "amounts": ["1.99"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.00"
+  },
+  {
+    "name": "JPY zero minor units",
+    "amounts": ["200"],
+    "rateBasisPoints": 25,
+    "minorUnits": 0,
+    "expected": "1"
+  },
+  {
+    "name": "KWD three minor units",
+    "amounts": ["1.000"],
+    "rateBasisPoints": 25,
+    "minorUnits": 3,
+    "expected": "0.003"
+  },
+  {
+    "name": "multiple inputs avoid binary drift",
+    "amounts": ["0.10", "0.20", "99.70"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.25"
+  }
+]

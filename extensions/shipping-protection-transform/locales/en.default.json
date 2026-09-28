@@ -1,0 +1,4 @@
+{
+  "name": "Shipping protection pricing",
+  "description": "Prices the checkout-only Shipping Protection line from the active rule snapshot"
+}

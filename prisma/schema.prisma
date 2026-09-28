@@ -1,0 +1,222 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ShopInstallationState {
+  INSTALLED
+  UNINSTALLED
+}
+
+enum PricingRuleState {
+  PENDING
+  ACTIVE
+  FAILED
+  SUPERSEDED
+}
+
+enum WebhookProcessingStatus {
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum ProtectionAttributionStatus {
+  ATTRIBUTED
+  UNATTRIBUTED
+}
+
+model Shop {
+  id                        String                @id @default(cuid())
+  shopDomain                String                @unique
+  shopGid                   String?               @unique
+  installationState         ShopInstallationState @default(INSTALLED)
+  activePricingRuleId       String?               @unique
+  installedAt               DateTime              @default(now())
+  uninstalledAt             DateTime?
+  orderReconciliationSince  DateTime?
+  orderReconciliationCursor String?
+  orderReconciliationUntil  DateTime?
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+
+  activePricingRule PricingRule?      @relation("ActivePricingRule", fields: [activePricingRuleId], references: [id], onDelete: SetNull)
+  pricingRules      PricingRule[]     @relation("ShopPricingRules")
+  sessions          Session[]
+  webhookDeliveries WebhookDelivery[]
+  orders            Order[]
+}
+
+model PricingRule {
+  id              String           @id @default(cuid())
+  shopId          String
+  ruleId          String           @unique
+  version         Int
+  productId       String
+  variantId       String
+  rateBasisPoints Int
+  basis           String
+  state           PricingRuleState @default(PENDING)
+  effectiveAt     DateTime
+  publishedAt     DateTime?
+  activatedAt     DateTime?
+  failedAt        DateTime?
+  failureReason   String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  shop      Shop                 @relation("ShopPricingRules", fields: [shopId], references: [id], onDelete: Cascade)
+  activeFor Shop?                @relation("ActivePricingRule")
+  purchases ProtectionPurchase[]
+
+  @@unique([shopId, version])
+  @@index([shopId, state])
+}
+
+model WebhookDelivery {
+  id           String                  @id @default(cuid())
+  shopId       String
+  webhookId    String
+  eventId      String?
+  topic        String
+  status       WebhookProcessingStatus @default(PROCESSING)
+  errorMessage String?
+  receivedAt   DateTime                @default(now())
+  processedAt  DateTime?
+  failedAt     DateTime?
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, webhookId])
+  @@index([shopId, eventId])
+  @@index([shopId, topic, status])
+}
+
+model Order {
+  id                   String    @id @default(cuid())
+  shopId               String
+  shopifyOrderId       String
+  name                 String
+  checkoutTokenHash    String?
+  shopifyCreatedAt     DateTime
+  shopifyUpdatedAt     DateTime
+  processedAt          DateTime?
+  isTest               Boolean   @default(false)
+  cancelledAt          DateTime?
+  financialStatus      String?
+  firstPaidAt          DateTime?
+  paidEligible         Boolean   @default(false)
+  paidProtected        Boolean   @default(false)
+  paidProtectionFee    Decimal   @default(0) @db.Decimal(20, 4)
+  paidProtectionLineIds String[] @default([])
+  currencyCode         String
+  subtotalAmount       Decimal   @db.Decimal(20, 4)
+  totalAmount          Decimal   @db.Decimal(20, 4)
+  totalDiscountsAmount Decimal   @db.Decimal(20, 4)
+  totalShippingAmount  Decimal   @db.Decimal(20, 4)
+  totalTaxAmount       Decimal   @db.Decimal(20, 4)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  shop               Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  lines              OrderLine[]
+  protectionPurchase ProtectionPurchase?
+  protectionRefunds  ProtectionRefund[]
+
+  @@unique([shopId, shopifyOrderId])
+  @@index([shopId, shopifyUpdatedAt, shopifyOrderId])
+  @@index([shopId, firstPaidAt])
+}
+
+model ProtectionRefund {
+  id              String   @id @default(cuid())
+  shopId          String
+  orderId         String
+  shopifyRefundId String
+  status          String
+  amount          Decimal  @default(0) @db.Decimal(20, 4)
+  currencyCode    String
+  succeededAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, shopifyRefundId])
+  @@index([shopId, status])
+}
+
+model OrderLine {
+  id                  String   @id @default(cuid())
+  orderId             String
+  shopifyLineItemId   String
+  productId           String?
+  variantId           String?
+  quantity            Int
+  requiresShipping    Boolean
+  currencyCode        String
+  originalUnitAmount  Decimal  @db.Decimal(20, 4)
+  preDiscountAmount   Decimal  @db.Decimal(20, 4)
+  totalDiscountAmount Decimal  @db.Decimal(20, 4)
+  finalAmount         Decimal  @db.Decimal(20, 4)
+  isProtection        Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, shopifyLineItemId])
+  @@index([orderId, isProtection])
+}
+
+model ProtectionPurchase {
+  id                     String                      @id @default(cuid())
+  orderId                String                      @unique
+  pricingRuleId          String?
+  ruleId                 String?
+  ruleVersion            Int?
+  rateBasisPoints        Int?
+  basis                  String?
+  currencyCode           String
+  eligibleSubtotalAmount Decimal                     @db.Decimal(20, 4)
+  feeAmount              Decimal                     @db.Decimal(20, 4)
+  attributionStatus      ProtectionAttributionStatus
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  pricingRule PricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
+
+  @@index([pricingRuleId])
+  @@index([attributionStatus])
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  shopRecord Shop @relation(fields: [shop], references: [shopDomain], onDelete: Cascade)
+
+  @@index([shop])
+}

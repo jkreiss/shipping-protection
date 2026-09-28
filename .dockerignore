@@ -1,0 +1,35 @@
+# Local credentials and development configuration
+.env*
+**/.env*
+.npmrc
+.mcp.json
+.cursor/
+.gemini/
+
+# Version control and dependencies
+.git/
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Local and generated output
+.cache/
+.react-router/
+.shopify/
+.shopify.lock
+build/
+app/build/
+app/public/build/
+public/build/
+public/_dev/
+extensions/*/dist/
+extensions/*/generated/
+extensions/*/manifest.json
+supabase/.branches/
+supabase/.temp/
+prisma/*.sqlite*
+database.sqlite*
+coverage/
+*.log
+*.tsbuildinfo
+.DS_Store

@@ -1,0 +1,29 @@
+# Learn more about configuring your checkout UI extension:
+# https://shopify.dev/docs/api/checkout-ui-extensions/latest/configuration
+
+# The version of APIs your extension will receive. Learn more:
+# https://shopify.dev/docs/api/usage/versioning
+api_version = "2026-07"
+
+[[extensions]]
+name = "Shipping protection"
+handle = "insurance-ext"
+type = "ui_extension"
+uid = "ca831b94-e4eb-9799-f551-71a9189ac7f0ce6b3450"
+
+# Controls where in Shopify your extension will be injected,
+# and the file that contains your extension’s source code. Learn more:
+# https://shopify.dev/docs/api/checkout-ui-extensions/latest/extension-targets-overview
+
+[[extensions.targeting]]
+module = "./src/Checkout.jsx"
+target = "purchase.checkout.block.render"
+default_placement = "ORDER_SUMMARY4"
+
+# Loads metafields on checkout resources, including the cart,
+# products, customers, and more. Learn more:
+# https://shopify.dev/docs/api/checkout-ui-extensions/latest/configuration#metafields
+
+[[extensions.metafields]]
+namespace = "$app"
+key = "shipping_protection_config"

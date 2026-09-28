@@ -1,0 +1,34 @@
+query CartTransformRunInput {
+  cartTransform {
+    configuration: metafield(namespace: "$app", key: "function-configuration") {
+      jsonValue
+    }
+  }
+  cart {
+    lines {
+      id
+      quantity
+      cost {
+        subtotalAmount {
+          amount
+          currencyCode
+        }
+      }
+      sellingPlanAllocation {
+        sellingPlan {
+          id
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          requiresShipping
+        }
+        ... on CustomProduct {
+          requiresShipping
+        }
+      }
+    }
+  }
+}

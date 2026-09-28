@@ -1,0 +1,21 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "t:name"
+handle = "shipping-protection-transform"
+type = "function"
+uid = "a85ade49-8359-6234-1e2e-b09b1f1ed7cd629a39ad"
+description = "t:description"
+
+  [[extensions.targeting]]
+  target = "cart.transform.run"
+  input_query = "src/cart_transform_run.graphql"
+  export = "cart-transform-run"
+
+  [extensions.build]
+  command = ""
+  path = "dist/function.wasm"
+
+  [extensions.ui.paths]
+  create = "/"
+  details = "/"

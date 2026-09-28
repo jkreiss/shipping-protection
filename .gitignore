@@ -1,0 +1,34 @@
+# Dependencies and package manager cache
+node_modules/
+/.pnpm-store/
+/.cache/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Build output and generated files
+/build/
+/app/build/
+/app/public/build/
+/public/build/
+/public/_dev/
+/.react-router/
+/extensions/*/dist/
+/extensions/*/manifest.json
+/extensions/*/generated/
+/.shopify/
+.shopify.lock
+
+# Local databases
+/prisma/dev.sqlite*
+database.sqlite*
+
+# Tool output
+coverage/
+*.log
+*.tsbuildinfo
+
+# Operating system files
+.DS_Store
