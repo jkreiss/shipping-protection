@@ -103,8 +103,67 @@ npm run build
 
 `typecheck` generates React Router and Cart Transform types before checking the
 app and both extensions; it needs the Shopify CLI to access its local
-preferences. The Dockerfile uses `npm ci` and builds the web app. Configure the
-host's Shopify app variables, `DATABASE_URL`, and
-`CHECKOUT_TOKEN_HASH_SECRET`; apply migrations with `npm run setup` before
-starting the server with `npm run start`. Deploy Shopify app configuration and
-extensions through the Shopify CLI as a separate step.
+preferences.
+
+### Deploy the backend on Railway
+
+Railway needs **one service from the repository root**. Its public HTTPS domain
+serves the embedded Admin app, authentication, and webhook routes. The
+`insurance-ext` checkout UI and `shipping-protection-transform` Cart Transform
+are Shopify extensions, not Railway services or background workers. Railway may
+offer to create services for these npm workspaces; use the root app instead.
+
+1. Push the app to a GitHub repository. Confirm `.env` is untracked and contains
+   no committed secrets. The root `Dockerfile` installs build dependencies,
+   generates Prisma Client, and builds the web app. `.dockerignore` keeps local
+   credentials out of the image.
+2. In Railway, create a service from that GitHub repository. Open the **service
+   tile**, then **Settings**. Connect the repository under **Service Source** if
+   needed. Leave **Root Directory** blank or set it to `/`; it is a separate
+   setting from Service Source. Generate a domain under **Public Networking**.
+   Use its `https://` URL as the app origin. If Railway already created services
+   from the two extension directories, confirm their root directories and
+   retire them after the root service is working.
+3. In the root service's **Variables** tab, set the real values below. The
+   placeholders in `.env.example` do not configure Railway. Railway supplies
+   `PORT` automatically, and the app reads it.
+
+   | Variable | Value |
+   | --- | --- |
+   | `SHOPIFY_APP_URL` | Railway HTTPS origin, without a trailing slash |
+   | `SHOPIFY_API_KEY` | Client ID for the linked Shopify app |
+   | `SHOPIFY_API_SECRET` | Client secret for that app |
+   | `SCOPES` | Same comma-separated scopes as `shopify.app.toml` |
+   | `DATABASE_URL` | Supabase Session pooler URL, port 5432, with `schema=public&sslmode=require` |
+   | `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated random secret of at least 16 characters |
+   | `NODE_ENV` | `production` |
+
+   Copy the pooler URL from Supabase **Connect** and URL-encode any special
+   characters in its password. Prisma connects to Supabase PostgreSQL directly;
+   the browser and checkout extension need no Supabase key or database URL.
+4. Set Railway's **Pre-Deploy Command** to `npx prisma migrate deploy`. Leave the
+   start command at the Dockerfile default, `npm run start`. This applies
+   migrations before a new deployment starts rather than on every restart.
+5. Once the domain is known, set `application_url` in the Shopify app config to
+   that HTTPS origin and `[auth].redirect_urls` to its `/auth/callback` URL.
+   The backend's auth prefix is `/auth`. Use a separate production Shopify
+   config if you also use `shopify app dev`; set
+   `automatically_update_urls_on_dev = false` in production. Validate the config
+   with `shopify app config validate --json --config production`, then publish
+   its configuration and both extensions with
+   `shopify app deploy --config production`. Use the default config instead of
+   `--config production` if you intentionally deploy `shopify.app.toml`.
+   Shopify CLI does not host the backend.
+6. Open the Railway HTTPS URL and install the app on a development store.
+   Confirm the embedded Admin pages load, add the checkout block in Shopify's
+   Checkout Editor, and place a paid protection test order. Check Railway logs
+   for webhook errors and confirm exactly one protection purchase is recorded
+   in Supabase. The checkout extension currently uses Shopify checkout APIs and
+   a shop metafield; it makes no direct HTTP request to Supabase or the backend.
+
+Railway's [service settings](https://docs.railway.com/services),
+[public networking](https://docs.railway.com/networking/public-networking), and
+[pre-deploy commands](https://docs.railway.com/deployments/pre-deploy-command)
+document the host-side steps. Shopify's
+[deployment guide](https://shopify.dev/docs/apps/launch/deployment/deploy-to-hosting-service)
+explains the separate app configuration deployment.
