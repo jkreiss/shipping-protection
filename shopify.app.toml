@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "96f5fc78f8240440dd885872ce8c11cb"
-name = "insurance"
+client_id = "REPLACE_WITH_LOCAL_APP_CLIENT_ID"
+name = "insurance-local"
 application_url = "https://example.com"
 embedded = true
 

@@ -42,6 +42,8 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
   let protectedOrders = 0;
   let protectedEligibleOrders = 0;
   let revenue = 0n;
+  let protectedGmv = 0n;
+  let missingGmvSnapshots = 0;
   let refundAmount = 0n;
   let currencyMismatch = 0;
   let unresolvedPayments = 0;
@@ -71,6 +73,11 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
       if (order.paidEligible) protectedEligibleOrders += 1;
       const amount = moneyToScaled(purchase.feeAmount);
       revenue += amount;
+      if (purchase.coveredMerchandiseAmount === null || purchase.coveredMerchandiseAmount === undefined) {
+        missingGmvSnapshots += 1;
+      } else {
+        protectedGmv += moneyToScaled(purchase.coveredMerchandiseAmount);
+      }
       bucket(calendarDate(purchase.purchasedAt, timeZone)).revenue += amount;
     }
   }
@@ -91,9 +98,11 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
     eligibleOrders, protectedOrders, hiddenTestOrders,
     attachRate: eligibleOrders ? (protectedEligibleOrders / eligibleOrders) * 100 : null,
     revenue: scaledToMoney(revenue), refunds: scaledToMoney(refundAmount),
+    protectedGmv: scaledToMoney(protectedGmv),
+    averageProtectionFee: protectedOrders ? scaledToMoney((revenue + BigInt(Math.floor(protectedOrders / 2))) / BigInt(protectedOrders)) : null,
     trend: [...trend.values()].sort((a, b) => a.date.localeCompare(b.date)).map((day) => ({
       date: day.date, revenue: scaledToMoney(day.revenue), refunds: scaledToMoney(day.refunds),
     })),
-    notices: { ...unresolvedRefunds, currencyMismatch, unresolvedPayments },
+    notices: { ...unresolvedRefunds, currencyMismatch, unresolvedPayments, missingGmvSnapshots },
   };
 }

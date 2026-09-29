@@ -187,11 +187,14 @@ try {
       where: { shopId_shopifyOrderId: { shopId: shop.id, shopifyOrderId: "gid://shopify/Order/9001" } },
     });
     assert.equal(paidOrder.paidProtectionFee.toFixed(4), "0.2500");
+    assert.equal(paidOrder.paidMerchandiseAmount.toFixed(4), "100.0000");
     assert.equal(paidOrder.paidEligible, true);
     const paidPurchase = await transaction.protectionPurchase.findUnique({
       where: { orderId_shopId: { orderId: paidOrder.id, shopId: shop.id } },
     });
     assert.equal(paidPurchase.purchasedAt.toISOString(), "2026-09-23T02:00:00.000Z");
+    assert.equal(paidPurchase.coveredMerchandiseAmount.toFixed(4), "100.0000");
+    assert.equal(paidPurchase.orderValueAmount.toFixed(4), "100.2500");
     assert.deepEqual(paidPurchase.protectionLineIds, ["gid://shopify/Order/9001/LineItem/2"]);
     await persistNormalizedOrder(transaction, shop, normalizeGraphqlOrder(graphqlOrder("gid://shopify/Order/9001", true)));
     assert.equal(await transaction.protectionRefund.count({ where: { shopId: shop.id } }), 1);
@@ -268,6 +271,12 @@ try {
     }));
     await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT paid_purchase_immutable_check');
     await transaction.$executeRawUnsafe('RELEASE SAVEPOINT paid_purchase_immutable_check');
+    await transaction.$executeRawUnsafe('SAVEPOINT paid_order_immutable_check');
+    await assert.rejects(transaction.order.update({
+      where: { id: paidOrder.id }, data: { paidMerchandiseAmount: "999.0000" },
+    }));
+    await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT paid_order_immutable_check');
+    await transaction.$executeRawUnsafe('RELEASE SAVEPOINT paid_order_immutable_check');
     const provisional = await transaction.protectionPurchase.create({ data: {
       shopId: otherShop.id, orderId: otherOrder.id, currencyCode: "AUD",
       eligibleSubtotalAmount: "100.0000", feeAmount: "0.2500",

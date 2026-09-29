@@ -1,23 +1,6 @@
-import prisma from "./db.server.js";
-import {
-  PROTECTION_ATTRIBUTE_NAMES,
-  moneyToScaled,
-  normalizeWebhookOrder,
-  scaledToMoney,
-} from "./order-normalization.js";
-import { normalizeGraphqlOrder } from "./order-normalization.js";
-import { fetchShopifyOrder } from "./order-shopify.server.js";
+import { PROTECTION_ATTRIBUTE_NAMES, moneyToScaled, scaledToMoney } from "./order-normalization.js";
 import { classifyProtectionRefund } from "./protection-refunds.js";
 import { PRICING_SCHEMA_VERSION } from "./pricing-contract.js";
-
-function sanitizeError(error) {
-  const text = error instanceof Error ? error.message : "Unknown persistence error";
-  return text
-    .replace(/postgres(?:ql)?:\/\/[^@\s]+@/gi, "postgresql://[redacted]@")
-    .replace(/\b(password|secret|token)=([^\s;]+)/gi, "$1=[redacted]")
-    .replace(/[\r\n\t]+/g, " ")
-    .slice(0, 500);
-}
 
 function hasProvenance(line) {
   return PROTECTION_ATTRIBUTE_NAMES.some(
@@ -72,9 +55,16 @@ export async function persistNormalizedOrder(
   });
   if (existing?.shopifyUpdatedAt > normalized.shopifyUpdatedAt) return existing;
   const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.quantity > 0);
+  const coveredMerchandise = scaledToMoney(lines
+    .filter((line) => !line.isProtection && line.requiresShipping)
+    .reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n));
   const protectedLines = lines.filter((line) => line.isProtection);
   const firstPayment = Boolean(normalized.paidAt && !existing?.firstPaidAt);
-  const paidFacts = firstPayment ? { firstPaidAt: normalized.paidAt, paidEligible: eligible } : {};
+  const paidFacts = firstPayment ? {
+    firstPaidAt: normalized.paidAt,
+    paidEligible: eligible,
+    paidMerchandiseAmount: coveredMerchandise,
+  } : {};
   const { lines: ignoredLines, refunds: ignoredRefunds, paidAt: ignoredPaidAt, ...fields } = normalized;
   void ignoredLines;
   void ignoredRefunds;
@@ -157,6 +147,8 @@ export async function persistNormalizedOrder(
       pricingContractVersion: selected.pricingContractVersion,
       currencyCode: normalized.currencyCode,
       eligibleSubtotalAmount: scaledToMoney(eligibleSubtotal),
+      coveredMerchandiseAmount: firstPayment ? coveredMerchandise : null,
+      orderValueAmount: firstPayment ? normalized.totalAmount : null,
       feeAmount: scaledToMoney(fee),
       protectionLineIds: protectedLines.map((line) => line.shopifyLineItemId),
       purchasedAt: firstPayment ? normalized.paidAt : null,
@@ -205,101 +197,5 @@ async function persistOrderRefunds(transaction, shop, order, normalized, lines, 
         status: result.status, amount: result.amount, currencyCode, succeededAt: result.succeededAt },
       update: { status: result.status, amount: result.amount, currencyCode, succeededAt: result.succeededAt },
     });
-  }
-}
-
-export async function processOrderWebhook({
-  shopDomain,
-  webhookId,
-  eventId = null,
-  topic = "ORDERS_CREATE",
-  payload,
-  admin = null,
-  hashSecret = process.env.CHECKOUT_TOKEN_HASH_SECRET,
-  database = prisma,
-}) {
-  if (!webhookId) throw new Error("X-Shopify-Webhook-Id is required.");
-  try {
-    const orderId = topic === "REFUNDS_CREATE"
-      ? payload?.order_id
-      : payload?.admin_graphql_api_id ?? payload?.id;
-    const graphqlId = typeof orderId === "string" && orderId.startsWith("gid://")
-      ? orderId : `gid://shopify/Order/${orderId}`;
-    const normalized = admin
-      ? normalizeGraphqlOrder(await fetchShopifyOrder(admin, graphqlId), hashSecret)
-      : normalizeWebhookOrder(payload, hashSecret);
-    return await database.$transaction(async (transaction) => {
-      const shop = await transaction.shop.upsert({
-        where: { shopDomain },
-        create: { shopDomain },
-        update: {},
-      });
-      const existing = await transaction.webhookDelivery.findUnique({
-        where: { shopId_webhookId: { shopId: shop.id, webhookId } },
-      });
-      if (existing?.status === "PROCESSED") {
-        return { duplicate: true, order: null };
-      }
-
-      const delivery = existing
-        ? await transaction.webhookDelivery.update({
-            where: { id: existing.id },
-            data: {
-              eventId,
-              topic,
-              status: "PROCESSING",
-              errorMessage: null,
-              failedAt: null,
-            },
-          })
-        : await transaction.webhookDelivery.create({
-            data: { shopId: shop.id, webhookId, eventId, topic },
-          });
-      const order = await persistNormalizedOrder(transaction, shop, normalized);
-      await transaction.webhookDelivery.update({
-        where: { id: delivery.id },
-        data: { status: "PROCESSED", processedAt: new Date() },
-      });
-      return { duplicate: false, order };
-    }, { isolationLevel: "Serializable", timeout: 20_000 });
-  } catch (error) {
-    if (["P2002", "P2034"].includes(error?.code)) {
-      const duplicateShop = await database.shop.findUnique({
-        where: { shopDomain },
-      });
-      const duplicate = duplicateShop
-        ? await database.webhookDelivery.findUnique({
-            where: {
-              shopId_webhookId: { shopId: duplicateShop.id, webhookId },
-            },
-          })
-        : null;
-      if (duplicate?.status === "PROCESSED") {
-        return { duplicate: true, order: null };
-      }
-    }
-    const shop = await database.shop.upsert({
-      where: { shopDomain },
-      create: { shopDomain },
-      update: {},
-    });
-    await database.webhookDelivery.upsert({
-      where: { shopId_webhookId: { shopId: shop.id, webhookId } },
-      create: {
-        shopId: shop.id,
-        webhookId,
-        eventId,
-        topic,
-        status: "FAILED",
-        errorMessage: sanitizeError(error),
-        failedAt: new Date(),
-      },
-      update: {
-        status: "FAILED",
-        errorMessage: sanitizeError(error),
-        failedAt: new Date(),
-      },
-    });
-    throw error;
   }
 }

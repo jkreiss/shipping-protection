@@ -6,7 +6,8 @@ const range = { start: "2026-09-01", end: "2026-09-30" };
 const order = (changes = {}) => ({
   firstPaidAt: new Date("2026-09-01T14:30:00Z"),
   paidEligible: true,
-  protectionPurchase: { purchasedAt: new Date("2026-09-01T14:30:00Z"), feeAmount: "0.2500", currencyCode: "AUD" },
+  protectionPurchase: { purchasedAt: new Date("2026-09-01T14:30:00Z"), feeAmount: "0.2500",
+    coveredMerchandiseAmount: "100.0000", currencyCode: "AUD" },
   currencyCode: "AUD", isTest: false, financialStatus: "REFUNDED", ...changes,
 });
 const refund = (changes = {}) => ({
@@ -32,6 +33,7 @@ describe("merchant analytics", () => {
     expect(result).toMatchObject({
       eligibleOrders: 2, protectedOrders: 1, hiddenTestOrders: 1, attachRate: 50,
       revenue: "0.2500", refunds: "0.1000",
+      protectedGmv: "100.0000", averageProtectionFee: "0.2500",
       notices: { pending: 1, unattributed: 1, currencyMismatch: 2 },
     });
     expect(result.trend).toEqual([
@@ -53,5 +55,15 @@ describe("merchant analytics", () => {
       refunds: [], timeZone, currencyCode: "AUD", range,
     });
     expect(result).toMatchObject({ protectedOrders: 1, revenue: "0.2500" });
+  });
+
+  test("excludes missing historical GMV snapshots instead of inventing values", () => {
+    const result = aggregateAnalytics({ orders: [order({ protectionPurchase: {
+      purchasedAt: new Date("2026-09-01T14:30:00Z"), feeAmount: "0.2500",
+      coveredMerchandiseAmount: null, currencyCode: "AUD",
+    } })], refunds: [],
+      timeZone, currencyCode: "AUD", range });
+    expect(result.protectedGmv).toBe("0.0000");
+    expect(result.notices.missingGmvSnapshots).toBe(1);
   });
 });

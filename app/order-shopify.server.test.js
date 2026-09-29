@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { adminGraphql } from "./order-shopify.server";
+import { adminGraphql, fetchShopifyOrder } from "./order-shopify.server";
 
 describe("Admin GraphQL response handling", () => {
   test("rejects search warnings before a reconciliation scan can advance", async () => {
@@ -19,5 +19,38 @@ describe("Admin GraphQL response handling", () => {
 
     await expect(adminGraphql(admin, "query Orders { orders(first: 1) { nodes { id } } }"))
       .rejects.toThrow("Shopify search warning: Invalid search field for this query.");
+  });
+});
+
+describe("large order pagination", () => {
+  test("combines order and refund pages before returning a complete snapshot", async () => {
+    const order = {
+      id: "gid://shopify/Order/1", updatedAt: "2026-09-29T00:00:00Z",
+      transactions: [], transactionsCount: { count: 0 },
+      lineItems: { nodes: [{ id: "line-1" }], pageInfo: { hasNextPage: true, endCursor: "line-cursor" } },
+      refunds: [{ id: "gid://shopify/Refund/2",
+        refundLineItems: { nodes: [{ lineItem: { id: "line-1" } }], pageInfo: { hasNextPage: true, endCursor: "refund-cursor" } },
+        transactions: { nodes: [{ id: "tx-1" }], pageInfo: { hasNextPage: true, endCursor: "tx-cursor" } },
+      }],
+    };
+    const admin = { graphql: async (query, { variables }) => {
+      let data;
+      if (query.includes("query AnalyticsOrder")) data = { order };
+      else if (query.includes("query OrderLinePage")) {
+        expect(variables.after).toBe("line-cursor");
+        data = { order: { lineItems: { nodes: [{ id: "line-2" }], pageInfo: { hasNextPage: false, endCursor: null } } } };
+      } else if (query.includes("query RefundLinePage")) {
+        expect(variables.after).toBe("refund-cursor");
+        data = { refund: { refundLineItems: { nodes: [{ lineItem: { id: "line-2" } }], pageInfo: { hasNextPage: false, endCursor: null } } } };
+      } else if (query.includes("query RefundTransactionPage")) {
+        expect(variables.after).toBe("tx-cursor");
+        data = { refund: { transactions: { nodes: [{ id: "tx-2" }], pageInfo: { hasNextPage: false, endCursor: null } } } };
+      } else data = { order: { updatedAt: order.updatedAt } };
+      return { json: async () => ({ data }) };
+    } };
+    const result = await fetchShopifyOrder(admin, order.id);
+    expect(result.lineItems.nodes.map(({ id }) => id)).toEqual(["line-1", "line-2"]);
+    expect(result.refunds[0].refundLineItems.nodes).toHaveLength(2);
+    expect(result.refunds[0].transactions.nodes).toHaveLength(2);
   });
 });

@@ -52,11 +52,13 @@ export async function reconcileOrders({
       await transaction.shop.update({
         where: { id: shop.id },
         data: connection.pageInfo.hasNextPage
-          ? { orderReconciliationCursor: connection.pageInfo.endCursor, orderReconciliationUntil: until }
+          ? { orderReconciliationCursor: connection.pageInfo.endCursor, orderReconciliationUntil: until,
+              ...(shop.orderHistoryStartAt ? {} : { orderHistoryStartAt: since }) }
           : {
               orderReconciliationSince: until,
               orderReconciliationCursor: null,
               orderReconciliationUntil: null,
+              ...(shop.orderHistoryStartAt ? {} : { orderHistoryStartAt: since }),
             },
       });
     }, { isolationLevel: "Serializable", timeout: 20_000 });
