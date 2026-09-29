@@ -207,6 +207,23 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    a private worker service from the same image with start command
    `npm run worker`. Start it only after migrations and the web health check
    pass. Keep the worker service without a public domain.
+
+   If a previous deploy of migration
+   `20260930000000_webhook_inbox_paid_metrics` failed with PostgreSQL `55P04`
+   (`unsafe use of new value "PENDING"`), deploy the commit that splits the enum
+   addition from its first use. Back up the affected database, then run
+   `npx prisma migrate status` against that environment's `DATABASE_URL`. If it
+   reports that migration as failed, run this once against the same database:
+
+   ```sh
+   npx prisma migrate resolve --rolled-back 20260930000000_webhook_inbox_paid_metrics
+   ```
+
+   Then redeploy with the normal `npx prisma migrate deploy` pre-deploy command.
+   The migration was made safe to retry if its earlier attempt applied some
+   statements before failing. Do not run `prisma migrate reset` on a hosted
+   database. Prisma's [failed migration recovery guide](https://www.prisma.io/docs/orm/v6/prisma-migrate/workflows/patching-and-hotfixing)
+   explains the `resolve --rolled-back` step.
 5. Connect both services to `main`. Require the GitHub `CI / verify` check to
    pass before Railway automatic deployment. Back up PostgreSQL before each
    production migration and verify that the backup can be restored. Use separate
