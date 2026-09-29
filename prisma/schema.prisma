@@ -20,6 +20,7 @@ enum PricingRuleState {
 }
 
 enum WebhookProcessingStatus {
+  PENDING
   PROCESSING
   PROCESSED
   FAILED
@@ -84,6 +85,7 @@ model Shop {
   installedAt               DateTime              @default(now())
   uninstalledAt             DateTime?
   orderReconciliationSince  DateTime?
+  orderHistoryStartAt       DateTime?
   orderReconciliationCursor String?
   orderReconciliationUntil  DateTime?
   createdAt                 DateTime              @default(now())
@@ -155,7 +157,12 @@ model WebhookDelivery {
   webhookId    String
   eventId      String?
   topic        String
-  status       WebhookProcessingStatus @default(PROCESSING)
+  shopifyOrderId String
+  status       WebhookProcessingStatus @default(PENDING)
+  attempts     Int                     @default(0)
+  nextAttemptAt DateTime               @default(now())
+  leaseToken   String?
+  leaseUntil   DateTime?
   errorMessage String?
   receivedAt   DateTime                @default(now())
   processedAt  DateTime?
@@ -168,6 +175,7 @@ model WebhookDelivery {
   @@unique([shopId, webhookId])
   @@index([shopId, eventId])
   @@index([shopId, topic, status])
+  @@index([status, nextAttemptAt, leaseUntil])
 }
 
 model Order {
@@ -187,6 +195,7 @@ model Order {
   paidProtected        Boolean   @default(false)
   paidProtectionFee    Decimal   @default(0) @db.Decimal(20, 4)
   paidProtectionLineIds String[] @default([])
+  paidMerchandiseAmount Decimal? @db.Decimal(20, 4)
   currencyCode         String
   subtotalAmount       Decimal   @db.Decimal(20, 4)
   totalAmount          Decimal   @db.Decimal(20, 4)
@@ -261,6 +270,8 @@ model ProtectionPurchase {
   basis                  String?
   currencyCode           String
   eligibleSubtotalAmount Decimal?                    @db.Decimal(20, 4)
+  coveredMerchandiseAmount Decimal?                   @db.Decimal(20, 4)
+  orderValueAmount       Decimal?                     @db.Decimal(20, 4)
   feeAmount              Decimal                     @db.Decimal(20, 4)
   protectionLineIds      String[]                    @default([])
   pricingContractVersion Int?

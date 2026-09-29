@@ -8,8 +8,8 @@ Claims and automated resolutions are planned, but are not part of the current ap
 
 ## Local setup
 
-Use Node.js `>=20.19 <22` or `>=22.12`, npm, and the Shopify CLI. npm is the
-package manager for this repository.
+Use Node.js `>=20.19 <22` or `>=22.12` and npm. The Shopify CLI is pinned as a
+development dependency; use it through `npm run` or `npx shopify`.
 
 ```shell
 npm ci
@@ -17,6 +17,15 @@ npx supabase login
 npx supabase link --project-ref zpbrsewsozlpmxysecyw
 cp -n .env.example .env
 ```
+
+The default `shopify.app.toml` contains a local app ID placeholder. Create a
+dedicated local Shopify app, replace that ID, and use its credentials in the
+local environment. Do not use the production app ID or database for local work.
+Copy `shopify.app.staging.toml.example` to `shopify.app.staging.toml` after
+creating a separate staging app. Production uses
+`shopify.app.production.toml`. Each environment needs its own Shopify app,
+Railway environment, secrets, Sentry project, and PostgreSQL database. The
+production client ID in this repository is public configuration, not a secret.
 
 The app uses Prisma with Supabase PostgreSQL. In Supabase **Connect**, copy the
 Session pooler URL (port 5432) into `DATABASE_URL` in the ignored `.env` file.
@@ -69,9 +78,9 @@ Shop Pay separately if used, and place a test order. Shopify documents the
 [checkout UI plan requirement](https://shopify.dev/docs/api/checkout-ui-extensions/latest)
 and [Cart Transform price-update restrictions](https://shopify.dev/docs/api/functions/latest/cart-transform).
 
-The current app uses single-merchant distribution. This refactor prepares
-shop-scoped data and configuration in one backend and database; unrelated
-merchants would need a separately planned public-distribution app because
+The backend is configured for public app distribution. The current release is
+limited to a Plus-capable test store; unrelated merchant installs need review
+and a release plan because
 [Shopify distribution methods cannot be changed after selection](https://shopify.dev/docs/apps/launch/distribution/select-distribution-method).
 
 Shopify orders, refunds, and webhook data are the source of truth for paid
@@ -80,11 +89,11 @@ The app's webhook routes are declared in `shopify.app.toml`; order
 reconciliation can fill gaps after missed or delayed deliveries.
 
 The confirmed `ProtectionPurchase` row is the durable paid record. It freezes
-the first verified payment time, fee, protection line IDs, and any observed rule
-snapshot. Unpaid rows remain provisional and can change with order edits. The
+the first verified payment time, fee, protection line IDs, covered merchandise,
+order value, and any observed rule snapshot. Unpaid rows remain provisional and can change with order edits. The
 paid fields on `Order` are synchronized caches; analytics and refund attribution
 read the confirmed purchase. Historical purchases recovered from paid order
-snapshots have unknown eligible subtotal and pricing provenance left null. Claim
+snapshots have unknown eligible subtotal, covered merchandise, order value, and pricing provenance left null. Claim
 and claim event tables are present for later work; there is no claim intake or
 resolution endpoint yet. Versioned coverage terms and checkout provenance are
 needed before automated claim decisions.
@@ -93,6 +102,14 @@ The database prevents updates and ordinary deletion of confirmed purchases,
 and only allows claims against confirmed purchases. Claim events are append-only.
 Shop data redaction removes these records in dependency order inside one
 transaction.
+
+Verified order and refund webhooks write a minimal PostgreSQL inbox row and
+return after that write. The worker fetches the latest order through Admin
+GraphQL, applies it with the delivery completion in one transaction, retries
+with a lease and bounded backoff, and reports terminal failures. The inbox
+stores no raw webhook payload or customer information. Run exactly one worker
+service for the initial test-store release. Reconciliation also runs in bounded
+batches from the worker every 15 minutes and can be started from Analytics.
 
 ## Merchant analytics
 
@@ -103,9 +120,14 @@ the first completed payment. Protection refunds are recorded once per Shopify
 refund ID and dated by successful refund transactions.
 
 Test orders are excluded unless **Include test orders (preview only)** is
-selected. Totals use the current shop currency. The page flags pending or
+selected. Totals use the current shop currency. Protected GMV is discounted,
+shippable paid merchandise, excluding protection, shipping, and tax. Average
+protection fee is gross confirmed fees divided by protected orders. Attach rate
+is an order-based estimate because checkout exposure is unknown. The page flags pending or
 unattributable refunds, unresolved payment dates, and records in another
 currency as data quality notices.
+The page also warns when the requested range extends beyond the verified scan
+or when historical protected orders lack a paid merchandise snapshot.
 
 ## Checks and deployment
 
@@ -114,11 +136,12 @@ npm test
 npm run lint
 npm run typecheck
 npm run build
+npm run verify:postgres
 ```
 
 `typecheck` generates React Router and Cart Transform types before checking the
-app and both extensions; it needs the Shopify CLI to access its local
-preferences.
+app and both extensions. GitHub Actions runs these checks and the PostgreSQL
+verification against an isolated test database.
 
 ### Coordinated durable-protection migration
 
@@ -137,17 +160,15 @@ and [Supabase Prisma guide](https://supabase.com/docs/guides/database/prisma).
 
 ### Deploy the backend on Railway
 
-Railway needs **one service from the repository root**. Its public HTTPS domain
-serves the embedded Admin app, authentication, and webhook routes. The
-`insurance-ext` checkout UI and `shipping-protection-transform` Cart Transform
-are Shopify extensions, not Railway services or background workers. Railway may
-offer to create services for these npm workspaces; use the root app instead.
+Railway needs two services from the repository root in each hosted environment:
+the public web service and a private worker service. The checkout UI and Cart
+Transform are Shopify extensions, deployed through Shopify CLI separately.
 
 1. Push the app to a GitHub repository. Confirm `.env` is untracked and contains
    no committed secrets. The root `Dockerfile` installs build dependencies,
    generates Prisma Client, and builds the web app. `.dockerignore` keeps local
    credentials out of the image.
-2. In Railway, create a service from that GitHub repository. Open the **service
+2. In Railway, create a web service from that GitHub repository. Open the **service
    tile**, then **Settings**. Connect the repository under **Service Source** if
    needed. Leave **Root Directory** blank or set it to `/`; it is a separate
    setting from Service Source. Generate a domain under **Public Networking**.
@@ -156,7 +177,8 @@ offer to create services for these npm workspaces; use the root app instead.
    origin. If Railway already created services
    from the two extension directories, confirm their root directories and
    retire them after the root service is working.
-3. In the root service's **Variables** tab, set the real values below. The
+3. In the web service's **Variables** tab, set the real values below. Give the
+   worker the same environment's application secrets and database URL. The
    placeholders in `.env.example` do not configure Railway. When you set the
    domain target port manually to `3000`, also set `PORT=3000` here so the app
    listens on the same internal port.
@@ -171,30 +193,52 @@ offer to create services for these npm workspaces; use the root app instead.
    | `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated random secret of at least 16 characters |
    | `NODE_ENV` | `production` |
    | `PORT` | `3000`, matching the manually selected domain target port |
+   | `APP_ENV` | `staging` or `production` |
+   | `SENTRY_DSN` | Environment-specific server error-monitoring DSN; optional locally |
 
    Copy the pooler URL from Supabase **Connect** and URL-encode any special
    characters in its password. Prisma connects to Supabase PostgreSQL directly;
    the browser and checkout extension need no Supabase key or database URL.
-4. Set Railway's **Pre-Deploy Command** to `npx prisma migrate deploy`. Leave the
-   start command at the Dockerfile default, `npm run start`. This applies
-   migrations before a new deployment starts rather than on every restart.
-5. The `shopify.app.production.toml` config points at the Railway HTTPS origin
+   Configure a Sentry alert for `webhook_terminal`, and route it to the release
+   operator. Logs and Sentry events contain only safe IDs, operation names,
+   error classes, and timings; they exclude raw webhooks and customer data.
+4. Set the web service's **Pre-Deploy Command** to `npx prisma migrate deploy`,
+   start command to `npm run start`, and health check path to `/healthz`. Create
+   a private worker service from the same image with start command
+   `npm run worker`. Start it only after migrations and the web health check
+   pass. Keep the worker service without a public domain.
+5. Connect both services to `main`. Require the GitHub `CI / verify` check to
+   pass before Railway automatic deployment. Back up PostgreSQL before each
+   production migration and verify that the backup can be restored. Use separate
+   databases for staging and production.
+6. The `shopify.app.production.toml` config points at the Railway HTTPS origin
    and its `/auth/callback` route. From a local terminal in the repository root,
    validate it with `shopify app config validate --json --config production`,
    then publish the configuration and both extensions with
-   `shopify app deploy --config production`. Shopify CLI is not installed in the
-   Railway container and does not host the backend.
-6. In Shopify's Dev Dashboard, open the app's **Distribution** card and choose
+   `npx shopify app deploy --config production` only after the matching backend
+   passes smoke checks. Shopify app versions do not deploy the hosted web app.
+7. In Shopify's Dev Dashboard, open the app's **Distribution** card and choose
    **Public** for this multi-merchant app. Shopify does not let you change the
    distribution method later. The backend uses `AppDistribution.AppStore` to
    match this choice. A custom-distribution app is limited to one store or one
    Plus organization.
-7. Open the Railway HTTPS URL and install the app on a development store.
+8. Open the Railway HTTPS URL and install the app on a Plus-capable development store.
    Confirm the embedded Admin pages load, add the checkout block in Shopify's
    Checkout Editor, and place a paid protection test order. Check Railway logs
    for webhook errors and confirm exactly one protection purchase is recorded
    in Supabase. The checkout extension currently uses Shopify checkout APIs and
    a shop metafield; it makes no direct HTTP request to Supabase or the backend.
+
+For the test-store release, exercise opt-in and removal, paid orders, unpaid
+cancellations, partial and full merchandise refunds, protection-fee refunds,
+duplicate deliveries, failed processing and recovery, uninstall and reinstall,
+and merchant-local date filters. Verify `/healthz`, worker completion, Shopify
+delivery logs, Sentry alerts, and reconciliation. Keep real customer charges
+disabled until approved protection terms and a defined claims process exist.
+`npm audit --omit=dev` currently reports four high advisories in the Prisma
+CLI/configuration dependency chain. They have no safe automatic upgrade in the
+current major version. Review and resolve this dependency risk before accepting
+real customer traffic.
 
 Railway's [service settings](https://docs.railway.com/services),
 [public networking](https://docs.railway.com/networking/public-networking), and

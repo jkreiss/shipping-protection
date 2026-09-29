@@ -115,11 +115,13 @@ export default function Analytics() {
             ["Attach rate", data.attachRate === null ? "—" : `${data.attachRate.toFixed(1)}%`],
             ["Protection revenue", money(data.revenue)],
             ["Protection refunds", money(data.refunds)],
+            ["Protected GMV", money(data.protectedGmv)],
+            ["Average protection fee", data.averageProtectionFee === null ? "—" : money(data.averageProtectionFee)],
           ].map(([label, value]) => <s-box key={label} padding="base" borderWidth="base" borderRadius="base">
             <s-stack direction="block" gap="small-200"><s-text>{label}</s-text><s-heading>{value}</s-heading></s-stack>
           </s-box>)}
         </s-stack>
-        <s-paragraph>Eligible orders are fully paid orders with shippable merchandise other than protection. The attach rate denominator is a proxy: stored orders do not show whether the checkout offer appeared.</s-paragraph>
+        <s-paragraph>Attach rate is protected eligible paid orders divided by eligible paid orders. Eligibility is an order-based estimate because checkout exposure is unknown. Protected GMV is paid shippable merchandise after discounts, excluding protection, shipping, and tax.</s-paragraph>
       </s-section>
 
       <s-section heading="Daily trend">
@@ -129,15 +131,16 @@ export default function Analytics() {
       <s-section heading="Data coverage">
         <s-stack direction="block" gap="base">
           <s-paragraph>{data.sync.complete ? `Last completed scan: ${data.sync.reconciledThrough}.` : "Initial order scan is incomplete."} Shopify generally makes only the last 60 days of orders available to this app; older orders appear only if already stored locally.</s-paragraph>
+          {data.sync.historyLimited && <s-banner heading="History may be incomplete" tone="warning">This range extends beyond the verified order scan. Older orders and their metrics may be missing.</s-banner>}
           {fetcher.data && !fetcher.data.error && <s-paragraph>Latest batch: {fetcher.data.ordersProcessed} orders across {fetcher.data.pages} pages; {fetcher.data.pendingRechecked} pending refund orders rechecked. {fetcher.data.complete ? "Scan complete." : "More pages remain."}</s-paragraph>}
           {fetcher.data?.error && <s-banner heading="Sync needs attention" tone="critical">{fetcher.data.error}</s-banner>}
           <s-button onClick={() => fetcher.submit({}, { method: "post" })} {...(pending ? { loading: true } : {})}> {data.sync.complete ? "Refresh data" : "Continue sync"} </s-button>
         </s-stack>
       </s-section>
 
-      {(notices.pending || notices.unattributed || notices.currencyMismatch || notices.unresolvedPayments) ? <s-section heading="Data quality">
+      {(notices.pending || notices.unattributed || notices.currencyMismatch || notices.unresolvedPayments || notices.missingGmvSnapshots) ? <s-section heading="Data quality">
         <s-banner heading="Some records need review" tone="warning">
-          {notices.pending} protection refunds await successful payment; {notices.unattributed} refunds cannot be attributed to a protection line; {notices.currencyMismatch} records use a different shop currency; {notices.unresolvedPayments} orders have a paid status without a dated successful payment transaction.
+          {notices.pending} protection refunds await successful payment; {notices.unattributed} refunds cannot be attributed to a protection line; {notices.currencyMismatch} records use a different shop currency; {notices.unresolvedPayments} orders have a paid status without a dated successful payment transaction; {notices.missingGmvSnapshots} older protected orders lack a paid merchandise snapshot.
         </s-banner>
       </s-section> : null}
     </s-page>
