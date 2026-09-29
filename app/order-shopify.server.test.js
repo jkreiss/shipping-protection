@@ -34,6 +34,8 @@ describe("large order pagination", () => {
       }],
     };
     const admin = { graphql: async (query, { variables }) => {
+      // GraphQL comments run to end of line, as Shopify parses them.
+      if (!query.replace(/#[^\n]*/g, "").trim()) throw new Error("syntax error, unexpected end of file");
       let data;
       if (query.includes("query AnalyticsOrder")) data = { order };
       else if (query.includes("query OrderLinePage")) {

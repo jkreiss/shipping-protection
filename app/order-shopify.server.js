@@ -75,7 +75,8 @@ const REFUND_TRANSACTION_PAGE_QUERY = `#graphql
       nodes { ${TRANSACTION_FIELDS} } pageInfo { hasNextPage endCursor }
     } }
   }`;
-const ORDER_VERSION_QUERY = `#graphql query OrderVersion($id: ID!) { order(id: $id) { updatedAt } }`;
+const ORDER_VERSION_QUERY = `#graphql
+  query OrderVersion($id: ID!) { order(id: $id) { updatedAt } }`;
 
 async function appendPages(admin, initial, query, id, pick) {
   const nodes = [...initial.nodes];
