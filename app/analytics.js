@@ -37,6 +37,15 @@ export function analyticsRange(search, timeZone, now = new Date()) {
   return { preset, start: shiftDate(today, 1 - Number(preset)), end: today };
 }
 
+export function dailyTrend(trend, range) {
+  const byDate = new Map(trend.map((day) => [day.date, day]));
+  const days = [];
+  for (let date = range.start; date <= range.end; date = shiftDate(date, 1)) {
+    days.push(byDate.get(date) ?? { date, revenue: "0.0000", refunds: "0.0000" });
+  }
+  return days;
+}
+
 export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, range, includeTest = false }) {
   let eligibleOrders = 0;
   let protectedOrders = 0;
@@ -94,10 +103,16 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
     refundAmount += amount;
     bucket(date).refunds += amount;
   }
+  // Claim payouts are not recorded yet (claims have no resolution amounts), so
+  // claims paid is zero until claim resolutions exist. Net protection revenue
+  // is protection revenue minus protection refunds minus claims paid.
+  const claimsPaid = 0n;
   return {
     eligibleOrders, protectedOrders, hiddenTestOrders,
     attachRate: eligibleOrders ? (protectedEligibleOrders / eligibleOrders) * 100 : null,
     revenue: scaledToMoney(revenue), refunds: scaledToMoney(refundAmount),
+    claimsPaid: scaledToMoney(claimsPaid),
+    netRevenue: scaledToMoney(revenue - refundAmount - claimsPaid),
     protectedGmv: scaledToMoney(protectedGmv),
     averageProtectionFee: protectedOrders ? scaledToMoney((revenue + BigInt(Math.floor(protectedOrders / 2))) / BigInt(protectedOrders)) : null,
     trend: [...trend.values()].sort((a, b) => a.date.localeCompare(b.date)).map((day) => ({

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
   DEFAULT_RATE_BASIS_POINTS,
+  basisPointsToPercent,
   formatBasisPoints,
   parsePricingContract,
+  percentToBasisPoints,
   pricingContractForRule,
   validateRateBasisPoints,
 } from "./pricing-contract";
@@ -77,5 +79,29 @@ describe("pricing contract", () => {
   test("formats merchant-facing percentages from configuration", () => {
     expect(formatBasisPoints(25)).toBe("0.25%");
     expect(formatBasisPoints(200)).toBe("2%");
+  });
+
+  test.each([
+    ["1", 100],
+    ["0.25", 25],
+    [" 2.5 ", 250],
+    ["0.01", 1],
+    ["100", 10_000],
+    [1.5, 150],
+  ])("converts merchant percentage %s to %s basis points", (input, expected) => {
+    expect(percentToBasisPoints(input)).toBe(expected);
+  });
+
+  test.each(["", "abc", "0", "0.001", "100.01", "-1", "1e2", null])(
+    "rejects invalid merchant percentage %s",
+    (input) => {
+      expect(() => percentToBasisPoints(input)).toThrow(RangeError);
+    },
+  );
+
+  test("shows stored basis points as a plain percentage number", () => {
+    expect(basisPointsToPercent(25)).toBe("0.25");
+    expect(basisPointsToPercent(100)).toBe("1");
+    expect(basisPointsToPercent(250)).toBe("2.5");
   });
 });

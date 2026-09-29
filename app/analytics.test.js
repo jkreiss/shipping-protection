@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { aggregateAnalytics, analyticsRange, calendarDate } from "./analytics";
+import { aggregateAnalytics, analyticsRange, calendarDate, dailyTrend } from "./analytics";
 
 const timeZone = "Australia/Sydney";
 const range = { start: "2026-09-01", end: "2026-09-30" };
@@ -32,7 +32,7 @@ describe("merchant analytics", () => {
     });
     expect(result).toMatchObject({
       eligibleOrders: 2, protectedOrders: 1, hiddenTestOrders: 1, attachRate: 50,
-      revenue: "0.2500", refunds: "0.1000",
+      revenue: "0.2500", refunds: "0.1000", claimsPaid: "0.0000", netRevenue: "0.1500",
       protectedGmv: "100.0000", averageProtectionFee: "0.2500",
       notices: { pending: 1, unattributed: 1, currencyMismatch: 2 },
     });
@@ -65,5 +65,15 @@ describe("merchant analytics", () => {
       timeZone, currencyCode: "AUD", range });
     expect(result.protectedGmv).toBe("0.0000");
     expect(result.notices.missingGmvSnapshots).toBe(1);
+  });
+
+  test("fills every day of a bounded range so the chart has a stable axis", () => {
+    const days = dailyTrend([{ date: "2026-09-02", revenue: "0.2500", refunds: "0.0000" }],
+      { start: "2026-09-01", end: "2026-09-03" });
+    expect(days).toEqual([
+      { date: "2026-09-01", revenue: "0.0000", refunds: "0.0000" },
+      { date: "2026-09-02", revenue: "0.2500", refunds: "0.0000" },
+      { date: "2026-09-03", revenue: "0.0000", refunds: "0.0000" },
+    ]);
   });
 });

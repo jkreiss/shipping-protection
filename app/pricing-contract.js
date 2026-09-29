@@ -110,3 +110,28 @@ export function formatBasisPoints(rateBasisPoints) {
     maximumFractionDigits: 2,
   })}%`;
 }
+
+// Merchants enter rates as plain percentages ("1" means 1%); storage and the
+// Cart Transform Function keep whole basis points so fees stay integer-exact.
+export function percentToBasisPoints(value) {
+  const text = typeof value === "number" ? String(value) : String(value ?? "").trim();
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(text);
+  const basisPoints = match
+    ? Number(match[1]) * 100 + Number((match[2] ?? "").padEnd(2, "0"))
+    : Number.NaN;
+  if (
+    !Number.isSafeInteger(basisPoints) ||
+    basisPoints < MIN_RATE_BASIS_POINTS ||
+    basisPoints > MAX_RATE_BASIS_POINTS
+  ) {
+    throw new RangeError(
+      "Enter a rate from 0.01 to 100, with at most two decimal places. For example, 1 means 1%.",
+    );
+  }
+  return basisPoints;
+}
+
+export function basisPointsToPercent(rateBasisPoints) {
+  validateRateBasisPoints(rateBasisPoints);
+  return String(rateBasisPoints / 100);
+}
