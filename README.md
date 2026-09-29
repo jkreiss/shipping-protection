@@ -210,16 +210,17 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
 
    If a previous deploy of migration
    `20260930000000_webhook_inbox_paid_metrics` failed with PostgreSQL `55P04`
-   (`unsafe use of new value "PENDING"`), deploy the commit that splits the enum
-   addition from its first use. Back up the affected database, then run
-   `npx prisma migrate status` against that environment's `DATABASE_URL`. If it
-   reports that migration as failed, run this once against the same database:
+   (`unsafe use of new value "PENDING"`), pause Railway automatic deployment and
+   back up the affected database. Run `npx prisma migrate status` against that
+   environment's `DATABASE_URL`. If it reports that migration as failed, run
+   this once against the same database:
 
    ```sh
    npx prisma migrate resolve --rolled-back 20260930000000_webhook_inbox_paid_metrics
    ```
 
-   Then redeploy with the normal `npx prisma migrate deploy` pre-deploy command.
+   Push the commit that splits the enum addition from its first use, then
+   redeploy with the normal `npx prisma migrate deploy` pre-deploy command.
    The migration was made safe to retry if its earlier attempt applied some
    statements before failing. Do not run `prisma migrate reset` on a hosted
    database. Prisma's [failed migration recovery guide](https://www.prisma.io/docs/orm/v6/prisma-migrate/workflows/patching-and-hotfixing)
