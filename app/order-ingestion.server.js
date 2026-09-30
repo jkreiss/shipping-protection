@@ -1,6 +1,7 @@
 import { PROTECTION_ATTRIBUTE_NAMES, moneyToScaled, scaledToMoney } from "./order-normalization.js";
 import { classifyProtectionRefund } from "./protection-refunds.js";
-import { PRICING_SCHEMA_VERSION } from "./pricing-contract.js";
+import { PRICING_SCHEMA_VERSION, calculateFee, currencyMinorUnits } from "./pricing-contract.js";
+import { reportFailure } from "./observability.server.js";
 
 function hasProvenance(line) {
   return PROTECTION_ATTRIBUTE_NAMES.some(
@@ -35,6 +36,28 @@ function protectionAttribution(line, rules) {
   };
 }
 
+// Was the protection line charged what the Cart Transform would charge at the
+// attributed rule's rate? The Function prices in the customer's (presentment)
+// currency, so compare there when Shopify returned those amounts. A mismatch
+// usually means the Function failed and the variant's fallback price applied.
+export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) {
+  if (!rule) return { pricingCheck: null, expectedFee: null };
+  const relevant = [...eligibleLines, ...protectedLines];
+  const presentment = normalized.presentmentCurrencyCode &&
+    relevant.every((line) => line.presentmentUnitAmount != null);
+  const unitAmount = (line) => (presentment ? line.presentmentUnitAmount : line.originalUnitAmount);
+  const currencyCode = presentment ? normalized.presentmentCurrencyCode : normalized.currencyCode;
+  const expectedFee = calculateFee(
+    eligibleLines.map((line) => scaledToMoney(moneyToScaled(unitAmount(line)) * BigInt(line.quantity))),
+    rule.rateBasisPoints,
+    currencyMinorUnits(currencyCode),
+  );
+  const matched = expectedFee !== null && protectedLines.every(
+    (line) => moneyToScaled(unitAmount(line)) === moneyToScaled(expectedFee),
+  );
+  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
+}
+
 export async function persistNormalizedOrder(
   transaction,
   shop,
@@ -65,10 +88,14 @@ export async function persistNormalizedOrder(
     paidEligible: eligible,
     paidMerchandiseAmount: coveredMerchandise,
   } : {};
-  const { lines: ignoredLines, refunds: ignoredRefunds, paidAt: ignoredPaidAt, ...fields } = normalized;
+  const {
+    lines: ignoredLines, refunds: ignoredRefunds, paidAt: ignoredPaidAt,
+    presentmentCurrencyCode: ignoredPresentmentCurrency, ...fields
+  } = normalized;
   void ignoredLines;
   void ignoredRefunds;
   void ignoredPaidAt;
+  void ignoredPresentmentCurrency;
 
   const order = await transaction.order.upsert({
     where: {
@@ -138,6 +165,12 @@ export async function persistNormalizedOrder(
       .filter((line) => !line.isProtection && line.requiresShipping)
       .reduce((sum, line) => sum + moneyToScaled(line.preDiscountAmount), 0n);
     const fee = protectedLines.reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n);
+    const { pricingCheck, expectedFee } = livePriceCheck(
+      normalized,
+      lines.filter((line) => !line.isProtection && line.requiresShipping),
+      protectedLines,
+      selected.rule,
+    );
     const purchase = {
       pricingRuleId: selected.rule?.id ?? null,
       ruleId: selected.ruleId,
@@ -153,12 +186,19 @@ export async function persistNormalizedOrder(
       protectionLineIds: protectedLines.map((line) => line.shopifyLineItemId),
       purchasedAt: firstPayment ? normalized.paidAt : null,
       attributionStatus: selected.status,
+      pricingCheck,
     };
     confirmedPurchase = await transaction.protectionPurchase.upsert({
       where: { orderId_shopId: purchaseKey },
       create: { ...purchaseKey, ...purchase },
       update: purchase,
     });
+    if (firstPayment && pricingCheck === "UNMATCHED") {
+      reportFailure("protection_price_unmatched", new Error("Protection was not charged the live price."), {
+        shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId,
+        feeAmount: purchase.feeAmount, expectedFeeAmount: expectedFee,
+      });
+    }
   } else if (!confirmedPurchase && (protectedLines.length === 0 || existing?.firstPaidAt)) {
     await transaction.protectionPurchase.deleteMany({
       where: { ...purchaseKey, purchasedAt: null },

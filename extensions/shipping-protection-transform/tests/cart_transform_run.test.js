@@ -152,13 +152,15 @@ describe("cart transform", () => {
     expect(result.operations).toEqual([expectedUpdate(protection.id, "0.03")]);
   });
 
+  // An unreadable configuration can't say which line is protection or what it
+  // costs, so the variant's own (fallback) price stays in place.
   test.each([
     ["missing", null],
-    ["disabled", configuration({ enabled: false })],
     ["zero rate", configuration({ rateBasisPoints: 0 })],
     ["rate above maximum", configuration({ rateBasisPoints: 10_001 })],
     ["wrong basis", configuration({ basis: "POST_DISCOUNT" })],
     ["invalid variant", configuration({ variantId: "10" })],
+    ["unknown enabled flag", configuration({ enabled: "yes" })],
   ])("returns no operations for %s configuration", (_label, config) => {
     expect(
       cartTransformRun(
@@ -198,15 +200,46 @@ describe("cart transform", () => {
     ).toEqual({ operations: [] });
   });
 
-  test("returns no operations without eligible merchandise or protection", () => {
+  // The protection variant carries a fallback price for when this Function
+  // fails, so a protection line that shouldn't be charged is set to zero.
+  test("prices protection at zero when protection is disabled", () => {
+    const protection = protectionLine();
+    expect(
+      cartTransformRun(
+        input(
+          [line({ id: "physical", amount: "100.00" }), protection],
+          configuration({ enabled: false }),
+        ),
+      ).operations,
+    ).toEqual([expectedUpdate(protection.id, "0")]);
+  });
+
+  test("prices protection at zero without shippable merchandise", () => {
+    const protection = protectionLine();
     expect(
       cartTransformRun(
         input([
           line({ id: "digital", amount: "100.00", requiresShipping: false }),
-          protectionLine(),
+          protection,
         ]),
-      ),
-    ).toEqual({ operations: [] });
+      ).operations,
+    ).toEqual([expectedUpdate(protection.id, "0")]);
+  });
+
+  test("prices protection at zero when merchandise currencies differ", () => {
+    const protection = protectionLine();
+    expect(
+      cartTransformRun(
+        input([
+          line({ id: "usd", amount: "100.00", currencyCode: "USD" }),
+          line({ id: "eur", amount: "100.00", currencyCode: "EUR" }),
+          protection,
+        ]),
+      ).operations,
+    ).toEqual([expectedUpdate(protection.id, "0")]);
+  });
+
+  test("returns no operations without a protection line", () => {
     expect(
       cartTransformRun(input([line({ id: "physical", amount: "100.00" })])),
     ).toEqual({ operations: [] });

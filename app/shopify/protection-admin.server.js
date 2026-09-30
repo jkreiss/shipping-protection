@@ -246,8 +246,8 @@ export function buildChecks(core, product) {
     },
     {
       id: "transform",
-      label: "Blocking Cart Transform is active",
-      ok: Boolean(core.transform?.blockOnFailure),
+      label: "Cart Transform is active",
+      ok: core.transform?.blockOnFailure === false,
     },
     {
       id: "transformConfig",
@@ -599,7 +599,9 @@ async function createTransform(admin, configuration) {
     `,
     {
       functionHandle: FUNCTION_HANDLE,
-      blockOnFailure: true,
+      // Never block checkout: if the Function fails, the protection line keeps
+      // the variant's own price instead.
+      blockOnFailure: false,
       metafields: [
         {
           namespace: CONFIG_NAMESPACE,
@@ -627,7 +629,8 @@ export async function ensureTransform(admin, core, disabledConfiguration) {
   }
 
   let transform = core.transform;
-  if (transform && !transform.blockOnFailure) {
+  // Shopify can't update blockOnFailure in place, so replace a blocking one.
+  if (transform && transform.blockOnFailure !== false) {
     await deleteTransform(admin, transform.id);
     transform = null;
   }

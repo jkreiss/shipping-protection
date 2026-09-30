@@ -162,8 +162,11 @@ export function normalizeGraphqlOrder(order, hashSecret) {
       throw new Error("Order shop money currency differs from its currency code.");
     }
   }
+  const presentmentCurrencyCode = typeof order.presentmentCurrencyCode === "string"
+    ? order.presentmentCurrencyCode : null;
   const lines = order.lineItems.nodes.map((line) => {
     const quantity = Number(line.quantity);
+    const presentment = line.originalUnitPriceSet?.presentmentMoney;
     if (!line.originalUnitPriceSet?.shopMoney || !line.discountedTotalSet?.shopMoney ||
       line.originalUnitPriceSet.shopMoney.currencyCode !== currencyCode ||
       line.discountedTotalSet.shopMoney.currencyCode !== currencyCode) {
@@ -186,6 +189,9 @@ export function normalizeGraphqlOrder(order, hashSecret) {
       ),
       finalAmount: scaledToMoney(moneyToScaled(finalAmount)),
       protectionAttributes: allowListedAttributes(line.customAttributes),
+      // The Cart Transform prices in the customer's currency; kept only to check that price.
+      presentmentUnitAmount: presentmentCurrencyCode && presentment?.currencyCode === presentmentCurrencyCode
+        ? presentment.amount : null,
     };
   });
 
@@ -202,6 +208,7 @@ export function normalizeGraphqlOrder(order, hashSecret) {
     paidAt: completedPaymentAt(order),
     refunds: order.refunds ?? [],
     currencyCode,
+    presentmentCurrencyCode,
     subtotalAmount: scaledToMoney(moneyToScaled(shopMoney(order.subtotalPriceSet))),
     totalAmount: scaledToMoney(moneyToScaled(shopMoney(order.totalPriceSet))),
     totalDiscountsAmount: scaledToMoney(

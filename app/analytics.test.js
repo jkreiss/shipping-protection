@@ -16,6 +16,17 @@ const refund = (changes = {}) => ({
 });
 
 describe("merchant analytics", () => {
+  test("counts protected orders that weren't charged the live price", () => {
+    const unmatched = order({ protectionPurchase: { ...order().protectionPurchase, feeAmount: "5.0000", pricingCheck: "UNMATCHED" } });
+    const result = aggregateAnalytics({
+      orders: [order(), order({ protectionPurchase: { ...order().protectionPurchase, pricingCheck: "MATCHED" } }), unmatched],
+      refunds: [], timeZone, currencyCode: "AUD", range,
+    });
+    expect(result.notices.unmatchedPricing).toBe(1);
+    // The fee actually charged still counts as revenue.
+    expect(result.revenue).toBe("5.5000");
+  });
+
   test("uses inclusive merchant calendar dates across UTC midnight", () => {
     expect(calendarDate(new Date("2026-09-01T14:30:00Z"), timeZone)).toBe("2026-09-02");
     expect(analyticsRange("range=7", timeZone, new Date("2026-09-24T01:00:00Z"))).toEqual({

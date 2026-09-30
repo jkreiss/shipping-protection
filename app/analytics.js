@@ -56,6 +56,7 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
   let refundAmount = 0n;
   let currencyMismatch = 0;
   let unresolvedPayments = 0;
+  let unmatchedPricing = 0;
   let hiddenTestOrders = 0;
   const trend = new Map();
   const inRange = (date) => date && (!range.start || date >= range.start) && date <= range.end;
@@ -79,6 +80,7 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
     if (purchase && inRange(calendarDate(purchase.purchasedAt, timeZone))) {
       if (purchase.currencyCode !== currencyCode) { currencyMismatch += 1; continue; }
       protectedOrders += 1;
+      if (purchase.pricingCheck === "UNMATCHED") unmatchedPricing += 1;
       if (order.paidEligible) protectedEligibleOrders += 1;
       const amount = moneyToScaled(purchase.feeAmount);
       revenue += amount;
@@ -118,6 +120,6 @@ export function aggregateAnalytics({ orders, refunds, timeZone, currencyCode, ra
     trend: [...trend.values()].sort((a, b) => a.date.localeCompare(b.date)).map((day) => ({
       date: day.date, revenue: scaledToMoney(day.revenue), refunds: scaledToMoney(day.refunds),
     })),
-    notices: { ...unresolvedRefunds, currencyMismatch, unresolvedPayments, missingGmvSnapshots },
+    notices: { ...unresolvedRefunds, currencyMismatch, unresolvedPayments, missingGmvSnapshots, unmatchedPricing },
   };
 }

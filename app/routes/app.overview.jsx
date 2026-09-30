@@ -141,6 +141,7 @@ function dataQualityMessages(notices) {
     [notices.unattributed, "refunds couldn't be matched to a protection line"],
     [notices.currencyMismatch, "records use a different currency from the shop and are excluded"],
     [notices.unresolvedPayments, "paid orders have no dated payment yet"],
+    [notices.unmatchedPricing, "protected orders weren't charged the live price"],
   ].filter(([count]) => count > 0).map(([count, text]) => `${count} ${text}`);
 }
 

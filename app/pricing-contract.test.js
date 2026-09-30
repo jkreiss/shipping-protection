@@ -2,12 +2,15 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_RATE_BASIS_POINTS,
   basisPointsToPercent,
+  calculateFee,
+  currencyMinorUnits,
   formatBasisPoints,
   parsePricingContract,
   percentToBasisPoints,
   pricingContractForRule,
   validateRateBasisPoints,
 } from "./pricing-contract";
+import feeFixtures from "../test-fixtures/pricing-fees.json";
 
 const productId = "gid://shopify/Product/1";
 const variantId = "gid://shopify/ProductVariant/2";
@@ -103,5 +106,21 @@ describe("pricing contract", () => {
     expect(basisPointsToPercent(25)).toBe("0.25");
     expect(basisPointsToPercent(100)).toBe("1");
     expect(basisPointsToPercent(250)).toBe("2.5");
+  });
+});
+
+// The Cart Transform and checkout block keep their own copies; the shared
+// fixture keeps all three calculations identical.
+describe("server fee calculation", () => {
+  test.each(feeFixtures)("matches $name", (fixture) => {
+    expect(calculateFee(fixture.amounts, fixture.rateBasisPoints, fixture.minorUnits))
+      .toBe(fixture.expected);
+  });
+
+  test("uses ISO currency precision", () => {
+    expect(currencyMinorUnits("JPY")).toBe(0);
+    expect(currencyMinorUnits("KWD")).toBe(3);
+    expect(currencyMinorUnits("CLF")).toBe(4);
+    expect(currencyMinorUnits("AUD")).toBe(2);
   });
 });

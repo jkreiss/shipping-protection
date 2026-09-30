@@ -30,7 +30,7 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
       firstPaidAt: true, paidEligible: true,
       currencyCode: true, isTest: true, financialStatus: true,
       protectionPurchase: { select: { purchasedAt: true, feeAmount: true,
-        coveredMerchandiseAmount: true, currencyCode: true } },
+        coveredMerchandiseAmount: true, currencyCode: true, pricingCheck: true } },
     } }),
     database.protectionRefund.findMany({ where: { shopId: shop.id,
       ...(!includeTest ? { order: { isTest: false } } : {}),

@@ -31,6 +31,14 @@ enum ProtectionAttributionStatus {
   UNATTRIBUTED
 }
 
+// Whether the protection line was charged the live price at the attributed
+// rule's rate. UNMATCHED usually means the Cart Transform failed and the
+// variant's fallback price was charged instead.
+enum ProtectionPricingCheck {
+  MATCHED
+  UNMATCHED
+}
+
 enum ProtectionAttachmentStrategy {
   NONE
   CHECKOUT_UI_CART_TRANSFORM
@@ -277,6 +285,7 @@ model ProtectionPurchase {
   pricingContractVersion Int?
   purchasedAt            DateTime?
   attributionStatus      ProtectionAttributionStatus
+  pricingCheck           ProtectionPricingCheck?
   createdAt              DateTime                    @default(now())
   updatedAt              DateTime                    @updatedAt
 

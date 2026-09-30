@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import process from "node:process";
 import { persistNormalizedOrder } from "./order-ingestion.server";
 
 const shop = { id: "shop-1", shopDomain: "one.myshopify.com" };
@@ -240,5 +241,96 @@ describe("normalized order persistence", () => {
     await persistNormalizedOrder(tx, shop, normalizedOrder({}));
     expect(tx.order.upsert).toHaveBeenCalledTimes(1);
     expect(tx.storedOrder().shopifyUpdatedAt).toEqual(newer.shopifyUpdatedAt);
+  });
+});
+
+const attributed = {
+  _yasas_protection_rule_id: "rule-1",
+  _yasas_protection_rule_version: "1",
+  _yasas_protection_rate_bps: "25",
+  _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+  _yasas_protection_contract_version: "2",
+};
+
+function chargedProtection(order, shopAmount) {
+  Object.assign(order.lines[1], {
+    originalUnitAmount: shopAmount, preDiscountAmount: shopAmount, finalAmount: shopAmount,
+  });
+  return order;
+}
+
+function stderrEvents() {
+  const writes = [];
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation((line) => { writes.push(String(line)); return true; });
+  return {
+    restore: () => spy.mockRestore(),
+    named: (event) => writes.map((line) => JSON.parse(line)).filter((entry) => entry.event === event),
+  };
+}
+
+describe("live price check", () => {
+  test("marks a purchase charged at the attributed rate as matched", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, normalizedOrder(attributed));
+    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
+  });
+
+  test("marks a purchase charged the fallback price as unmatched", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, chargedProtection(normalizedOrder(attributed), "5.0000"));
+    expect(tx.storedPurchase().pricingCheck).toBe("UNMATCHED");
+  });
+
+  test("checks the price in the currency the customer paid in", async () => {
+    const tx = transaction();
+    // Converted to shop money the fee no longer equals 0.25% of the shop subtotal.
+    const order = chargedProtection(normalizedOrder(attributed), "0.2400");
+    order.presentmentCurrencyCode = "USD";
+    order.lines[0].presentmentUnitAmount = "65.00";
+    order.lines[1].presentmentUnitAmount = "0.16";
+
+    await persistNormalizedOrder(tx, shop, order);
+
+    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
+  });
+
+  test("leaves the check empty when no pricing rule is attributed", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, normalizedOrder({}));
+    expect(tx.storedPurchase().pricingCheck).toBeNull();
+  });
+
+  test("alerts once when a paid order was not charged the live price", async () => {
+    const events = stderrEvents();
+    try {
+      const tx = transaction();
+      const paid = chargedProtection(normalizedOrder(attributed), "5.0000");
+      paid.paidAt = new Date("2026-09-23T00:02:00Z");
+      await persistNormalizedOrder(tx, shop, paid);
+      const later = chargedProtection(normalizedOrder(attributed), "5.0000");
+      later.paidAt = paid.paidAt;
+      later.shopifyUpdatedAt = new Date("2026-09-24T00:00:00Z");
+      await persistNormalizedOrder(tx, shop, later);
+
+      expect(events.named("protection_price_unmatched")).toEqual([expect.objectContaining({
+        shopId: "shop-1", shopifyOrderId: "gid://shopify/Order/1",
+        feeAmount: "5.0000", expectedFeeAmount: "0.25",
+      })]);
+    } finally {
+      events.restore();
+    }
+  });
+
+  test("does not alert for a paid order charged the live price", async () => {
+    const events = stderrEvents();
+    try {
+      const tx = transaction();
+      const paid = normalizedOrder(attributed);
+      paid.paidAt = new Date("2026-09-23T00:02:00Z");
+      await persistNormalizedOrder(tx, shop, paid);
+      expect(events.named("protection_price_unmatched")).toEqual([]);
+    } finally {
+      events.restore();
+    }
   });
 });

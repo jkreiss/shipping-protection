@@ -53,7 +53,7 @@ function parseConfiguration(value) {
   if (!value || typeof value !== "object") return null;
   const candidate = /** @type {Record<string, unknown>} */ (value);
   if (
-    candidate.enabled !== true ||
+    typeof candidate.enabled !== "boolean" ||
     typeof candidate.productId !== "string" ||
     !candidate.productId.startsWith("gid://shopify/Product/") ||
     typeof candidate.variantId !== "string" ||
@@ -81,8 +81,29 @@ function parseConfiguration(value) {
   }
 
   return {
+    enabled: candidate.enabled,
     variantId: candidate.variantId,
     rateBasisPoints: Number(candidate.rateBasisPoints),
+  };
+}
+
+/**
+ * @param {{ id: string }[]} lines
+ * @param {string} amount
+ * @returns {CartTransformRunResult}
+ */
+function priceLines(lines, amount) {
+  return {
+    operations: lines.map((line) => ({
+      lineUpdate: {
+        cartLineId: line.id,
+        price: {
+          adjustment: {
+            fixedPricePerUnit: { amount },
+          },
+        },
+      },
+    })),
   };
 }
 
@@ -167,6 +188,9 @@ export function cartTransformRun(input) {
       left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
     );
   if (protectionLines.length === 0) return NO_CHANGES;
+  // The protection variant is priced at the fallback charged if this Function
+  // fails, so a line that shouldn't be charged is set to zero explicitly.
+  if (!configuration.enabled) return priceLines(protectionLines, "0");
 
   const eligibleLines = input.cart.lines.filter((line) => {
     if (
@@ -177,7 +201,7 @@ export function cartTransformRun(input) {
     }
     return line.merchandise.requiresShipping === true;
   });
-  if (eligibleLines.length === 0) return NO_CHANGES;
+  if (eligibleLines.length === 0) return priceLines(protectionLines, "0");
 
   const currencyCode = eligibleLines[0].cost.subtotalAmount.currencyCode;
   if (
@@ -185,7 +209,7 @@ export function cartTransformRun(input) {
       (line) => line.cost.subtotalAmount.currencyCode !== currencyCode,
     )
   ) {
-    return NO_CHANGES;
+    return priceLines(protectionLines, "0");
   }
 
   const amount = calculateFee(
@@ -193,18 +217,5 @@ export function cartTransformRun(input) {
     configuration.rateBasisPoints,
     currencyMinorUnits(currencyCode),
   );
-  if (amount === null) return NO_CHANGES;
-
-  return {
-    operations: protectionLines.map((line) => ({
-      lineUpdate: {
-        cartLineId: line.id,
-        price: {
-          adjustment: {
-            fixedPricePerUnit: { amount },
-          },
-        },
-      },
-    })),
-  };
+  return priceLines(protectionLines, amount ?? "0");
 }

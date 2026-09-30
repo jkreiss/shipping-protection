@@ -135,3 +135,94 @@ export function basisPointsToPercent(rateBasisPoints) {
   validateRateBasisPoints(rateBasisPoints);
   return String(rateBasisPoints / 100);
 }
+
+// Server copy of the Cart Transform's fee calculation, used to check that a
+// paid order was charged the live price. Extensions can't import app code;
+// test-fixtures/pricing-fees.json keeps the copies identical.
+const ZERO_MINOR_UNIT_CURRENCIES = new Set([
+  "BIF",
+  "CLP",
+  "DJF",
+  "GNF",
+  "ISK",
+  "JPY",
+  "KMF",
+  "KRW",
+  "PYG",
+  "RWF",
+  "UGX",
+  "UYI",
+  "VND",
+  "VUV",
+  "XAF",
+  "XOF",
+  "XPF",
+]);
+const THREE_MINOR_UNIT_CURRENCIES = new Set([
+  "BHD",
+  "IQD",
+  "JOD",
+  "KWD",
+  "LYD",
+  "OMR",
+  "TND",
+]);
+const FOUR_MINOR_UNIT_CURRENCIES = new Set(["CLF", "UYW"]);
+
+/**
+ * @param {string} currencyCode
+ */
+export function currencyMinorUnits(currencyCode) {
+  if (ZERO_MINOR_UNIT_CURRENCIES.has(currencyCode)) return 0;
+  if (THREE_MINOR_UNIT_CURRENCIES.has(currencyCode)) return 3;
+  if (FOUR_MINOR_UNIT_CURRENCIES.has(currencyCode)) return 4;
+  return 2;
+}
+
+/**
+ * @param {string[]} amounts
+ * @param {number} rateBasisPoints
+ * @param {number} minorUnits
+ */
+export function calculateFee(amounts, rateBasisPoints, minorUnits) {
+  if (
+    amounts.length === 0 ||
+    !Number.isInteger(rateBasisPoints) ||
+    rateBasisPoints < MIN_RATE_BASIS_POINTS ||
+    rateBasisPoints > MAX_RATE_BASIS_POINTS ||
+    !Number.isInteger(minorUnits) ||
+    minorUnits < 0
+  ) {
+    return null;
+  }
+
+  /** @type {{whole: string, fraction: string}[]} */
+  const parsed = [];
+  for (const amount of amounts) {
+    if (!/^\d+(?:\.\d+)?$/.test(amount)) return null;
+    const [whole, fraction = ""] = amount.split(".");
+    parsed.push({ whole, fraction });
+  }
+
+  const scaleDigits = Math.max(
+    ...parsed.map(({ fraction }) => fraction.length),
+  );
+  const scale = 10n ** BigInt(scaleDigits);
+  const subtotal = parsed.reduce((sum, { whole, fraction }) => {
+    const paddedFraction = fraction.padEnd(scaleDigits, "0");
+    return sum + BigInt(whole) * scale + BigInt(paddedFraction || "0");
+  }, 0n);
+  const numerator =
+    subtotal * BigInt(rateBasisPoints) * 10n ** BigInt(minorUnits);
+  const denominator = scale * 10_000n;
+  const roundedMinor = (numerator * 2n + denominator) / (denominator * 2n);
+
+  if (minorUnits === 0) return roundedMinor.toString();
+
+  const divisor = 10n ** BigInt(minorUnits);
+  const whole = roundedMinor / divisor;
+  const fraction = (roundedMinor % divisor)
+    .toString()
+    .padStart(minorUnits, "0");
+  return `${whole}.${fraction}`;
+}

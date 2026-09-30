@@ -120,6 +120,28 @@ describe("order normalization", () => {
     });
   });
 
+  test("keeps the presentment unit price the customer was charged in", () => {
+    const line = (presentmentMoney) => ({
+      id: "gid://shopify/LineItem/11", quantity: 1, requiresShipping: true,
+      originalUnitPriceSet: { shopMoney: { amount: "50.00", currencyCode: "AUD" }, presentmentMoney },
+      discountedTotalSet: { shopMoney: { amount: "50.00", currencyCode: "AUD" } },
+      product: null, variant: null, customAttributes: [],
+    });
+    const order = (presentmentMoney) => ({
+      id: "gid://shopify/Order/1001", name: "#1001", createdAt: "2026-09-23T01:00:00Z",
+      updatedAt: "2026-09-23T01:01:00Z", currencyCode: "AUD", presentmentCurrencyCode: "USD",
+      lineItems: { nodes: [line(presentmentMoney)] },
+    });
+
+    const normalized = normalizeGraphqlOrder(order({ amount: "32.50", currencyCode: "USD" }), secret);
+    expect(normalized.presentmentCurrencyCode).toBe("USD");
+    expect(normalized.lines[0].presentmentUnitAmount).toBe("32.50");
+
+    // A presentment amount in another currency can't be compared, so it's dropped.
+    const mismatched = normalizeGraphqlOrder(order({ amount: "50.00", currencyCode: "AUD" }), secret);
+    expect(mismatched.lines[0].presentmentUnitAmount).toBeNull();
+  });
+
   test("dates a fully paid order at the successful payment threshold", () => {
     const order = {
       currencyCode: "AUD", totalPriceSet: { shopMoney: { amount: "100.00", currencyCode: "AUD" } },
