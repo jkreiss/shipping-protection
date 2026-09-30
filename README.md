@@ -199,8 +199,12 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    Copy the pooler URL from Supabase **Connect** and URL-encode any special
    characters in its password. Prisma connects to Supabase PostgreSQL directly;
    the browser and checkout extension need no Supabase key or database URL.
-   Configure a Sentry alert for `webhook_terminal`, and route it to the release
-   operator. Logs and Sentry events contain only safe IDs, operation names,
+   Configure Sentry alerts for `webhook_terminal` and
+   `protection_price_unmatched`, and route them to the release operator.
+   `protection_price_unmatched` means a paid order wasn't charged the live
+   protection price, usually because the Cart Transform failed and the line was
+   charged $0.00. Alert on a burst (for example 3 or more in an hour): a failed
+   Function deploy or configuration affects every cart until it is rolled back. Logs and Sentry events contain only safe IDs, operation names,
    error classes, and timings; they exclude raw webhooks and customer data.
 4. Set the web service's **Pre-Deploy Command** to `npx prisma migrate deploy`,
    start command to `npm run start`, and health check path to `/healthz`. Create

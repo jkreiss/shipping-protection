@@ -711,7 +711,7 @@ Remember:
 - provide Function-required configuration using Shopify-supported inputs/metafields
 - the Function runs on every cart, including carts without protection; the Cart Transform goes live when setup runs, not when the block is placed
 
-`blockOnFailure` is `false` (decided 2026-09-30): a Function error never blocks checkout. The protection line then keeps the variant's own price, which is the fallback price (still $0.00 until the merchant fallback setting ships). Because of that, the Function sets price 0 explicitly whenever a protection line shouldn't be charged (protection disabled, no shippable merchandise, mixed currencies), and leaves the line unchanged only when its configuration is unreadable. Ingestion records `ProtectionPurchase.pricingCheck` (`MATCHED` when the fee equals the attributed rule's rate in the customer's currency) and emits `protection_price_unmatched` for paid orders that weren't charged the live price; the Overview shows the count. Setup replaces an existing blocking transform, because Shopify cannot update the flag in place.
+`blockOnFailure` is `false` (decided 2026-09-30): a Function error never blocks checkout. The protection line then keeps the variant's own price, $0.00 by design: a failure gives protection away free rather than charging the customer a price they weren't shown. The safeguard is the alert below, since a Function failure is usually repeated (a bad deploy or config affects every cart) rather than one-off; if it fires, fix or roll back the Shopify app version. The Function still sets price 0 explicitly whenever a protection line shouldn't be charged (protection disabled, no shippable merchandise, mixed currencies), and leaves the line unchanged only when its configuration is unreadable. Ingestion records `ProtectionPurchase.pricingCheck` (`MATCHED` when the fee equals the attributed rule's rate in the customer's currency) and emits `protection_price_unmatched` for paid orders that weren't charged the live price; the Overview shows the count. Setup replaces an existing blocking transform, because Shopify cannot update the flag in place.
 
 ## Theme/storefront strategy
 
@@ -1451,7 +1451,7 @@ Requirements:
 
 Known gaps (2026-09-29), to fix before installing on a live high-volume store:
 
-1. ~~`blockOnFailure: true` blocks every checkout if the Cart Transform errors.~~ Fixed: the transform no longer blocks checkout. Still to do: the merchant-set fallback price (fixed or from order history), so a failure doesn't give protection away at $0.00.
+1. ~~`blockOnFailure: true` blocks every checkout if the Cart Transform errors.~~ Fixed: the transform no longer blocks checkout; a failure charges $0.00 and alerts (`protection_price_unmatched`).
 2. The worker processes one delivery at a time, and each delivery fetches the full order (about three Admin API calls). Coalesce queued deliveries for the same order into one fetch, then allow a few concurrent processing loops.
 3. Worker reconciliation processes 10 orders per 15 minutes (about 960 a day). That can never finish the backfill or keep up with this store.
 4. The Overview triggers a 30-order reconciliation on every page load. This is slow at volume and can collide with the worker's reconciliation of the same shop. Reconciliation should run only in the worker.
