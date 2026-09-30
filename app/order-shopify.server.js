@@ -95,7 +95,7 @@ async function appendPages(admin, initial, query, id, pick, options) {
     page = connection.pageInfo;
     count += 1;
   }
-  return { nodes, pageInfo: { hasNextPage: false, endCursor: page.endCursor } };
+  return { nodes, pageInfo: { hasNextPage: false, endCursor: page.endCursor }, paged: count > 1 };
 }
 
 export function assertCompleteOrder(order) {
@@ -119,16 +119,25 @@ export async function fetchShopifyOrder(admin, id, options = {}) {
   if ((order.refunds?.length ?? 0) >= 250) {
     throw new Error("Shopify order has too many refunds for a complete financial snapshot.");
   }
-  order.lineItems = await appendPages(admin, order.lineItems, LINE_PAGE_QUERY, id, (result) => result.order?.lineItems, options);
+  const connections = [];
+  const page = async (initial, query, ownerId, pick) => {
+    const { paged, ...connection } = await appendPages(admin, initial, query, ownerId, pick, options);
+    connections.push(paged);
+    return connection;
+  };
+  order.lineItems = await page(order.lineItems, LINE_PAGE_QUERY, id, (result) => result.order?.lineItems);
   for (const refund of order.refunds ?? []) {
-    refund.refundLineItems = await appendPages(admin, refund.refundLineItems, REFUND_LINE_PAGE_QUERY, refund.id,
-      (result) => result.refund?.refundLineItems, options);
-    refund.transactions = await appendPages(admin, refund.transactions, REFUND_TRANSACTION_PAGE_QUERY, refund.id,
-      (result) => result.refund?.transactions, options);
+    refund.refundLineItems = await page(refund.refundLineItems, REFUND_LINE_PAGE_QUERY, refund.id,
+      (result) => result.refund?.refundLineItems);
+    refund.transactions = await page(refund.transactions, REFUND_TRANSACTION_PAGE_QUERY, refund.id,
+      (result) => result.refund?.transactions);
   }
-  const version = await adminGraphql(admin, ORDER_VERSION_QUERY, { id }, options);
-  if (version.order?.updatedAt !== order.updatedAt) {
-    throw new Error("Shopify order changed during pagination; retry its latest state.");
+  // One response is already a single read. Only paged data can mix versions.
+  if (connections.some(Boolean)) {
+    const version = await adminGraphql(admin, ORDER_VERSION_QUERY, { id }, options);
+    if (version.order?.updatedAt !== order.updatedAt) {
+      throw new Error("Shopify order changed during pagination; retry its latest state.");
+    }
   }
   return assertCompleteOrder(order);
 }

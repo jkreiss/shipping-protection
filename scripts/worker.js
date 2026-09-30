@@ -1,18 +1,20 @@
 import process from "node:process";
 import prisma from "../app/db.server.js";
 import { unauthenticated } from "../app/shopify.server.js";
-import { processNextDelivery } from "../app/webhook-worker.server.js";
+import { processNextDelivery, workerConcurrency } from "../app/webhook-worker.server.js";
 import { reconcileOrders } from "../app/order-reconciliation.server.js";
 import { logEvent, reportFailure } from "../app/observability.server.js";
 
 const pollMs = 2_000;
 const reconcileEveryMs = 15 * 60_000;
+const concurrency = workerConcurrency(process.env.WORKER_CONCURRENCY);
 let stopping = false;
-let nextReconcileAt = 0;
 let lastShopId = "";
 
 process.on("SIGTERM", () => { stopping = true; });
 process.on("SIGINT", () => { stopping = true; });
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function reconcileOneShop() {
   const shop = await prisma.shop.findFirst({
@@ -35,19 +37,38 @@ async function reconcileOneShop() {
   }
 }
 
-logEvent("worker_started");
-while (!stopping) {
-  try {
-    const processed = await processNextDelivery();
-    if (processed) continue;
+// Each loop claims one order's queued deliveries at a time; an empty queue
+// makes it wait before polling again. A loop finishes its current batch on SIGTERM.
+async function deliveryLoop() {
+  while (!stopping) {
+    try {
+      if (await processNextDelivery()) continue;
+    } catch (error) {
+      reportFailure("worker_loop_failed", error);
+    }
+    if (!stopping) await pause(pollMs);
+  }
+}
+
+async function reconciliationLoop() {
+  let nextReconcileAt = 0;
+  while (!stopping) {
     if (Date.now() >= nextReconcileAt) {
       nextReconcileAt = Date.now() + reconcileEveryMs;
-      await reconcileOneShop();
+      try {
+        await reconcileOneShop();
+      } catch (error) {
+        reportFailure("worker_loop_failed", error);
+      }
     }
-  } catch (error) {
-    reportFailure("worker_loop_failed", error);
+    if (!stopping) await pause(pollMs);
   }
-  if (!stopping) await new Promise((resolve) => setTimeout(resolve, pollMs));
 }
+
+logEvent("worker_started", { concurrency });
+await Promise.all([
+  ...Array.from({ length: concurrency }, () => deliveryLoop()),
+  reconciliationLoop(),
+]);
 await prisma.$disconnect();
 logEvent("worker_stopped");

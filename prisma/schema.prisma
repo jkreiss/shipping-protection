@@ -183,6 +183,7 @@ model WebhookDelivery {
   @@unique([shopId, webhookId])
   @@index([shopId, eventId])
   @@index([shopId, topic, status])
+  @@index([shopId, shopifyOrderId, status])
   @@index([status, nextAttemptAt, leaseUntil])
 }
 

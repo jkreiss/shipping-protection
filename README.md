@@ -195,7 +195,13 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    | `PORT` | `3000`, matching the manually selected domain target port |
    | `APP_ENV` | `staging` or `production` |
    | `SENTRY_DSN` | Environment-specific server error-monitoring DSN; optional locally |
+   | `WORKER_CONCURRENCY` | Worker only, optional: parallel webhook delivery loops, 1 to 16 (default 4) |
 
+   Each worker delivery loop can hold a database connection while it stores an
+   order, and reconciliation uses one more. On the worker, add
+   `&connection_limit=` to `DATABASE_URL` with at least `WORKER_CONCURRENCY + 2`
+   (for example `8` with the default 4). Keep the web and worker limits
+   together below the Supabase pooler's pool size (**Database → Settings**).
    Copy the pooler URL from Supabase **Connect** and URL-encode any special
    characters in its password. Prisma connects to Supabase PostgreSQL directly;
    the browser and checkout extension need no Supabase key or database URL.
