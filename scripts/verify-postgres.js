@@ -168,20 +168,26 @@ try {
       if (query.includes("query ReconcileOrders")) {
         const first = !variables.after;
         return { json: async () => ({ data: { orders: {
-          nodes: [{ id: `gid://shopify/Order/${first ? "9001" : "9002"}` }],
+          nodes: [{ id: `gid://shopify/Order/${first ? "9001" : "9002"}`,
+            updatedAt: graphqlOrder(`gid://shopify/Order/${first ? "9001" : "9002"}`, first).updatedAt }],
           pageInfo: { hasNextPage: first, endCursor: first ? "page-one" : null },
         } } }) };
       }
       const id = variables.id;
       return { json: async () => ({ data: { order: graphqlOrder(id, id.endsWith("9001")) } }) };
     } };
-    const database = { shop: transaction.shop, protectionRefund: transaction.protectionRefund,
+    const database = { shop: transaction.shop, order: transaction.order, protectionRefund: transaction.protectionRefund,
       $transaction: (callback) => callback(transaction) };
     const firstBatch = await reconcileOrders({ admin, shopDomain: shop.shopDomain, database, maxPages: 1, pageSize: 1 });
     assert.equal(firstBatch.complete, false);
     assert.equal((await transaction.shop.findUnique({ where: { id: shop.id } })).orderReconciliationCursor, "page-one");
     const secondBatch = await reconcileOrders({ admin, shopDomain: shop.shopDomain, database, maxPages: 1, pageSize: 1 });
     assert.equal(secondBatch.complete, true);
+    // The next window lists the same unchanged orders and fetches none of them.
+    const unchanged = await reconcileOrders({ admin, shopDomain: shop.shopDomain, database, pageSize: 1 });
+    assert.equal(unchanged.complete, true);
+    assert.equal(unchanged.ordersListed, 2);
+    assert.equal(unchanged.ordersFetched, 0);
     assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 2);
     const paidOrder = await transaction.order.findUnique({
       where: { shopId_shopifyOrderId: { shopId: shop.id, shopifyOrderId: "gid://shopify/Order/9001" } },
