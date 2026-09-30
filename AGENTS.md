@@ -1454,8 +1454,8 @@ Known gaps (2026-09-29), to fix before installing on a live high-volume store:
 1. ~~`blockOnFailure: true` blocks every checkout if the Cart Transform errors.~~ Fixed: the transform no longer blocks checkout; a failure charges $0.00 and alerts (`protection_price_unmatched`).
 2. ~~The worker processes one delivery at a time, and each delivery fetches the full order.~~ Fixed: queued deliveries for one order are claimed together and fetched once (one Admin API call for a single-page order), `WORKER_CONCURRENCY` loops (default 4) run in parallel, and Serializable conflicts between them are retried and requeued without spending attempts.
 3. ~~Worker reconciliation processes 10 orders per 15 minutes (about 960 a day).~~ Fixed: the worker reconciles continuously in 60-second turns per shop, lists 250 orders per page, fetches only orders missing locally or newer in Shopify, stores each order in its own transaction, and starts each window 10 minutes before the last one ended. Caught-up shops are rechecked every 10 minutes; a failing shop backs off for 5 minutes. Page size is still to be confirmed against measured query cost (`shopify_graphql_cost`).
-4. The Overview triggers a 30-order reconciliation on every page load. This is slow at volume and can collide with the worker's reconciliation of the same shop. Reconciliation should run only in the worker.
-5. The Overview aggregates 30 days of orders in memory. That is acceptable at pilot scale; move it into SQL aggregates if it becomes slow.
+4. ~~The Overview triggers a 30-order reconciliation on every page load.~~ Fixed: reconciliation runs only in the worker (the Overview sync action and the `/app/reconcile` route are gone). "Refresh" re-reads stored data, and the Overview warns "Order sync is behind" when the last completed sync is over an hour old or a delivery failed after it.
+5. The Overview aggregates 30 days of orders in memory. That is acceptable at pilot scale; `overview_loaded` logs its duration and row counts, so move it into SQL aggregates if that gets slow.
 
 ---
 

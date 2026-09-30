@@ -1,10 +1,9 @@
 /* eslint-disable react/prop-types */
-import { useEffect, useRef, useState } from "react";
-import { useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
+import { useState } from "react";
+import { useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { readOverview } from "../analytics.server";
-import { reconcileOrders } from "../order-reconciliation.server";
 import { readShippingProtectionState } from "../shipping-protection.server";
 
 export const loader = async ({ request }) => {
@@ -21,15 +20,6 @@ export const loader = async ({ request }) => {
     },
     metrics,
   };
-};
-
-export const action = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
-  try {
-    return await reconcileOrders({ admin, shopDomain: session.shop, maxPages: 3 });
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : "Order sync failed." };
-  }
 };
 
 const CHART = { width: 720, height: 200, left: 56, right: 8, top: 12, bottom: 28 };
@@ -147,24 +137,9 @@ function dataQualityMessages(notices) {
 
 export default function Overview() {
   const { protection, metrics } = useLoaderData();
-  const fetcher = useFetcher();
+  // Orders sync in the background worker; Refresh only re-reads stored data.
   const revalidator = useRevalidator();
   const [params, setParams] = useSearchParams();
-  const started = useRef(false);
-  const lastSyncResult = useRef(null);
-
-  useEffect(() => {
-    if (!started.current) {
-      started.current = true;
-      fetcher.submit({}, { method: "post" });
-    }
-  }, [fetcher]);
-  useEffect(() => {
-    if (fetcher.data && fetcher.data !== lastSyncResult.current && !fetcher.data.error) {
-      lastSyncResult.current = fetcher.data;
-      revalidator.revalidate();
-    }
-  }, [fetcher.data, revalidator]);
 
   const money = (value, currency = metrics.currencyCode) => new Intl.NumberFormat(undefined, {
     style: "currency", currency,
@@ -174,7 +149,7 @@ export default function Overview() {
     if (enabled) next.set("test", "1"); else next.delete("test");
     setParams(next);
   };
-  const syncing = fetcher.state !== "idle";
+  const refreshing = revalidator.state !== "idle";
   const noLiveData = metrics.eligibleOrders === 0 && metrics.protectedOrders === 0;
   const qualityMessages = dataQualityMessages(metrics.notices);
 
@@ -283,21 +258,19 @@ export default function Overview() {
           <s-paragraph>{qualityMessages.join("; ")}.</s-paragraph>
         </s-banner>
       )}
-      {fetcher.data?.error && (
-        <s-banner heading="Order sync needs attention" tone="critical">
-          <s-paragraph>{fetcher.data.error}</s-paragraph>
+      {metrics.sync.behind && (
+        <s-banner heading="Order sync is behind" tone="warning">
+          <s-paragraph>Some recent orders may be missing from these numbers. They will appear once the sync catches up.</s-paragraph>
         </s-banner>
       )}
 
       <s-stack direction="inline" gap="small-200" alignItems="center">
         <s-text color="subdued">
-          {syncing
-            ? "Syncing orders…"
-            : metrics.sync.complete
+          {metrics.sync.complete
               ? `Orders synced through ${new Date(metrics.sync.reconciledThrough).toLocaleString()}. Dates use ${metrics.timeZone}.`
               : "Order history is still syncing, so some numbers may be incomplete."}
         </s-text>
-        <s-button variant="tertiary" onClick={() => fetcher.submit({}, { method: "post" })} disabled={syncing}>
+        <s-button variant="tertiary" onClick={() => revalidator.revalidate()} disabled={refreshing}>
           Refresh
         </s-button>
       </s-stack>

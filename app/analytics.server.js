@@ -1,6 +1,11 @@
 import prisma from "./db.server";
 import { adminGraphql } from "./order-shopify.server";
 import { aggregateAnalytics, analyticsRange, dailyTrend } from "./analytics";
+import { logEvent } from "./observability.server";
+
+// The worker reconciles every shop about every 10 minutes, so an older last
+// sync means it is down or falling behind.
+const SYNC_STALE_MS = 60 * 60_000;
 
 const SHOP_QUERY = `#graphql
   query AnalyticsShop { shop { currencyCode ianaTimezone } }
@@ -14,7 +19,7 @@ function databaseRange(range) {
   return { ...(start ? { gte: start } : {}), lt: end };
 }
 
-export async function readAnalytics({ admin, shopDomain, search, database = prisma }) {
+export async function readAnalytics({ admin, shopDomain, search, database = prisma, now = new Date() }) {
   const shop = await database.shop.findUnique({ where: { shopDomain } });
   if (!shop) throw new Error("The authenticated shop is not installed.");
   const data = await adminGraphql(admin, SHOP_QUERY);
@@ -22,7 +27,8 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
   const range = analyticsRange(search, ianaTimezone);
   const includeTest = search.get("test") === "1";
   const dateFilter = databaseRange(range);
-  const [orders, refunds] = await Promise.all([
+  const syncedAt = shop.orderReconciliationSince;
+  const [orders, refunds, failedSinceSync] = await Promise.all([
     database.order.findMany({ where: { shopId: shop.id, OR: [
       { firstPaidAt: dateFilter },
       { firstPaidAt: null, shopifyCreatedAt: dateFilter, financialStatus: { in: ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"] } },
@@ -39,12 +45,18 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
       status: true, amount: true, currencyCode: true, succeededAt: true,
       order: { select: { isTest: true } },
     } }),
+    // Failures before the last completed sync were re-checked by that sync.
+    syncedAt ? database.webhookDelivery.count({ where: {
+      shopId: shop.id, status: "FAILED", failedAt: { gte: syncedAt },
+    } }) : 0,
   ]);
   return {
     ...aggregateAnalytics({ orders, refunds, timeZone: ianaTimezone, currencyCode, range, includeTest }),
     currencyCode, timeZone: ianaTimezone, range, includeTest,
+    rowCounts: { orders: orders.length, refunds: refunds.length },
     sync: {
       complete: Boolean(shop.orderReconciliationSince) && !shop.orderReconciliationCursor,
+      behind: Boolean(syncedAt) && (now.getTime() - syncedAt.getTime() > SYNC_STALE_MS || failedSinceSync > 0),
       cursor: Boolean(shop.orderReconciliationCursor),
       reconciledThrough: shop.orderReconciliationSince?.toISOString() ?? null,
       historyLimited: !shop.orderHistoryStartAt || !shop.orderReconciliationSince ||
@@ -86,13 +98,18 @@ async function readRecentActivity({ shopId, includeTest, database }) {
 
 // The Overview is a fixed 30-day dashboard; deeper reporting (custom ranges,
 // breakdowns, exports) is intentionally out of scope for the MVP.
-export async function readOverview({ admin, shopDomain, includeTest = false, database = prisma }) {
+export async function readOverview({ admin, shopDomain, includeTest = false, database = prisma, now = new Date() }) {
+  const started = Date.now();
   const search = new URLSearchParams({ range: "30", ...(includeTest ? { test: "1" } : {}) });
-  const analytics = await readAnalytics({ admin, shopDomain, search, database });
+  const analytics = await readAnalytics({ admin, shopDomain, search, database, now });
   const shop = await database.shop.findUnique({ where: { shopDomain }, select: { id: true } });
-  return {
+  const overview = {
     ...analytics,
     trend: dailyTrend(analytics.trend, analytics.range),
     recentActivity: await readRecentActivity({ shopId: shop.id, includeTest, database }),
   };
+  // The Overview aggregates in memory; this shows when it needs SQL aggregates.
+  logEvent("overview_loaded", { shopId: shop.id, orderRows: analytics.rowCounts.orders,
+    refundRows: analytics.rowCounts.refunds, durationMs: Date.now() - started });
+  return overview;
 }

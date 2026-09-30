@@ -104,18 +104,26 @@ Shop data redaction removes these records in dependency order inside one
 transaction.
 
 Verified order and refund webhooks write a minimal PostgreSQL inbox row and
-return after that write. The worker fetches the latest order through Admin
-GraphQL, applies it with the delivery completion in one transaction, retries
-with a lease and bounded backoff, and reports terminal failures. The inbox
-stores no raw webhook payload or customer information. Run exactly one worker
-service for the initial test-store release. Reconciliation also runs in bounded
-batches from the worker every 15 minutes and can be started from Analytics.
+return after that write. The worker runs `WORKER_CONCURRENCY` delivery loops;
+each claims every queued delivery for one order, fetches the latest order once
+through Admin GraphQL, applies it with the delivery completion in one
+transaction, retries with a lease and bounded backoff, and reports terminal
+failures. The inbox stores no raw webhook payload or customer information. Run
+one worker service: its loops share an in-process Admin API budget per shop.
+
+Reconciliation runs only in the worker. It backfills 60 days on install, then
+rechecks each shop about every 10 minutes, fetching only orders that are
+missing locally or newer in Shopify. `reconciliation_completed` logs show
+orders listed, fetched, and skipped, and `shopify_graphql_cost` logs show each
+Admin API call's query cost.
 
 ## Merchant analytics
 
-The embedded Analytics page opens to the last 30 merchant-local calendar days.
-It scans available Shopify orders in resumable batches; use **Continue sync**
-until the initial scan completes. Protected and eligible orders are dated by
+The Overview shows the last 30 merchant-local calendar days from stored data;
+**Refresh** re-reads it and never calls Shopify for orders. Until the initial
+backfill completes it says order history is still syncing, and it warns that
+order sync is behind when the last completed sync is over an hour old or an
+order update failed after it. Protected and eligible orders are dated by
 the first completed payment. Protection refunds are recorded once per Shopify
 refund ID and dated by successful refund transactions.
 
