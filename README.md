@@ -225,8 +225,10 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    statements before failing. Do not run `prisma migrate reset` on a hosted
    database. Prisma's [failed migration recovery guide](https://www.prisma.io/docs/orm/v6/prisma-migrate/workflows/patching-and-hotfixing)
    explains the `resolve --rolled-back` step.
-5. Connect both services to `main`. Require the GitHub `CI / verify` check to
-   pass before Railway automatic deployment. Back up PostgreSQL before each
+5. Connect both staging services to `main` and both production services to
+   `production` (see [Release to production](#release-to-production)). Require
+   the GitHub `CI / verify` check to pass before Railway automatic deployment
+   in both environments. Back up PostgreSQL before each
    production migration and verify that the backup can be restored. Use separate
    databases for staging and production.
 6. The `shopify.app.production.toml` config points at the Railway HTTPS origin
@@ -264,3 +266,45 @@ Railway's [service settings](https://docs.railway.com/services),
 document the host-side steps. Shopify's
 [deployment guide](https://shopify.dev/docs/apps/launch/deployment/deploy-to-hosting-service)
 explains the separate app configuration deployment.
+
+### Release to production
+
+Work on `main`. Every push to `main` deploys to staging. Production deploys
+only when the `production` branch moves, and it only ever fast-forwards to a
+commit that has already run on staging.
+
+1. Push to `main` and wait for `CI / verify` to pass and the staging deploy to
+   finish. Check the staging deploy log to confirm `prisma migrate deploy`
+   succeeded.
+2. If the change touches extensions or app configuration, run
+   `npx shopify app deploy --config staging`.
+3. Test on the staging store.
+4. Push the tested commit to production:
+
+   ```sh
+   git fetch origin
+   git push origin <tested-sha>:production
+   ```
+
+   Use the commit hash shown on the staging deployment in Railway.
+   `git push origin main:production` is fine when `main` has not moved since
+   you tested. Git rejects the push if it is not a fast-forward; never add
+   `--force`. Back up the production database first if the release includes a
+   migration.
+5. Wait for the production deploy and check `/healthz` and the logs.
+6. If the change touches extensions or app configuration, deploy them from the
+   released commit:
+
+   ```sh
+   git checkout production && git pull
+   npx shopify app deploy --config production
+   git checkout main
+   ```
+
+Fix production problems on `main` and release them the same way. Do not commit
+directly to `production`.
+
+In GitHub, protect `production` under **Settings → Branches**: require the
+`verify` status check, require linear history, disallow force pushes and
+deletion, and do not allow bypassing. Do not require pull requests, because
+releases are direct fast-forward pushes.

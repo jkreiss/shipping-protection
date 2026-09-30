@@ -642,7 +642,7 @@ Current services:
 
 Deploys:
 
-- Railway auto-deploys both services from `main` after the GitHub `CI / verify` check passes.
+- Railway auto-deploys both services after the GitHub `CI / verify` check passes: staging from `main`, production from the `production` branch. Production releases are fast-forward pushes of a commit already tested on staging (README → Release to production). Do not commit to `production` directly.
 - The pre-deploy command runs `npx prisma migrate deploy`.
 - Shopify extensions and app configuration deploy separately with `npx shopify app deploy --config production`. Shopify app versions do not deploy the hosted web app, and backend deploys do not update extensions.
 - The README has the full Railway and migration procedure.
