@@ -2,7 +2,7 @@
 
 client_id = "2023a5496c2a665db70327c68082fa04"
 name = "protection-staging"
-application_url = "https://insurance-backend-staging.up.railway.app/"
+application_url = "https://insurance-backend-staging.up.railway.app"
 embedded = true
 
 [build]
