@@ -205,11 +205,16 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    | `SENTRY_DSN` | Environment-specific server error-monitoring DSN; optional locally |
    | `WORKER_CONCURRENCY` | Worker only, optional: parallel webhook delivery loops, 1 to 16 (default 4) |
 
-   Each worker delivery loop can hold a database connection while it stores an
-   order, and reconciliation uses one more. On the worker, add
-   `&connection_limit=` to `DATABASE_URL` with at least `WORKER_CONCURRENCY + 2`
-   (for example `8` with the default 4). Keep the web and worker limits
-   together below the Supabase pooler's pool size (**Database → Settings**).
+   Set `&connection_limit=` on `DATABASE_URL` for **both** services. Without
+   it, Prisma sizes its pool from the machine's CPU count, and one service can
+   exhaust the Supabase session pooler on its own (`EMAXCONNSESSION ... max
+   clients are limited to pool_size`). Each worker delivery loop can hold a
+   connection while it stores an order, and reconciliation uses one more, so
+   give the worker at least `WORKER_CONCURRENCY + 2`. During a deploy the old
+   and new containers overlap, so keep **twice** the web and worker limits
+   combined within the pooler's pool size (**Database → Settings**). With a
+   pool size of 15: web `3`, worker `4` with `WORKER_CONCURRENCY=2` (7 normally,
+   14 during a deploy). Raise the pool size before raising these limits.
    Copy the pooler URL from Supabase **Connect** and URL-encode any special
    characters in its password. Prisma connects to Supabase PostgreSQL directly;
    the browser and checkout extension need no Supabase key or database URL.

@@ -62,7 +62,7 @@ async function deliveryLoop() {
     try {
       if (await processNextDelivery()) continue;
     } catch (error) {
-      reportFailure("worker_loop_failed", error);
+      reportFailure("worker_loop_failed", error, { loop: "delivery" });
     }
     if (!stopping) await pause(pollMs);
   }
@@ -74,7 +74,7 @@ async function reconciliationLoop() {
     try {
       worked = await reconciliationPass();
     } catch (error) {
-      reportFailure("worker_loop_failed", error);
+      reportFailure("worker_loop_failed", error, { loop: "reconciliation" });
     }
     if (!worked) await pauseUnlessStopping(reconcileIdleMs);
   }

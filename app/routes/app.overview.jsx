@@ -1,5 +1,5 @@
 /* eslint-disable react/prop-types */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -19,6 +19,7 @@ export const loader = async ({ request }) => {
       rate: protection.pricing?.percentage ?? null,
     },
     metrics,
+    shopDomain: session.shop,
   };
 };
 
@@ -125,6 +126,40 @@ function MetricTile({ label, value, caption = null }) {
   );
 }
 
+const DISMISSED_NOTICES_KEY = "overview-dismissed-notices";
+
+// Remembers, in this browser only, which set of data-quality notices the
+// merchant dismissed. Any change to the notices shows the banner again.
+function useDismissibleNotice(shopDomain, fingerprint) {
+  const bannerRef = useRef(null);
+  const storageKey = `${DISMISSED_NOTICES_KEY}:${shopDomain}`;
+  const [dismissed, setDismissed] = useState(undefined);
+  useEffect(() => {
+    try {
+      setDismissed(window.localStorage.getItem(storageKey));
+    } catch {
+      setDismissed(null);
+    }
+  }, [storageKey]);
+  const visible = Boolean(fingerprint) && dismissed !== undefined && dismissed !== fingerprint;
+  useEffect(() => {
+    const banner = bannerRef.current;
+    if (!banner || !visible) return undefined;
+    // React 18 doesn't bind custom-element events, so listen directly.
+    const onDismiss = () => {
+      try {
+        window.localStorage.setItem(storageKey, fingerprint);
+      } catch {
+        // Storage can be blocked; the banner then just returns on reload.
+      }
+      setDismissed(fingerprint);
+    };
+    banner.addEventListener("dismiss", onDismiss);
+    return () => banner.removeEventListener("dismiss", onDismiss);
+  }, [fingerprint, storageKey, visible]);
+  return { bannerRef, visible };
+}
+
 function dataQualityMessages(notices) {
   return [
     [notices.pending, "protection refunds are waiting for payment to complete"],
@@ -136,7 +171,7 @@ function dataQualityMessages(notices) {
 }
 
 export default function Overview() {
-  const { protection, metrics } = useLoaderData();
+  const { protection, metrics, shopDomain } = useLoaderData();
   // Orders sync in the background worker; Refresh only re-reads stored data.
   const revalidator = useRevalidator();
   const [params, setParams] = useSearchParams();
@@ -152,6 +187,7 @@ export default function Overview() {
   const refreshing = revalidator.state !== "idle";
   const noLiveData = metrics.eligibleOrders === 0 && metrics.protectedOrders === 0;
   const qualityMessages = dataQualityMessages(metrics.notices);
+  const qualityNotice = useDismissibleNotice(shopDomain, qualityMessages.join("; "));
 
   return (
     <s-page heading="Overview">
@@ -253,8 +289,8 @@ export default function Overview() {
         )}
       </s-section>
 
-      {qualityMessages.length > 0 && (
-        <s-banner heading="Some records need review" tone="warning">
+      {qualityNotice.visible && (
+        <s-banner ref={qualityNotice.bannerRef} heading="Some records need review" tone="warning" dismissible>
           <s-paragraph>{qualityMessages.join("; ")}.</s-paragraph>
         </s-banner>
       )}
