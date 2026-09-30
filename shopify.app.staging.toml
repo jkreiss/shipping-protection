@@ -41,7 +41,7 @@ api_version = "2026-07"
 scopes = "write_products,write_metaobjects,write_metaobject_definitions,read_orders,write_publications,write_cart_transforms"
 
 [auth]
-redirect_urls = [ "https://https://insurance-backend-staging.up.railway.app/auth/callback" ]
+redirect_urls = [ "https://insurance-backend-staging.up.railway.app/auth/callback" ]
 
 [shop.metafields.app.shipping_protection_config]
 type = "json"
