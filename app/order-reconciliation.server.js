@@ -34,11 +34,11 @@ export async function reconcileOrders({
       first: pageSize,
       after,
       query: searchWindow(since, until),
-    });
+    }, { shop: shopDomain });
     const connection = data.orders;
     const fullOrders = [];
     for (const item of connection.nodes) {
-      fullOrders.push(await fetchShopifyOrder(admin, item.id));
+      fullOrders.push(await fetchShopifyOrder(admin, item.id, { shop: shopDomain }));
     }
     await database.$transaction(async (transaction) => {
       for (const order of fullOrders) {
@@ -74,7 +74,7 @@ export async function reconcileOrders({
     take: 20,
   });
   for (const entry of pending) {
-    const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId);
+    const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, { shop: shopDomain });
     await database.$transaction(
       (transaction) => persistNormalizedOrder(transaction, shop, normalizeGraphqlOrder(order, hashSecret)),
       { isolationLevel: "Serializable", timeout: 20_000 },

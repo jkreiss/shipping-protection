@@ -56,7 +56,7 @@ export async function processNextDelivery({
       throw new Error("Shop is not installed.");
     }
     const { admin } = await adminForShop(shop.shopDomain);
-    const order = await fetchShopifyOrder(admin, delivery.shopifyOrderId);
+    const order = await fetchShopifyOrder(admin, delivery.shopifyOrderId, { shop: shop.shopDomain });
     const normalized = normalizeGraphqlOrder(order, hashSecret);
     await database.$transaction(async (transaction) => {
       const lease = await transaction.webhookDelivery.findFirst({

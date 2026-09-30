@@ -78,7 +78,7 @@ const REFUND_TRANSACTION_PAGE_QUERY = `#graphql
 const ORDER_VERSION_QUERY = `#graphql
   query OrderVersion($id: ID!) { order(id: $id) { updatedAt } }`;
 
-async function appendPages(admin, initial, query, id, pick) {
+async function appendPages(admin, initial, query, id, pick, options) {
   const nodes = [...initial.nodes];
   let page = initial.pageInfo;
   let count = 1;
@@ -88,7 +88,7 @@ async function appendPages(admin, initial, query, id, pick) {
       throw new Error("Shopify connection pagination did not advance.");
     }
     cursors.add(page.endCursor);
-    const data = await adminGraphql(admin, query, { id, after: page.endCursor });
+    const data = await adminGraphql(admin, query, { id, after: page.endCursor }, options);
     const connection = pick(data);
     if (!connection?.nodes || !connection.pageInfo) throw new Error("Shopify returned an incomplete connection page.");
     nodes.push(...connection.nodes);
@@ -108,8 +108,9 @@ export function assertCompleteOrder(order) {
   return order;
 }
 
-export async function fetchShopifyOrder(admin, id) {
-  const data = await adminGraphql(admin, ORDER_QUERY, { id });
+// Pass `shop` so the calls share that shop's API budget (see adminGraphql).
+export async function fetchShopifyOrder(admin, id, options = {}) {
+  const data = await adminGraphql(admin, ORDER_QUERY, { id }, options);
   const order = data.order;
   if (!order) throw new Error("Shopify order is unavailable to this app.");
   if ((order.transactionsCount?.count ?? order.transactions?.length ?? 0) > 250) {
@@ -118,14 +119,14 @@ export async function fetchShopifyOrder(admin, id) {
   if ((order.refunds?.length ?? 0) >= 250) {
     throw new Error("Shopify order has too many refunds for a complete financial snapshot.");
   }
-  order.lineItems = await appendPages(admin, order.lineItems, LINE_PAGE_QUERY, id, (result) => result.order?.lineItems);
+  order.lineItems = await appendPages(admin, order.lineItems, LINE_PAGE_QUERY, id, (result) => result.order?.lineItems, options);
   for (const refund of order.refunds ?? []) {
     refund.refundLineItems = await appendPages(admin, refund.refundLineItems, REFUND_LINE_PAGE_QUERY, refund.id,
-      (result) => result.refund?.refundLineItems);
+      (result) => result.refund?.refundLineItems, options);
     refund.transactions = await appendPages(admin, refund.transactions, REFUND_TRANSACTION_PAGE_QUERY, refund.id,
-      (result) => result.refund?.transactions);
+      (result) => result.refund?.transactions, options);
   }
-  const version = await adminGraphql(admin, ORDER_VERSION_QUERY, { id });
+  const version = await adminGraphql(admin, ORDER_VERSION_QUERY, { id }, options);
   if (version.order?.updatedAt !== order.updatedAt) {
     throw new Error("Shopify order changed during pagination; retry its latest state.");
   }

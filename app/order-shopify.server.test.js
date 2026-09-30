@@ -1,4 +1,5 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import process from "node:process";
 import { adminGraphql, fetchShopifyOrder } from "./order-shopify.server";
 
 describe("Admin GraphQL response handling", () => {
@@ -54,5 +55,33 @@ describe("large order pagination", () => {
     expect(result.lineItems.nodes.map(({ id }) => id)).toEqual(["line-1", "line-2"]);
     expect(result.refunds[0].refundLineItems.nodes).toHaveLength(2);
     expect(result.refunds[0].transactions.nodes).toHaveLength(2);
+  });
+});
+
+describe("per-shop API budget", () => {
+  test("tags every order query with the shop so the worker paces it", async () => {
+    const writes = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((line) => { writes.push(String(line)); return true; });
+    const order = {
+      id: "gid://shopify/Order/5", updatedAt: "2026-09-29T00:00:00Z",
+      transactions: [], transactionsCount: { count: 0 }, refunds: [],
+      lineItems: { nodes: [{ id: "line-1" }], pageInfo: { hasNextPage: false, endCursor: null } },
+    };
+    const extensions = { cost: { requestedQueryCost: 10, actualQueryCost: 5,
+      throttleStatus: { maximumAvailable: 1000, currentlyAvailable: 995, restoreRate: 50 } } };
+    const admin = { graphql: async (query) => {
+      if (!query.replace(/#[^\n]*/g, "").trim()) throw new Error("syntax error, unexpected end of file");
+      return { json: async () => ({ data: { order }, extensions }) };
+    } };
+
+    try {
+      await fetchShopifyOrder(admin, order.id, { shop: "budget.myshopify.com" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const costEvents = writes.map((line) => JSON.parse(line)).filter(({ event }) => event === "shopify_graphql_cost");
+    expect(costEvents.length).toBeGreaterThan(0);
+    expect(costEvents.every(({ shop }) => shop === "budget.myshopify.com")).toBe(true);
   });
 });
