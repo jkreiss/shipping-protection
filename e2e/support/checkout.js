@@ -241,10 +241,21 @@ export class Checkout {
   }
   async expectProtectionLine(amount = 1) {
     await this.summary();
-    await expect(this.protectionRow()).toHaveCount(1);
-    await expect(this.protectionRow()).toContainText(
-      new RegExp(`(?:^|\\D)${amount.toFixed(2).replace(".", "\\.")}(?:\\D|$)`),
-    );
+    // Shopify's mobile checkout renders the order summary twice, so check
+    // that each cart table lists the protection line exactly once.
+    const tables = this.page
+      .getByRole("table", { name: "Shopping cart" })
+      .filter({ has: this.page.getByText(/^Shipping protection$/i) });
+    await expect(tables).not.toHaveCount(0);
+    for (const table of await tables.all()) {
+      const rows = table
+        .getByRole("row")
+        .filter({ has: this.page.getByText(/^Shipping protection$/i) });
+      await expect(rows).toHaveCount(1);
+      await expect(rows).toContainText(
+        new RegExp(`(?:^|\\D)${amount.toFixed(2).replace(".", "\\.")}(?:\\D|$)`),
+      );
+    }
   }
   async expectNoProtectionLine() {
     await this.summary();

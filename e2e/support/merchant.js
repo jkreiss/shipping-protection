@@ -110,6 +110,12 @@ export async function openMerchant(browser, config) {
   }
 }
 
+/** Reads a button's accessible name, which Shopify's web components keep out of innerText. */
+async function accessibleName(/** @type {import("@playwright/test").Locator} */ button) {
+  const snapshot = await button.ariaSnapshot();
+  return snapshot.match(/button "([^"]*)"/)?.[1] ?? "";
+}
+
 export class Merchant {
   /** @param {import("@playwright/test").Page} page @param {Config} config */
   constructor(page, config) {
@@ -262,25 +268,47 @@ export class Merchant {
   }
   /** @param {Metrics} expected */
   async expectMetrics(expected) {
+    // Compare money in whole cents so floating-point sums do not fail the match.
+    const cents = (/** @type {Metrics} */ metrics) => ({
+      ...metrics,
+      revenue: Math.round(metrics.revenue * 100),
+      netRevenue: Math.round(metrics.netRevenue * 100),
+    });
     await expect
-      .poll(() => this.metrics(true), {
+      .poll(async () => cents(await this.metrics(true)), {
         timeout: INGESTION_TIMEOUT,
         intervals: [2000, 5000, 10000],
         message:
           "Overview did not reach the expected paid-order/refund totals.",
       })
-      .toEqual(expected);
+      .toEqual(cents(expected));
   }
   async findOrder(email = "") {
     if (!/^e2e-[a-z0-9-]+@example\.com$/.test(email))
       throw new Error("Order lookup must use a synthetic test email.");
-    await this.page.goto(
-      `${this.storeAdmin}/orders?query=${encodeURIComponent(`email:${email}`)}`,
-    );
+    const url = `${this.storeAdmin}/orders?query=${encodeURIComponent(`email:${email}`)}`;
     const link = this.page
       .locator('a[href*="/orders/"]')
       .filter({ hasText: /^#\d+/ });
-    await expect(link).toHaveCount(1, { timeout: 60_000 });
+    // Shopify's order search index can lag a new order, so reload until it shows.
+    await expect
+      .poll(
+        async () => {
+          await this.page.goto(url);
+          await link
+            .or(this.page.getByText("No orders found"))
+            .first()
+            .waitFor({ timeout: 15_000 })
+            .catch(() => {});
+          return link.count();
+        },
+        {
+          timeout: 180_000,
+          intervals: [5_000, 10_000],
+          message: "Shopify Admin did not list the test order.",
+        },
+      )
+      .toBe(1);
     const href = await link.getAttribute("href");
     const id = href?.match(/\/orders\/(\d+)/)?.[1];
     if (!id)
@@ -297,21 +325,33 @@ export class Merchant {
     await this.page
       .getByRole("button", { name: "Refund", exact: true })
       .click();
-    const rows = this.page.getByRole("row");
-    for (const quantity of await rows.getByRole("spinbutton").all()) {
+    // Shopify's refund page does not expose line items as rows. Take the
+    // innermost block holding both the protection link and a quantity field.
+    const quantities = this.page.getByRole("spinbutton", { name: /^Quantity/ });
+    const link = this.page.getByRole("link", {
+      name: "Shipping Protection",
+      exact: true,
+    });
+    await expect(link).toHaveCount(1);
+    await expect(quantities.first()).toBeVisible();
+    const protection = this.page
+      .locator("div")
+      .filter({ has: link })
+      .filter({ has: quantities })
+      .last()
+      .getByRole("spinbutton", { name: /^Quantity/ });
+    await expect(protection).toHaveCount(1);
+    const protectionHandle = await protection.elementHandle();
+    for (const quantity of await quantities.all()) {
       if (await quantity.isEditable()) await quantity.fill("0");
     }
-    const protection = rows.filter({ hasText: /Shipping protection/i });
-    await expect(protection).toHaveCount(1);
-    await protection.getByRole("spinbutton").fill("1");
-    for (const quantity of await rows.getByRole("spinbutton").all()) {
+    await protection.fill("1");
+    for (const quantity of await quantities.all()) {
       if (await quantity.isEditable()) {
-        const isProtection = await protection
-          .getByRole("spinbutton")
-          .evaluate(
-            (element, other) => element === other,
-            await quantity.elementHandle(),
-          );
+        const isProtection = await quantity.evaluate(
+          (element, other) => element === other,
+          protectionHandle,
+        );
         await expect(quantity).toHaveValue(isProtection ? "1" : "0");
       }
     }
@@ -333,18 +373,37 @@ export class Merchant {
     }
     const refund = this.page.getByRole("button", { name: /^Refund\s.+/ });
     await expect(refund).toHaveCount(1);
-    assertRefundTotal(
-      (await refund.getAttribute("aria-label")) ?? (await refund.innerText()),
-      amount,
-      currency,
-    );
+    const refundLabel = () => accessibleName(refund);
+    // Shopify recalculates the button total after each quantity edit.
+    let seen = "";
+    try {
+      await expect
+        .poll(
+          async () => {
+            seen = await refundLabel();
+            try {
+              assertRefundTotal(seen, amount, currency);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 15_000 },
+        )
+        .toBe(true);
+    } catch {
+      throw new Error(
+        `Refund button never showed only the protection fee; last label: ${JSON.stringify(seen)}`,
+      );
+    }
+    assertRefundTotal(await refundLabel(), amount, currency);
     await refund.click();
     const confirm = this.page
       .getByRole("dialog")
       .getByRole("button", { name: /^Refund/ });
     if (await confirm.isVisible()) {
       assertRefundTotal(
-        (await confirm.getAttribute("aria-label")) ?? (await confirm.innerText()),
+        await accessibleName(confirm),
         amount,
         currency,
       );
