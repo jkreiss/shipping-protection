@@ -48,7 +48,7 @@ the offer takes real customer money.
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress, correct schema, webhook subscriptions, or working checkout. |
 | Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables theft, loss, and damage flags. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) copy advertise loss, theft, and damage in transit. | **Launch blocker.** Align configuration and all customer copy with the benefits approved for the pilot and the product/legal boundary in [AGENTS.md](../AGENTS.md). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
-| Dependency risk | README records unresolved Prisma dependency advisories. This audit did not run a new dependency scan. | Needs current assessment for the release SHA and a recorded remediation or risk decision. |
+| Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`). The remaining production advisories are in the Prisma CLI's config loader only; README records the assessment. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
 ### Settings that need live verification
 

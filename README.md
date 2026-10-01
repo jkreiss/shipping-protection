@@ -278,10 +278,12 @@ duplicate deliveries, failed processing and recovery, uninstall and reinstall,
 and merchant-local date filters. Verify `/healthz`, worker completion, Shopify
 delivery logs, Sentry alerts, and reconciliation. Keep real customer charges
 disabled until approved protection terms and a defined claims process exist.
-`npm audit --omit=dev` currently reports four high advisories in the Prisma
-CLI/configuration dependency chain. They have no safe automatic upgrade in the
-current major version. Review and resolve this dependency risk before accepting
-real customer traffic.
+`npm audit --omit=dev` currently reports four high advisories, all from
+`deepmerge-ts` under `prisma` → `@prisma/config` (assessed 2026-10-01). That
+code runs only in the Prisma CLI while it loads this repository's own
+configuration (for example `prisma migrate deploy`); the Prisma client the app
+runs does not include it, and no request input reaches it. npm's suggested fix
+is a Prisma downgrade, so leave it until Prisma ships a patched release.
 
 Railway's [service settings](https://docs.railway.com/services),
 [public networking](https://docs.railway.com/networking/public-networking), and
