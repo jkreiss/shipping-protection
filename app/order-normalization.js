@@ -178,6 +178,8 @@ export function normalizeGraphqlOrder(order) {
       ),
       finalAmount: scaledToMoney(moneyToScaled(finalAmount)),
       protectionAttributes: allowListedAttributes(line.customAttributes),
+      // Shopify rejects Cart Transform operations on carts with a selling plan, so those carts keep the $0.00 price.
+      hasSellingPlan: Boolean(line.sellingPlan),
       // The Cart Transform prices in the customer's currency; kept only to check that price.
       presentmentUnitAmount: presentmentCurrencyCode && presentment?.currencyCode === presentmentCurrencyCode
         ? presentment.amount : null,

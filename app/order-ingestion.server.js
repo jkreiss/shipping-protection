@@ -49,7 +49,10 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
   const matched = expectedFee !== null && protectedLines.every(
     (line) => moneyToScaled(unitAmount(line)) === moneyToScaled(expectedFee),
   );
-  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
+  if (matched) return { pricingCheck: "MATCHED", expectedFee };
+  // Shopify skips the Cart Transform when any line has a selling plan, so $0.00 is expected.
+  const subscription = normalized.lines.some((line) => line.hasSellingPlan);
+  return { pricingCheck: subscription ? "SUBSCRIPTION" : "UNMATCHED", expectedFee };
 }
 
 export async function persistNormalizedOrder(

@@ -98,6 +98,7 @@ describe("order normalization", () => {
               product: { id: "gid://shopify/Product/21" },
               variant: { id: "gid://shopify/ProductVariant/31" },
               customAttributes: [{ key: "ignored", value: "value" }],
+              sellingPlan: { sellingPlanId: "gid://shopify/SellingPlan/1" },
             },
           ],
         },
@@ -108,6 +109,7 @@ describe("order normalization", () => {
       preDiscountAmount: "100.0000",
       finalAmount: "100.0000",
       protectionAttributes: {},
+      hasSellingPlan: true,
     });
     expect(JSON.stringify(normalized)).not.toContain("sensitive-checkout-token");
   });

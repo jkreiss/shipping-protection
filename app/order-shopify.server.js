@@ -19,6 +19,7 @@ export const ORDER_FIELDS = `
       originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
       discountedTotalSet { shopMoney { amount currencyCode } }
       product { id } variant { id } customAttributes { key value }
+      sellingPlan { sellingPlanId }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -53,7 +54,8 @@ export { adminGraphql };
 const LINE_FIELDS = `id quantity requiresShipping
   originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
   discountedTotalSet { shopMoney { amount currencyCode } }
-  product { id } variant { id } customAttributes { key value }`;
+  product { id } variant { id } customAttributes { key value }
+  sellingPlan { sellingPlanId }`;
 const REFUND_LINE_FIELDS = `lineItem { id } subtotalSet { shopMoney { amount currencyCode } }`;
 const TRANSACTION_FIELDS = `id kind status processedAt createdAt amountSet { shopMoney { amount currencyCode } }`;
 

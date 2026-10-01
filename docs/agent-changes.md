@@ -111,10 +111,13 @@ From `docs/production-readiness.md`, for staging and then production:
 - **Today** such an order is recorded as protected with fee $0, `pricingCheck: UNMATCHED`, and fires `protection_price_unmatched`. Revenue is correct, but the attach rate counts it as protected. Case (b) can also make the transform-failure alert fire falsely, and once claims exist the order would look covered.
 - **Can't prevent at checkout:** Functions can't remove lines, and a validation function would block checkout, which AGENTS.md forbids.
 
-**Decisions put to the user (unanswered):**
-1. Should a $0 order count as protected? The suggestion was to record it but mark it unpaid, leave it out of the attach rate and protected counts, and send a $0 claim to merchant review rather than auto-cover it. Entitlement wording is a product/legal question.
-2. Should the two cases be told apart? This means fetching whether order lines have a selling plan, which isn't fetched today. The subscription workaround would get its own low-priority signal, so `protection_price_unmatched` stays a trustworthy transform-failure alert.
-3. Should a good-faith transform failure (a) be honoured as covered? That's a merchant or business choice.
+**Decided 2026-10-01:**
+1. A $0 order still counts as protected. A good-faith transform failure (a) is honoured as covered.
+2. Subscription orders (b) are told apart and are not failures: `$0.00` is the intended outcome, with no alert.
+
+**Implemented (commit 11):** `sellingPlan { sellingPlanId }` is fetched on order lines (`ORDER_FIELDS`, `LINE_FIELDS`) and normalized to `hasSellingPlan`. `livePriceCheck` returns the new `ProtectionPricingCheck.SUBSCRIPTION` (migration `20261003000000_pricing_check_subscription`, additive) when the fee doesn't match and any line has a selling plan, mirroring the Function, which skips every cart with a selling plan. `protection_price_unmatched` and the Overview's unmatched count only see `UNMATCHED`, so they stay a transform-failure signal. Tests in `order-ingestion.server.test.js` and `order-normalization.test.js`.
+
+**Still open:** claim handling for $0 orders is deferred until claims work begins (record: entitlement wording is a product/legal question).
 
 ## Other open items
 
