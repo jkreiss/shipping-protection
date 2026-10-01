@@ -44,6 +44,18 @@ function sameContract(left, right, enabled) {
   );
 }
 
+// Orders are recognised as protected by the active rule's variant, so the rule
+// must describe the product checkout actually sells. A legacy setup without a
+// rule, or a rule left on a replaced product, needs Repair to publish a new one.
+function pricingRuleCheck(seed, activeRule) {
+  return {
+    id: "pricing-rule",
+    label: "Pricing is linked to the current protection product",
+    ok: !seed || Boolean(activeRule &&
+      activeRule.productId === seed.productId && activeRule.variantId === seed.variantId),
+  };
+}
+
 export async function readShippingProtectionState(admin, shopDomain) {
   const core = await loadCore(admin);
   const domain = shopDomain ?? core.shop.myshopifyDomain;
@@ -57,12 +69,10 @@ export async function readShippingProtectionState(admin, shopDomain) {
   }
   const seed = core.shopConfig ?? core.transformConfig;
   const product = await findProduct(admin, seed?.productId);
-  const checks = buildChecks(core, product);
   const activeRule = await getActivePricingRule(domain);
+  const checks = [...buildChecks(core, product), pricingRuleCheck(seed, activeRule)];
   const healthReady = checks.every(({ ok }) => ok);
-  const settings = await getShopConfiguration(domain, {
-    legacyReady: !activeRule && Boolean(seed?.enabled) && healthReady,
-  });
+  const settings = await getShopConfiguration(domain);
   const capabilities = observedShopifyCapabilities(core.shop);
   const configuration = resolveConfiguration(
     settings,
@@ -209,7 +219,10 @@ export async function setupShippingProtection(admin, shopDomain) {
     }
 
     const activeRule = await getActivePricingRule(domain);
-    if (activeRule) {
+    // A rule is tied to one variant; if repair replaced the product or
+    // variant, publish a new version at the same rate instead.
+    if (activeRule && activeRule.productId === repaired.product.id &&
+      activeRule.variantId === repaired.variantId) {
       const enabledContract = pricingContractForRule(
         activeRule,
         repaired.product.id,
@@ -223,7 +236,7 @@ export async function setupShippingProtection(admin, shopDomain) {
         shopDomain: domain,
         productId: repaired.product.id,
         variantId: repaired.variantId,
-        rateBasisPoints: DEFAULT_RATE_BASIS_POINTS,
+        rateBasisPoints: activeRule?.rateBasisPoints ?? DEFAULT_RATE_BASIS_POINTS,
         publishSnapshot,
       });
     }

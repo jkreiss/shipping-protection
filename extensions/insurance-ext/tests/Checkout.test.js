@@ -95,7 +95,8 @@ function appMetafield(config = configuration()) {
  *   amount?: number,
  *   requiresShipping?: boolean,
  *   sellingPlan?: boolean,
- *   discounts?: number[]
+ *   discounts?: number[],
+ *   attributes?: {key: string, value: string}[]
  * }} [options]
  */
 function merchandiseLine({
@@ -104,10 +105,12 @@ function merchandiseLine({
   requiresShipping = true,
   sellingPlan = false,
   discounts = [],
+  attributes = [],
 } = {}) {
   const defaults = createCartLine();
   return createCartLine({
     id: `gid://shopify/CartLine/${id}`,
+    attributes,
     merchandise: {
       ...defaults.merchandise,
       id: `gid://shopify/ProductVariant/${id}`,
@@ -419,6 +422,22 @@ describe("shipping protection checkout UI", () => {
         quantity: 1,
       });
     });
+  });
+
+  test("leaves merchandise that carries protection properties in the cart", async () => {
+    const tagged = merchandiseLine({
+      attributes: protectionAttributes(configuration()),
+    });
+    setCheckout({ lines: [tagged] });
+    const applyCartLinesChange = vi
+      .fn()
+      .mockResolvedValue(createResult("applyCartLinesChange"));
+    extension.shopify.applyCartLinesChange = applyCartLinesChange;
+    await renderExtension();
+
+    expect(Boolean(requireCheckbox().checked)).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(applyCartLinesChange).not.toHaveBeenCalled();
   });
 
   test("reconciles a non-unit protection line", async () => {

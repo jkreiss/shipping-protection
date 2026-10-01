@@ -701,6 +701,7 @@ Common logic should be shared only where Shopify execution constraints allow it.
 - Setup creates an unlisted Shipping Protection product with one $0.00 variant.
 - The checkout block (`insurance-ext`) lets the customer add that variant.
 - The Cart Transform Function (`shipping-protection-transform`) prices it from the `function-configuration` metafield: rate in basis points, applied to shippable merchandise before discounts.
+- A cart or order line is protection only when its variant is the protection variant (on one of the shop's `PricingRule` rows, for ingestion). The `_yasas_protection_*` line properties are customer-editable: use them to attribute a protection line to its rule, never to decide that a line is protection. Setup publishes a new rule version whenever repair replaces the product or variant.
 - The checkout block needs Shopify Plus; Cart Transform price updates need the shop's `updateOperation` eligibility (Plus or development stores).
 - The merchant must still place the block in the checkout editor. The app cannot verify placement, so "Active" in the Admin means setup checks pass, not that customers see the block.
 

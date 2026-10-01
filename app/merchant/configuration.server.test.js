@@ -9,15 +9,6 @@ function database(shop) {
 }
 
 describe("shop configuration persistence", () => {
-  test("derives a healthy legacy metafield before creating its configuration", async () => {
-    const db = database({ id: "one", configuration: null, activePricingRule: null });
-    const config = await getShopConfiguration("one.myshopify.com", { legacyReady: true, database: db });
-    expect(config).toMatchObject({
-      shopId: "one", protectionEnabled: true,
-      attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
-    });
-  });
-
   test("starts a new merchant disabled", async () => {
     const db = database({ id: "new", configuration: null, activePricingRule: null });
     const config = await getShopConfiguration("new.myshopify.com", { database: db });
@@ -42,7 +33,7 @@ describe("shop configuration persistence", () => {
     const existing = { shopId: "one", protectionEnabled: false, attachmentStrategy: "NONE" };
     const db = database({ id: "one", configuration: existing,
       activePricingRule: { shopId: "one", state: "ACTIVE" } });
-    expect(await getShopConfiguration("one.myshopify.com", { legacyReady: true, database: db }))
+    expect(await getShopConfiguration("one.myshopify.com", { database: db }))
       .toBe(existing);
     expect(db.shopConfiguration.upsert).not.toHaveBeenCalled();
   });

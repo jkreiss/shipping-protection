@@ -66,8 +66,10 @@ flags off. Successful setup enables the shop metafield and Cart Transform
 pricing used by the checkout block, with the existing loss, theft, and damage
 offer. Historical rates stay on pricing rules and protection purchases.
 Existing shops with an active pricing rule are backfilled during migration.
-A healthy legacy Shopify metafield without a database rule is adopted during
-the next setup read.
+Orders are recognised as protected only by the variant on one of the shop's
+pricing rules, so a legacy Shopify metafield without a database rule, or a rule
+left on a replaced product, fails the "Pricing is linked to the current
+protection product" check until **Repair setup** publishes a rule for it.
 
 The app checks the shop's Shopify Plus plan and Cart Transform `updateOperation`
 eligibility before setup. The only implemented strategy is

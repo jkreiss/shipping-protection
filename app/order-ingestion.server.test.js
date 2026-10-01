@@ -163,6 +163,27 @@ describe("normalized order persistence", () => {
     );
   });
 
+  test("never treats merchandise as protection because of its line properties", async () => {
+    // Customers can set line properties themselves (theme forms, /cart/add.js).
+    const tx = transaction();
+    const order = normalizedOrder();
+    order.lines[0].protectionAttributes = {
+      _yasas_protection_rule_id: "rule-1",
+      _yasas_protection_rule_version: "1",
+      _yasas_protection_rate_bps: "25",
+      _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+      _yasas_protection_contract_version: "2",
+    };
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.createMany.mock.calls[0][0].data[0]).toMatchObject({ isProtection: false });
+    expect(tx.storedOrder()).toMatchObject({
+      paidEligible: true, paidProtected: false, paidProtectionFee: "0.0000",
+      paidMerchandiseAmount: "100.0000",
+    });
+  });
+
   test("does not attribute an unknown pricing contract version", async () => {
     const tx = transaction();
     await persistNormalizedOrder(tx, shop, normalizedOrder({
