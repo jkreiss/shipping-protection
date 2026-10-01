@@ -87,7 +87,7 @@ describe("shipping protection shop isolation", () => {
     core.shop.features.cartTransform.eligibleOperations.updateOperation = false;
     mocks.loadCore.mockResolvedValue(core);
     await expect(setupShippingProtection({}, "one.myshopify.com"))
-      .rejects.toThrow("cannot use the checkout block");
+      .rejects.toThrow("doesn't support the checkout protection offer");
     expect(mocks.ensureInstalledShop).not.toHaveBeenCalled();
   });
 });

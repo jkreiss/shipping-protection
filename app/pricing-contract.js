@@ -1,3 +1,5 @@
+import { UserFacingError } from "./user-facing-error.js";
+
 export const PRICING_SCHEMA_VERSION = 2;
 export const LEGACY_SCHEMA_VERSION = 1;
 export const DEFAULT_RATE_BASIS_POINTS = 25;
@@ -124,7 +126,7 @@ export function percentToBasisPoints(value) {
     basisPoints < MIN_RATE_BASIS_POINTS ||
     basisPoints > MAX_RATE_BASIS_POINTS
   ) {
-    throw new RangeError(
+    throw new UserFacingError(
       "Enter a rate from 0.01 to 100, with at most two decimal places. For example, 1 means 1%.",
     );
   }
