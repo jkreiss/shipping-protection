@@ -123,8 +123,8 @@ Admin API call's query cost.
 The Overview shows the last 30 merchant-local calendar days from stored data;
 **Refresh** re-reads it and never calls Shopify for orders. Until the initial
 backfill completes it says order history is still syncing, and it warns that
-order sync is behind when the last completed sync is over an hour old or an
-order update failed after it. Protected and eligible orders are dated by
+order sync is behind when the last completed sync is over an hour old. Single
+orders that fail to store alert the operator through Sentry instead. Protected and eligible orders are dated by
 the first completed payment. Protection refunds are recorded once per Shopify
 refund ID and dated by successful refund transactions.
 

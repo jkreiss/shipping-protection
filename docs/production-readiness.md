@@ -517,14 +517,27 @@ is set; informational performance/cost events are JSON logs.
 | --- | --- | --- |
 | Checkout blocked or incorrect fee | Any confirmed app-related occurrence | Immediate response; contain the offer and inspect the Function/version/configuration. This needs merchant reports and checkout smoke checks as well as backend alerts. |
 | `protection_price_unmatched` | Investigate the first new occurrence; urgent at 3 distinct affected orders in an hour | Sentry alert. Repeated events can result from retries, so group by shop/order and verify Shopify amounts. |
-| `webhook_terminal` | Any new terminal failure | Sentry alert; identify affected order and recover/verify it. |
+| `webhook_terminal` | Any new terminal failure | Sentry alert; identify affected order and recover/verify it. The merchant is not warned about single-order failures, so this alert is the only signal. |
+| `reconciliation_order_failed`, `refund_recheck_failed` | Same order failing on repeated turns | Sentry alert. Reconciliation queued the order as a `RECONCILE` delivery and moved on; its final failure also raises `webhook_terminal`. |
 | `worker_loop_failed`, `reconciliation_failed`, `shopify_graphql_failed` | Repeated failures over 10 minutes, or immediately if ingestion stops | Sentry/log alerts; inspect access, API costs, and database resources. |
 | Oldest pending/processing delivery | Over 5 minutes normally; over 30 minutes after a peak burst ends | Read-only database polling/manual pilot review. No automatic backlog-age monitor exists in the repo. |
-| Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns after 1 hour or a newer terminal failure. |
+| Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns the merchant only when the last completed sync is over 1 hour old. |
 | Worker liveness | No processing while due work exists | Railway process status plus queue/cursor progress. There is no independent worker heartbeat endpoint. |
 | Overview latency | p95 `overview_loaded.durationMs` over 2 seconds at representative volume | Log aggregation or a recorded staging measurement; inspect row counts/database load. |
 | API capacity | Sustained low `currentlyAvailable` with increasing queue age | `shopify_graphql_cost` logs, including requested/actual cost and restore rate; reduce pressure or revise queries. |
 | Refund / attribution quality | New unresolved refund or paid purchase attribution issue | Dashboard notices and tenant-scoped records; verify against Shopify before using totals. |
+
+**To do: Sentry alert rules (noted 2026-10-01, for the final monitoring pass).**
+Every report of one event name (for example `webhook_terminal`) shares a message,
+so Sentry groups them into a single issue. Its default rule notifies only when an
+issue is first created, so after the first failed order later ones would go
+unnoticed.
+
+- [ ] For each Sentry-alerted signal in the table above, create an alert rule on
+  event frequency (for example "more than 0 events in 1 hour", filtered by the
+  event's message), not only "a new issue is created".
+- [ ] Rehearse in staging: force one terminal delivery failure twice, on two
+  different orders, and confirm both notify the operator.
 
 For manual diagnostics, use the production Supabase SQL editor or an approved
 read-only connection. Replace the shop domain with the **verified incident
