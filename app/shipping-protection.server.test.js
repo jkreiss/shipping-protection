@@ -36,7 +36,10 @@ vi.mock("./shopify/protection-admin.server", () => ({
     functionConfigKey: "function-configuration",
   },
 }));
-vi.mock("./shop.server", () => ({ ensureInstalledShop: mocks.ensureInstalledShop }));
+vi.mock("./shop.server", () => ({
+  ensureInstalledShop: mocks.ensureInstalledShop,
+  withShopSettingsLock: (_shopDomain, run) => run(),
+}));
 vi.mock("./pricing-rule.server", () => ({
   getActivePricingRule: mocks.getActivePricingRule,
   createAndPublishPricingRule: mocks.createAndPublishPricingRule,

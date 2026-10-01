@@ -9,7 +9,7 @@ import {
   getActivePricingRule,
   reconcilePublishedPricingRule,
 } from "./pricing-rule.server";
-import { ensureInstalledShop } from "./shop.server";
+import { ensureInstalledShop, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
 import { enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
@@ -115,7 +115,17 @@ export async function readShippingProtectionState(admin, shopDomain) {
   };
 }
 
-export async function activatePricingRule(
+// Setup and rate changes each publish pricing to Shopify and then record it,
+// so they run one at a time per shop.
+export function activatePricingRule(admin, shopDomain, rateBasisPoints) {
+  return withShopSettingsLock(shopDomain, () => publishRate(admin, shopDomain, rateBasisPoints));
+}
+
+export function setupShippingProtection(admin, shopDomain) {
+  return withShopSettingsLock(shopDomain, () => runSetup(admin, shopDomain));
+}
+
+async function publishRate(
   admin,
   shopDomain,
   rateBasisPoints,
@@ -158,7 +168,7 @@ export async function activatePricingRule(
   };
 }
 
-export async function setupShippingProtection(admin, shopDomain) {
+async function runSetup(admin, shopDomain) {
   const core = await loadCore(admin);
   const domain = shopDomain ?? core.shop.myshopifyDomain;
   if (domain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");

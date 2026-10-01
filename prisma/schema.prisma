@@ -96,6 +96,9 @@ model Shop {
   orderHistoryStartAt       DateTime?
   orderReconciliationCursor String?
   orderReconciliationUntil  DateTime?
+  // Lease held while setup or a rate change talks to Shopify, so two changes
+  // for one shop can't interleave their writes.
+  settingsLockedUntil       DateTime?
   createdAt                 DateTime              @default(now())
   updatedAt                 DateTime              @updatedAt
 

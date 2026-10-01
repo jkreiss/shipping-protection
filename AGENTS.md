@@ -754,6 +754,7 @@ Current conventions:
 - Rates are stored as integer basis points (`PricingRule.rateBasisPoints`, the Function configuration, and `ProtectionPurchase`), so fees stay integer-exact.
 - Merchants enter and see rates as plain percentages ("1" means 1%, at most two decimal places). Convert only at the Admin UI boundary with `percentToBasisPoints` / `basisPointsToPercent` in `app/pricing-contract.js`; never show basis points to merchants.
 - Changing the rate publishes a new `PricingRule` version. It applies to new checkouts only; past orders keep the rule they were charged under.
+- Setup and rate changes run one at a time per shop (`withShopSettingsLock`, a lease on `Shop.settingsLockedUntil`), because each publishes pricing to Shopify and then records it locally.
 
 ---
 

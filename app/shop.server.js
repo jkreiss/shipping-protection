@@ -1,4 +1,5 @@
 import prisma from "./db.server.js";
+import { UserFacingError } from "./user-facing-error.js";
 
 export async function ensureInstalledShop(shopDomain, shopGid = undefined) {
   return prisma.shop.upsert({
@@ -62,4 +63,32 @@ export async function recordGrantedScopes({ shopDomain, sessionId, scopes, datab
     data: { scope: scopes.join(",") },
   });
   return true;
+}
+
+const SETTINGS_LOCK_MS = 5 * 60_000;
+
+// Runs one protection setup or rate change at a time per shop. Both publish
+// pricing to Shopify and then record it locally; interleaved, the rate Shopify
+// charges and the rate Settings shows can disagree. The lease expires on its
+// own if the process dies mid-change.
+export async function withShopSettingsLock(shopDomain, run, { database = prisma } = {}) {
+  // An undefined domain would drop the filter and lock every shop.
+  if (typeof shopDomain !== "string" || !shopDomain) throw new Error("A shop domain is required.");
+  const now = new Date();
+  const until = new Date(now.getTime() + SETTINGS_LOCK_MS);
+  const { count } = await database.shop.updateMany({
+    where: { shopDomain, OR: [{ settingsLockedUntil: null }, { settingsLockedUntil: { lte: now } }] },
+    data: { settingsLockedUntil: until },
+  });
+  if (count === 0) {
+    throw new UserFacingError("Another settings change is still saving. Try again in a moment.");
+  }
+  try {
+    return await run();
+  } finally {
+    await database.shop.updateMany({
+      where: { shopDomain, settingsLockedUntil: until },
+      data: { settingsLockedUntil: null },
+    });
+  }
 }
