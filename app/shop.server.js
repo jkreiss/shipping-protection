@@ -51,3 +51,15 @@ export async function redactShopData(transaction, shopDomain) {
   await transaction.session.deleteMany({ where: { shop: shopDomain } });
   await transaction.shop.deleteMany({ where: { shopDomain } });
 }
+
+// Records the scopes Shopify reports for an installation (app/scopes_update).
+// A payload without a list of scope names is ignored rather than retried, since
+// a retry would carry the same payload.
+export async function recordGrantedScopes({ shopDomain, sessionId, scopes, database = prisma }) {
+  if (!Array.isArray(scopes) || !scopes.every((scope) => typeof scope === "string")) return false;
+  await database.session.updateMany({
+    where: { id: sessionId, shop: shopDomain },
+    data: { scope: scopes.join(",") },
+  });
+  return true;
+}

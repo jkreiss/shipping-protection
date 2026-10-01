@@ -1,21 +1,18 @@
 import { authenticate } from "../shopify.server";
-import db from "../db.server";
+import { recordGrantedScopes } from "../shop.server";
+import { logEvent, reportFailure } from "../observability.server";
 
 export const action = async ({ request }) => {
   const { payload, session, topic, shop } = await authenticate.webhook(request);
 
-  console.log(`Received ${topic} webhook for ${shop}`);
-  const current = payload.current;
-
+  logEvent("webhook_received", { shop, topic });
   if (session) {
-    await db.session.update({
-      where: {
-        id: session.id,
-      },
-      data: {
-        scope: current.toString(),
-      },
+    const recorded = await recordGrantedScopes({
+      shopDomain: shop, sessionId: session.id, scopes: payload?.current,
     });
+    if (!recorded) {
+      reportFailure("scopes_update_invalid", new Error("Scopes payload has no scope list."), { shop });
+    }
   }
 
   return new Response();
