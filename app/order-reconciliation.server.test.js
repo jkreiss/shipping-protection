@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
-  MAX_CONSECUTIVE_ORDER_FAILURES, RECONCILIATION_OVERLAP_MS, reconcileOrders, reconciliationDue,
+  MAX_CONSECUTIVE_ORDER_FAILURES, RECONCILIATION_INTERVAL_MS, RECONCILIATION_OVERLAP_MS,
+  reconcileOrders, reconciliationDue,
 } from "./order-reconciliation.server";
 
 const shopDomain = "one.myshopify.com";
@@ -174,6 +175,56 @@ describe("order reconciliation", () => {
 
     const second = await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, hashSecret: "a-dedicated-test-secret" });
     expect(second).toMatchObject({ pages: 1, complete: true });
+  });
+});
+
+describe("pending refund recheck", () => {
+  test("polls only pending refunds, least recently checked first", async () => {
+    const { admin } = fakeAdmin([[]]);
+    const { database } = fakeDatabase();
+    database.protectionRefund.findMany = vi.fn(async () => []);
+    const before = Date.now();
+
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, hashSecret: "a-dedicated-test-secret" });
+
+    const [args] = database.protectionRefund.findMany.mock.calls[0];
+    expect(args).toMatchObject({
+      where: { shopId: "shop-1", status: "PENDING" },
+      orderBy: { updatedAt: "asc" },
+      distinct: ["orderId"],
+      take: 20,
+    });
+    expect(args.where.updatedAt.lt.getTime()).toBeLessThanOrEqual(before - RECONCILIATION_INTERVAL_MS + 1000);
+  });
+
+  test("a recheck that fails moves to the back and doesn't stop the others", async () => {
+    const pending = [
+      { orderId: "order-7", order: { shopifyOrderId: id(7) } },
+      { orderId: "order-8", order: { shopifyOrderId: id(8) } },
+    ];
+    const { admin, fetched } = fakeAdmin([[
+      { id: id(7), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(8), updatedAt: "2026-09-29T00:00:00Z" },
+    ]]);
+    const { database } = fakeDatabase({ localOrders: [
+      { shopifyOrderId: id(7), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+      { shopifyOrderId: id(8), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+    ] });
+    database.protectionRefund.findMany = vi.fn(async () => pending);
+    database.protectionRefund.updateMany = vi.fn(async () => ({ count: 1 }));
+    const persist = vi.fn(async (_transaction, _shop, normalized) => {
+      if (normalized.shopifyOrderId === id(7)) throw new Error("bad order data");
+    });
+
+    const result = await reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" });
+
+    expect(fetched).toEqual([id(7), id(8)]);
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(database.protectionRefund.updateMany).toHaveBeenCalledWith({
+      where: { shopId: "shop-1", orderId: "order-7", status: "PENDING" },
+      data: { updatedAt: expect.any(Date) },
+    });
+    expect(result.complete).toBe(true);
   });
 });
 

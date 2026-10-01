@@ -16,6 +16,7 @@ const DEFAULT_TIME_BUDGET_MS = 60_000;
 // This many failed orders in a row means Shopify or the database is down, not
 // that the orders are bad: stop and retry the page rather than queue them all.
 export const MAX_CONSECUTIVE_ORDER_FAILURES = 3;
+const PENDING_REFUND_RECHECKS = 20;
 
 function searchWindow(since, until) {
   return `updated_at:>='${since.toISOString()}' updated_at:<='${until.toISOString()}'`;
@@ -120,15 +121,32 @@ export async function reconcileOrders({
     pages += 1;
   }
 
+  // Recheck refunds still waiting on a transaction, least recently checked
+  // first; storing the order again bumps updatedAt, so the next turn moves on.
+  // UNATTRIBUTED refunds only change when the order does, which a webhook
+  // reports, so they are not polled.
   const pending = await database.protectionRefund.findMany({
-    where: { shopId: shop.id, status: { in: ["PENDING", "UNATTRIBUTED"] } },
-    select: { order: { select: { shopifyOrderId: true } } },
+    where: {
+      shopId: shop.id, status: "PENDING",
+      updatedAt: { lt: new Date(Date.now() - RECONCILIATION_INTERVAL_MS) },
+    },
+    orderBy: { updatedAt: "asc" },
+    select: { orderId: true, order: { select: { shopifyOrderId: true } } },
     distinct: ["orderId"],
-    take: 20,
+    take: PENDING_REFUND_RECHECKS,
   });
   for (const entry of pending) {
-    const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, options);
-    await storeOrder(database, persist, shop, order, hashSecret);
+    try {
+      const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, options);
+      await storeOrder(database, persist, shop, order, hashSecret);
+    } catch (error) {
+      reportFailure("refund_recheck_failed", error, { shopId: shop.id, shopifyOrderId: entry.order.shopifyOrderId });
+      // Move it to the back of the queue so one bad order can't hold the front.
+      await database.protectionRefund.updateMany({
+        where: { shopId: shop.id, orderId: entry.orderId, status: "PENDING" },
+        data: { updatedAt: new Date() },
+      });
+    }
   }
 
   return {
