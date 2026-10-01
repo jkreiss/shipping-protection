@@ -174,9 +174,13 @@ and [Supabase Prisma guide](https://supabase.com/docs/guides/database/prisma).
 
 ### Deploy the backend on Railway
 
-Railway needs two services from the repository root in each hosted environment:
+Staging and production need two Railway services from the repository root:
 the public web service and a private worker service. The checkout UI and Cart
 Transform are Shopify extensions, deployed through Shopify CLI separately.
+
+The isolated **load** environment needs an additional `shopify-mock` Railway
+service. Follow the [load-testing setup](scripts/load/README.md) for its three
+services, deployment branch, commands, and complete per-service variable blocks.
 
 1. Push the app to a GitHub repository. Confirm `.env` is untracked and contains
    no committed secrets. The root `Dockerfile` installs build dependencies,
