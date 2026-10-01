@@ -151,6 +151,11 @@ npm run verify:postgres
 app and both extensions. GitHub Actions runs these checks and the PostgreSQL
 verification against an isolated test database.
 
+The [staging browser test guide](e2e/README.md) explains the Playwright suite,
+test-store fixtures, read-only database login, and first sign-in. Run
+`npm run test:e2e:headed` locally after setup. CI lists the browser tests and
+type-checks them; live Shopify journeys currently run locally.
+
 ### Coordinated durable-protection migration
 
 This release changes database constraints and the application code together.

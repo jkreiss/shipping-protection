@@ -10,6 +10,7 @@ export default defineConfig({
     include: [
       "app/**/*.test.{js,jsx,ts,tsx}",
       "extensions/**/*.test.{js,jsx,ts,tsx}",
+      "e2e/**/*.test.js",
     ],
   },
 });

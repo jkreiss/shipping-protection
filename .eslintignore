@@ -15,4 +15,6 @@ extensions/**/shopify.d.ts
 supabase/.branches/
 supabase/.temp/
 coverage/
+e2e/.auth/
+.playwright/
 */*.yml

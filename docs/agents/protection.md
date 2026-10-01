@@ -1,0 +1,129 @@
+# Protection extensions, pricing, and purchases
+
+Read when changing the checkout offer, Cart Transform, protection setup, pricing, or purchase records.
+
+[Back to root instructions](../../AGENTS.md). Related: [Capability resolution](merchant-configuration.md); [order ingestion and idempotency](orders-webhooks.md); [legal benefit boundaries](legal-product.md).
+
+## Keep Shopify extensions thin
+
+Customer-facing and Admin UI extensions should mainly handle:
+
+- rendering
+- collecting user input
+- displaying already-resolved configuration
+- calling authenticated backend routes where supported
+- executing Shopify Function logic where execution must occur on Shopify infrastructure
+- emitting non-authoritative analytics events
+
+Do not place the following in browser/extension code:
+
+- secrets
+- Admin API access tokens
+- privileged Shopify mutations
+- claim decision logic
+- sensitive merchant rules
+- cross-tenant logic
+- direct database access
+
+Shopify Functions are a special case: logic that must execute inside Shopify Functions should remain there.
+
+Do not incorrectly move Function-runtime logic into the web backend.
+
+## Shopify Protection Strategies
+
+The application must support more than one way of attaching or presenting protection.
+
+Current extension directories include:
+
+```text
+extensions/
+├── insurance-ext
+└── shipping-protection-transform
+```
+
+Keep these as separate Shopify extensions when they represent genuinely different Shopify extension/function environments.
+
+Do not create an artificial generalized extension framework.
+
+Common logic should be shared only where Shopify execution constraints allow it.
+
+### Implemented: Checkout UI + Cart Transform (`CHECKOUT_UI_CART_TRANSFORM`)
+
+- Setup creates an unlisted Shipping Protection product with one $0.00 variant.
+- The checkout block (`insurance-ext`) lets the customer add that variant.
+- The Cart Transform Function (`shipping-protection-transform`) prices it from the `function-configuration` metafield: rate in basis points, applied to shippable merchandise before discounts.
+- The checkout block needs Shopify Plus; Cart Transform price updates need the shop's `updateOperation` eligibility (Plus or development stores).
+- The merchant must still place the block in the checkout editor. The app cannot verify placement, so "Active" in the Admin means setup checks pass, not that customers see the block.
+
+Remember:
+
+- Function execution occurs on Shopify infrastructure
+- do not assume arbitrary runtime access to the backend
+- provide Function-required configuration using Shopify-supported inputs/metafields
+- the Function runs on every cart, including carts without protection; the Cart Transform goes live when setup runs, not when the block is placed
+
+`blockOnFailure` is `false` (decided 2026-09-30): a Function error never blocks checkout. The protection line then keeps the variant's own price, $0.00 by design: a failure gives protection away free rather than charging the customer a price they weren't shown. The safeguard is the alert below, since a Function failure is usually repeated (a bad deploy or config affects every cart) rather than one-off; if it fires, fix or roll back the Shopify app version. The Function still sets price 0 explicitly whenever a protection line shouldn't be charged (protection disabled, no shippable merchandise, mixed currencies), and leaves the line unchanged only when its configuration is unreadable. Ingestion records `ProtectionPurchase.pricingCheck` (`MATCHED` when the fee equals the attributed rule's rate in the customer's currency) and emits `protection_price_unmatched` for paid orders that weren't charged the live price; the Overview shows the count. Setup replaces an existing blocking transform, because Shopify cannot update the flag in place.
+
+### Theme/storefront strategy
+
+Provide a non-Cart-Transform path when needed.
+
+Possible mechanisms depend on the final product implementation.
+
+Keep this adapter separate from core protection business logic.
+
+## Protection Pricing
+
+Protection pricing may be:
+
+- percentage of order/cart value
+- fixed fee
+- merchant-configured rate
+- tiered by order value
+
+Pricing must be deterministic and auditable.
+
+Store enough information with each completed protection purchase to reconstruct how the price was calculated.
+
+Recommended historical information includes:
+
+- pricing rule ID
+- pricing version
+- protection rate
+- calculated protection amount
+- order/cart basis
+- currency
+- experiment identifier where applicable
+
+Never rely solely on current merchant settings to explain a historical charge.
+
+Current conventions:
+
+- Rates are stored as integer basis points (`PricingRule.rateBasisPoints`, the Function configuration, and `ProtectionPurchase`), so fees stay integer-exact.
+- Merchants enter and see rates as plain percentages ("1" means 1%, at most two decimal places). Convert only at the Admin UI boundary with `percentToBasisPoints` / `basisPointsToPercent` in `app/pricing-contract.js`; never show basis points to merchants.
+- Changing the rate publishes a new `PricingRule` version. It applies to new checkouts only; past orders keep the rule they were charged under.
+
+## Protection Purchase Model
+
+A `ProtectionPurchase` or equivalent should represent protection successfully purchased for an order.
+
+Potential fields include:
+
+- id
+- tenant/shop ID
+- local order reference
+- Shopify order ID
+- protected amount
+- protection fee
+- currency
+- pricing rule/version
+- protection type(s)
+- purchase timestamp
+- status
+- refunded amount
+- strategy/source
+- metadata where justified
+
+Use database constraints to prevent accidental duplicates.
+
+Do not infer completed protection purchases solely from frontend analytics.

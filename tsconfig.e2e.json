@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["e2e/**/*.js", "playwright.config.js"],
+  "exclude": ["e2e/.auth", "e2e/**/*.test.js"]
+}

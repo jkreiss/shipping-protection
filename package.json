@@ -17,12 +17,20 @@
     "verify:postgres": "node scripts/verify-postgres.js",
     "verify:webhook-postgres": "node scripts/verify-webhook-postgres.js",
     "test": "vitest run",
+    "test:e2e": "node --env-file-if-exists=.env.e2e node_modules/@playwright/test/cli.js test",
+    "test:e2e:headed": "npm run test:e2e -- --headed",
+    "test:e2e:list": "playwright test --list",
+    "test:e2e:auth": "node --env-file-if-exists=.env.e2e e2e/auth.js",
+    "test:e2e:fixtures": "node --env-file-if-exists=.env.e2e e2e/setup-fixtures.js",
+    "test:e2e:restore": "node --env-file-if-exists=.env.e2e e2e/restore.js",
+    "test:e2e:report": "playwright show-report .playwright/report",
+    "typecheck:e2e": "tsc --noEmit --project tsconfig.e2e.json",
     "lint": "eslint --ignore-path .eslintignore --cache --cache-location ./node_modules/.cache/eslint .",
     "shopify": "shopify",
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && CI=true shopify app function typegen --path extensions/shipping-protection-transform --no-color && tsc --noEmit && tsc --noEmit --project extensions/insurance-ext/tsconfig.json && tsc --noEmit --project extensions/shipping-protection-transform/tsconfig.json"
+    "typecheck": "react-router typegen && CI=true shopify app function typegen --path extensions/shipping-protection-transform --no-color && tsc --noEmit && tsc --noEmit --project extensions/insurance-ext/tsconfig.json && tsc --noEmit --project extensions/shipping-protection-transform/tsconfig.json && npm run typecheck:e2e"
   },
   "type": "module",
   "engines": {
@@ -46,6 +54,7 @@
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@shopify/api-codegen-preset": "^1.2.0",
     "@shopify/cli": "3.90.0",
     "@shopify/polaris-types": "^1.0.1",

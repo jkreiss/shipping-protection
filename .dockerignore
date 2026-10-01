@@ -30,6 +30,10 @@ supabase/.temp/
 prisma/*.sqlite*
 database.sqlite*
 coverage/
+e2e/
+.playwright/
+playwright.config.js
+tsconfig.e2e.json
 *.log
 *.tsbuildinfo
 .DS_Store
