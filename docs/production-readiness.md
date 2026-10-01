@@ -133,6 +133,16 @@ code during that deploy keep working.
 - [ ] In a later release, remove `checkoutTokenHash` from `prisma/schema.prisma`
   and add a migration that drops the column.
 
+**To do: narrower access scopes (noted 2026-10-01).** The unused
+`write_metaobjects` and `write_metaobject_definitions` scopes were removed from
+every `shopify.app*.toml`. For staging, then production:
+
+- [ ] Run `npx shopify app deploy --config <env>` so installations drop the
+  scopes (Shopify sends `app/scopes_update`).
+- [ ] Set the Railway `SCOPES` variable on web and worker to
+  `write_products,read_orders,write_publications,write_cart_transforms`.
+  Removing scopes doesn't require merchants to re-approve the app.
+
 ## 4. Staging acceptance and recovery rehearsal
 
 Run against the release candidate, using the staging Shopify app and staging
