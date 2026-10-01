@@ -297,6 +297,13 @@ document the host-side steps. Shopify's
 [deployment guide](https://shopify.dev/docs/apps/launch/deployment/deploy-to-hosting-service)
 explains the separate app configuration deployment.
 
+### Release to staging
+1. Push to main for backend updates
+2. To deploy shopify extension or app updates use 
+   ```sh
+   npx shopify app deploy --config staging
+   ```
+
 ### Release to production
 
 Work on `main`. Every push to `main` deploys to staging. Production deploys

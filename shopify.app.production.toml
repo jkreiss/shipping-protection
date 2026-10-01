@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "96f5fc78f8240440dd885872ce8c11cb"
-name = "insurance"
+name = "Protection"
 application_url = "https://insurance-backend-production-82be.up.railway.app"
 embedded = true
 
