@@ -49,3 +49,22 @@ export async function receiveOrderWebhook({ shopDomain, topic, payload, webhookI
   }
   return delivery.id;
 }
+
+export const RECONCILE_TOPIC = "RECONCILE";
+const REFRESH_DELAY_MS = 60_000;
+
+// Hands an order that reconciliation could not store to the worker, which
+// retries it with backoff like a webhook delivery. Keyed by the order version,
+// so the same failure on a later pass doesn't queue it twice.
+export async function queueOrderRefresh({ shopId, shopifyOrderId, version, database = prisma }) {
+  const webhookId = `reconcile:${shopifyOrderId}:${version}`;
+  await database.webhookDelivery.upsert({
+    where: { shopId_webhookId: { shopId, webhookId } },
+    create: {
+      shopId, webhookId, topic: RECONCILE_TOPIC, shopifyOrderId, status: "PENDING",
+      nextAttemptAt: new Date(Date.now() + REFRESH_DELAY_MS),
+    },
+    update: {},
+    select: { id: true },
+  });
+}

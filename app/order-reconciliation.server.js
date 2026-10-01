@@ -3,6 +3,8 @@ import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
 import { adminGraphql, assertCompleteOrder, fetchShopifyOrder, ORDERS_QUERY } from "./order-shopify.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
+import { queueOrderRefresh } from "./webhook-inbox.server.js";
+import { reportFailure } from "./observability.server.js";
 
 const BACKFILL_MS = 60 * 86400000;
 // Each window starts this far before the last one ended, to catch orders
@@ -11,6 +13,9 @@ const BACKFILL_MS = 60 * 86400000;
 export const RECONCILIATION_OVERLAP_MS = 10 * 60_000;
 export const RECONCILIATION_INTERVAL_MS = 10 * 60_000;
 const DEFAULT_TIME_BUDGET_MS = 60_000;
+// This many failed orders in a row means Shopify or the database is down, not
+// that the orders are bad: stop and retry the page rather than queue them all.
+export const MAX_CONSECUTIVE_ORDER_FAILURES = 3;
 
 function searchWindow(since, until) {
   return `updated_at:>='${since.toISOString()}' updated_at:<='${until.toISOString()}'`;
@@ -60,8 +65,10 @@ export async function reconcileOrders({
   let pages = 0;
   let ordersListed = 0;
   let ordersFetched = 0;
+  let ordersFailed = 0;
   let newestUpdatedAt = since;
   let hasNextPage = true;
+  let consecutiveFailures = 0;
 
   while (hasNextPage && pages < maxPages && (pages === 0 || Date.now() - started < timeBudgetMs)) {
     const data = await adminGraphql(admin, ORDERS_QUERY, {
@@ -80,10 +87,21 @@ export async function reconcileOrders({
       const shopifyUpdatedAt = Date.parse(item.updatedAt);
       // Webhooks usually stored the order already; fetch only what's missing or newer.
       if (storedAt.has(item.id) && storedAt.get(item.id) >= shopifyUpdatedAt) continue;
-      const order = await fetchShopifyOrder(admin, item.id, options);
-      const normalized = await storeOrder(database, persist, shop, order, hashSecret);
-      if (normalized.shopifyUpdatedAt > newestUpdatedAt) newestUpdatedAt = normalized.shopifyUpdatedAt;
-      ordersFetched += 1;
+      // One order that can't be stored must not hold back the rest of the
+      // shop: hand it to the worker's retries and keep the window moving.
+      try {
+        const order = await fetchShopifyOrder(admin, item.id, options);
+        const normalized = await storeOrder(database, persist, shop, order, hashSecret);
+        if (normalized.shopifyUpdatedAt > newestUpdatedAt) newestUpdatedAt = normalized.shopifyUpdatedAt;
+        ordersFetched += 1;
+        consecutiveFailures = 0;
+      } catch (error) {
+        consecutiveFailures += 1;
+        reportFailure("reconciliation_order_failed", error, { shopId: shop.id, shopifyOrderId: item.id });
+        if (consecutiveFailures >= MAX_CONSECUTIVE_ORDER_FAILURES) throw error;
+        await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
+        ordersFailed += 1;
+      }
     }
     ordersListed += listed.length;
     await database.shop.update({
@@ -117,7 +135,8 @@ export async function reconcileOrders({
     pages,
     ordersListed,
     ordersFetched,
-    ordersSkipped: ordersListed - ordersFetched,
+    ordersFailed,
+    ordersSkipped: ordersListed - ordersFetched - ordersFailed,
     ordersProcessed: ordersFetched,
     pendingRechecked: pending.length,
     complete: !hasNextPage,

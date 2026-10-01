@@ -1,5 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
-import { RECONCILIATION_OVERLAP_MS, reconcileOrders, reconciliationDue } from "./order-reconciliation.server";
+import {
+  MAX_CONSECUTIVE_ORDER_FAILURES, RECONCILIATION_OVERLAP_MS, reconcileOrders, reconciliationDue,
+} from "./order-reconciliation.server";
 
 const shopDomain = "one.myshopify.com";
 const minute = 60_000;
@@ -38,6 +40,7 @@ function fakeDatabase({ shop = {}, localOrders = [] } = {}) {
   const shopRow = { id: "shop-1", shopDomain, orderReconciliationSince: null, orderReconciliationCursor: null,
     orderReconciliationUntil: null, orderHistoryStartAt: null, ...shop };
   const shopUpdates = [];
+  const queued = [];
   const database = {
     shop: {
       findUnique: async () => ({ ...shopRow }),
@@ -48,9 +51,12 @@ function fakeDatabase({ shop = {}, localOrders = [] } = {}) {
         where.shopId === "shop-1" && where.shopifyOrderId.in.includes(shopifyOrderId)),
     },
     protectionRefund: { findMany: async () => [] },
+    webhookDelivery: {
+      upsert: vi.fn(async ({ create }) => { queued.push(create); return { id: create.webhookId }; }),
+    },
     $transaction: async (run) => run(database),
   };
-  return { database, shopRow, shopUpdates };
+  return { database, shopRow, shopUpdates, queued };
 }
 
 const id = (n) => `gid://shopify/Order/${n}`;
@@ -110,9 +116,47 @@ describe("order reconciliation", () => {
     expect(result.complete).toBe(true);
   });
 
-  test("keeps the cursor when an order on the page fails to store", async () => {
+  test("queues an order that can't be stored and keeps reconciling the rest", async () => {
+    const { admin } = fakeAdmin([[
+      { id: id(1), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(2), updatedAt: "2026-09-29T00:01:00Z" },
+      { id: id(3), updatedAt: "2026-09-29T00:02:00Z" },
+    ], [{ id: id(4), updatedAt: "2026-09-29T00:03:00Z" }]]);
+    const { database, shopUpdates, queued } = fakeDatabase();
+    const persist = vi.fn(async (_transaction, _shop, normalized) => {
+      if (normalized.shopifyOrderId === id(2)) throw new Error("bad order data");
+    });
+
+    const result = await reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" });
+
+    expect(persist.mock.calls.map(([, , order]) => order.shopifyOrderId)).toEqual([id(1), id(2), id(3), id(4)]);
+    expect(queued).toEqual([expect.objectContaining({
+      shopId: "shop-1", shopifyOrderId: id(2), topic: "RECONCILE", status: "PENDING",
+      webhookId: `reconcile:${id(2)}:2026-09-29T00:01:00Z`,
+    })]);
+    expect(result).toMatchObject({ complete: true, ordersFetched: 3, ordersFailed: 1, ordersSkipped: 0 });
+    expect(shopUpdates.at(-1)).toMatchObject({ orderReconciliationCursor: null });
+  });
+
+  test("stops and keeps the cursor when orders keep failing in a row", async () => {
+    const { admin } = fakeAdmin([[
+      { id: id(1), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(2), updatedAt: "2026-09-29T00:01:00Z" },
+      { id: id(3), updatedAt: "2026-09-29T00:02:00Z" },
+    ], [{ id: id(4), updatedAt: "2026-09-29T00:03:00Z" }]]);
+    const { database, shopUpdates } = fakeDatabase();
+    const persist = vi.fn().mockRejectedValue(new Error("shopify down"));
+
+    await expect(reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" }))
+      .rejects.toThrow("shopify down");
+    expect(persist).toHaveBeenCalledTimes(MAX_CONSECUTIVE_ORDER_FAILURES);
+    expect(shopUpdates).toEqual([]);
+  });
+
+  test("keeps the cursor when a failed order can't be queued", async () => {
     const { admin } = fakeAdmin([[{ id: id(1), updatedAt: "2026-09-29T00:00:00Z" }], [{ id: id(2), updatedAt: "2026-09-29T00:01:00Z" }]]);
     const { database, shopUpdates } = fakeDatabase();
+    database.webhookDelivery.upsert.mockRejectedValue(new Error("database down"));
     const persist = vi.fn().mockRejectedValue(new Error("database down"));
 
     await expect(reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" }))

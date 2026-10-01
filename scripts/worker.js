@@ -29,7 +29,7 @@ async function reconcileShop(shop) {
     const result = await reconcileOrders({ admin, shopDomain: shop.shopDomain });
     reconcileRetryAt.delete(shop.id);
     logEvent("reconciliation_completed", { shopId: shop.id, pages: result.pages,
-      ordersListed: result.ordersListed, ordersFetched: result.ordersFetched, ordersSkipped: result.ordersSkipped,
+      ordersListed: result.ordersListed, ordersFetched: result.ordersFetched, ordersFailed: result.ordersFailed, ordersSkipped: result.ordersSkipped,
       complete: result.complete, windowEnd: result.windowEnd, durationMs: Date.now() - started });
   } catch (error) {
     // Back off so a shop that keeps failing isn't retried in a tight loop.
