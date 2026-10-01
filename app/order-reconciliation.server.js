@@ -3,6 +3,8 @@ import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
 import { adminGraphql, assertCompleteOrder, fetchShopifyOrder, ORDERS_QUERY } from "./order-shopify.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
+import { queueOrderRefresh } from "./webhook-inbox.server.js";
+import { reportFailure } from "./observability.server.js";
 
 const BACKFILL_MS = 60 * 86400000;
 // Each window starts this far before the last one ended, to catch orders
@@ -11,6 +13,10 @@ const BACKFILL_MS = 60 * 86400000;
 export const RECONCILIATION_OVERLAP_MS = 10 * 60_000;
 export const RECONCILIATION_INTERVAL_MS = 10 * 60_000;
 const DEFAULT_TIME_BUDGET_MS = 60_000;
+// This many failed orders in a row means Shopify or the database is down, not
+// that the orders are bad: stop and retry the page rather than queue them all.
+export const MAX_CONSECUTIVE_ORDER_FAILURES = 3;
+const PENDING_REFUND_RECHECKS = 20;
 
 function searchWindow(since, until) {
   return `updated_at:>='${since.toISOString()}' updated_at:<='${until.toISOString()}'`;
@@ -23,8 +29,8 @@ export function reconciliationDue(shop, now = new Date()) {
   return now.getTime() - shop.orderReconciliationSince.getTime() >= RECONCILIATION_INTERVAL_MS;
 }
 
-async function storeOrder(database, persist, shop, order, hashSecret) {
-  const normalized = normalizeGraphqlOrder(assertCompleteOrder(order), hashSecret);
+async function storeOrder(database, persist, shop, order) {
+  const normalized = normalizeGraphqlOrder(assertCompleteOrder(order));
   await retrySerializationFailures(() => database.$transaction(
     (transaction) => persist(transaction, shop, normalized),
     { isolationLevel: "Serializable", timeout: 20_000 },
@@ -36,7 +42,6 @@ export async function reconcileOrders({
   admin,
   shopDomain,
   pageSize = 250,
-  hashSecret = process.env.CHECKOUT_TOKEN_HASH_SECRET,
   database = prisma,
   maxPages = 1000,
   timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
@@ -60,8 +65,10 @@ export async function reconcileOrders({
   let pages = 0;
   let ordersListed = 0;
   let ordersFetched = 0;
+  let ordersFailed = 0;
   let newestUpdatedAt = since;
   let hasNextPage = true;
+  let consecutiveFailures = 0;
 
   while (hasNextPage && pages < maxPages && (pages === 0 || Date.now() - started < timeBudgetMs)) {
     const data = await adminGraphql(admin, ORDERS_QUERY, {
@@ -80,10 +87,21 @@ export async function reconcileOrders({
       const shopifyUpdatedAt = Date.parse(item.updatedAt);
       // Webhooks usually stored the order already; fetch only what's missing or newer.
       if (storedAt.has(item.id) && storedAt.get(item.id) >= shopifyUpdatedAt) continue;
-      const order = await fetchShopifyOrder(admin, item.id, options);
-      const normalized = await storeOrder(database, persist, shop, order, hashSecret);
-      if (normalized.shopifyUpdatedAt > newestUpdatedAt) newestUpdatedAt = normalized.shopifyUpdatedAt;
-      ordersFetched += 1;
+      // One order that can't be stored must not hold back the rest of the
+      // shop: hand it to the worker's retries and keep the window moving.
+      try {
+        const order = await fetchShopifyOrder(admin, item.id, options);
+        const normalized = await storeOrder(database, persist, shop, order);
+        if (normalized.shopifyUpdatedAt > newestUpdatedAt) newestUpdatedAt = normalized.shopifyUpdatedAt;
+        ordersFetched += 1;
+        consecutiveFailures = 0;
+      } catch (error) {
+        consecutiveFailures += 1;
+        reportFailure("reconciliation_order_failed", error, { shopId: shop.id, shopifyOrderId: item.id });
+        if (consecutiveFailures >= MAX_CONSECUTIVE_ORDER_FAILURES) throw error;
+        await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
+        ordersFailed += 1;
+      }
     }
     ordersListed += listed.length;
     await database.shop.update({
@@ -102,22 +120,40 @@ export async function reconcileOrders({
     pages += 1;
   }
 
+  // Recheck refunds still waiting on a transaction, least recently checked
+  // first; storing the order again bumps updatedAt, so the next turn moves on.
+  // UNATTRIBUTED refunds only change when the order does, which a webhook
+  // reports, so they are not polled.
   const pending = await database.protectionRefund.findMany({
-    where: { shopId: shop.id, status: { in: ["PENDING", "UNATTRIBUTED"] } },
-    select: { order: { select: { shopifyOrderId: true } } },
+    where: {
+      shopId: shop.id, status: "PENDING",
+      updatedAt: { lt: new Date(Date.now() - RECONCILIATION_INTERVAL_MS) },
+    },
+    orderBy: { updatedAt: "asc" },
+    select: { orderId: true, order: { select: { shopifyOrderId: true } } },
     distinct: ["orderId"],
-    take: 20,
+    take: PENDING_REFUND_RECHECKS,
   });
   for (const entry of pending) {
-    const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, options);
-    await storeOrder(database, persist, shop, order, hashSecret);
+    try {
+      const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, options);
+      await storeOrder(database, persist, shop, order);
+    } catch (error) {
+      reportFailure("refund_recheck_failed", error, { shopId: shop.id, shopifyOrderId: entry.order.shopifyOrderId });
+      // Move it to the back of the queue so one bad order can't hold the front.
+      await database.protectionRefund.updateMany({
+        where: { shopId: shop.id, orderId: entry.orderId, status: "PENDING" },
+        data: { updatedAt: new Date() },
+      });
+    }
   }
 
   return {
     pages,
     ordersListed,
     ordersFetched,
-    ordersSkipped: ordersListed - ordersFetched,
+    ordersFailed,
+    ordersSkipped: ordersListed - ordersFetched - ordersFailed,
     ordersProcessed: ordersFetched,
     pendingRechecked: pending.length,
     complete: !hasNextPage,

@@ -35,8 +35,7 @@ Supabase CLI link does not set `DATABASE_URL` for Prisma. The app stores Shopify
 access tokens in its database, so disable **Integrations → Data API** for this
 project in the Supabase dashboard.
 
-Set `CHECKOUT_TOKEN_HASH_SECRET` to a dedicated random secret. The backend uses
-it to hash checkout tokens before storing their hashes. Then run:
+Then run:
 
 ```shell
 npm run setup
@@ -66,8 +65,10 @@ flags off. Successful setup enables the shop metafield and Cart Transform
 pricing used by the checkout block, with the existing loss, theft, and damage
 offer. Historical rates stay on pricing rules and protection purchases.
 Existing shops with an active pricing rule are backfilled during migration.
-A healthy legacy Shopify metafield without a database rule is adopted during
-the next setup read.
+Orders are recognised as protected only by the variant on one of the shop's
+pricing rules, so a legacy Shopify metafield without a database rule, or a rule
+left on a replaced product, fails the "Pricing is linked to the current
+protection product" check until **Repair setup** publishes a rule for it.
 
 The app checks the shop's Shopify Plus plan and Cart Transform `updateOperation`
 eligibility before setup. The only implemented strategy is
@@ -122,8 +123,8 @@ Admin API call's query cost.
 The Overview shows the last 30 merchant-local calendar days from stored data;
 **Refresh** re-reads it and never calls Shopify for orders. Until the initial
 backfill completes it says order history is still syncing, and it warns that
-order sync is behind when the last completed sync is over an hour old or an
-order update failed after it. Protected and eligible orders are dated by
+order sync is behind when the last completed sync is over an hour old. Single
+orders that fail to store alert the operator through Sentry instead. Protected and eligible orders are dated by
 the first completed payment. Protection refunds are recorded once per Shopify
 refund ID and dated by successful refund transactions.
 
@@ -203,7 +204,6 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    | `SHOPIFY_API_SECRET` | Client secret for that app |
    | `SCOPES` | Same comma-separated scopes as `shopify.app.toml` |
    | `DATABASE_URL` | Supabase Session pooler URL, port 5432, with `schema=public&sslmode=require` |
-   | `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated random secret of at least 16 characters |
    | `NODE_ENV` | `production` |
    | `PORT` | `3000`, matching the manually selected domain target port |
    | `APP_ENV` | `staging` or `production` |
@@ -283,10 +283,12 @@ duplicate deliveries, failed processing and recovery, uninstall and reinstall,
 and merchant-local date filters. Verify `/healthz`, worker completion, Shopify
 delivery logs, Sentry alerts, and reconciliation. Keep real customer charges
 disabled until approved protection terms and a defined claims process exist.
-`npm audit --omit=dev` currently reports four high advisories in the Prisma
-CLI/configuration dependency chain. They have no safe automatic upgrade in the
-current major version. Review and resolve this dependency risk before accepting
-real customer traffic.
+`npm audit --omit=dev` currently reports four high advisories, all from
+`deepmerge-ts` under `prisma` → `@prisma/config` (assessed 2026-10-01). That
+code runs only in the Prisma CLI while it loads this repository's own
+configuration (for example `prisma migrate deploy`); the Prisma client the app
+runs does not include it, and no request input reaches it. npm's suggested fix
+is a Prisma downgrade, so leave it until Prisma ships a patched release.
 
 Railway's [service settings](https://docs.railway.com/services),
 [public networking](https://docs.railway.com/networking/public-networking), and

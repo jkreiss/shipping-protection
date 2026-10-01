@@ -9,7 +9,8 @@ import {
   getActivePricingRule,
   reconcilePublishedPricingRule,
 } from "./pricing-rule.server";
-import { ensureInstalledShop } from "./shop.server";
+import { ensureInstalledShop, withShopSettingsLock } from "./shop.server";
+import { UserFacingError } from "./user-facing-error";
 import { enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
 import {
@@ -44,6 +45,18 @@ function sameContract(left, right, enabled) {
   );
 }
 
+// Orders are recognised as protected by the active rule's variant, so the rule
+// must describe the product checkout actually sells. A legacy setup without a
+// rule, or a rule left on a replaced product, needs Repair to publish a new one.
+function pricingRuleCheck(seed, activeRule) {
+  return {
+    id: "pricing-rule",
+    label: "Pricing is linked to the current protection product",
+    ok: !seed || Boolean(activeRule &&
+      activeRule.productId === seed.productId && activeRule.variantId === seed.variantId),
+  };
+}
+
 export async function readShippingProtectionState(admin, shopDomain) {
   const core = await loadCore(admin);
   const domain = shopDomain ?? core.shop.myshopifyDomain;
@@ -57,12 +70,10 @@ export async function readShippingProtectionState(admin, shopDomain) {
   }
   const seed = core.shopConfig ?? core.transformConfig;
   const product = await findProduct(admin, seed?.productId);
-  const checks = buildChecks(core, product);
   const activeRule = await getActivePricingRule(domain);
+  const checks = [...buildChecks(core, product), pricingRuleCheck(seed, activeRule)];
   const healthReady = checks.every(({ ok }) => ok);
-  const settings = await getShopConfiguration(domain, {
-    legacyReady: !activeRule && Boolean(seed?.enabled) && healthReady,
-  });
+  const settings = await getShopConfiguration(domain);
   const capabilities = observedShopifyCapabilities(core.shop);
   const configuration = resolveConfiguration(
     settings,
@@ -104,7 +115,17 @@ export async function readShippingProtectionState(admin, shopDomain) {
   };
 }
 
-export async function activatePricingRule(
+// Setup and rate changes each publish pricing to Shopify and then record it,
+// so they run one at a time per shop.
+export function activatePricingRule(admin, shopDomain, rateBasisPoints) {
+  return withShopSettingsLock(shopDomain, () => publishRate(admin, shopDomain, rateBasisPoints));
+}
+
+export function setupShippingProtection(admin, shopDomain) {
+  return withShopSettingsLock(shopDomain, () => runSetup(admin, shopDomain));
+}
+
+async function publishRate(
   admin,
   shopDomain,
   rateBasisPoints,
@@ -113,11 +134,11 @@ export async function activatePricingRule(
   if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
   const capabilities = observedShopifyCapabilities(core.shop);
   if (!capabilities.checkoutUiSupported || !capabilities.cartTransformUpdateSupported) {
-    throw new Error("This shop cannot use the checkout block and Cart Transform price update strategy.");
+    throw new UserFacingError("This store's Shopify plan doesn't support the checkout protection offer.");
   }
   const current = await readShippingProtectionState(admin, shopDomain);
   if (!current.configuration.protectionEnabled) {
-    throw new Error("Run Shipping Protection setup before activating a rule.");
+    throw new UserFacingError("Set up protection before changing the rate.");
   }
   const product = await findProduct(
     admin,
@@ -128,7 +149,7 @@ export async function activatePricingRule(
       id === (core.shopConfig?.variantId ?? core.transformConfig?.variantId),
   );
   if (!product || !variant || !core.transform?.id) {
-    throw new Error("Run Shipping Protection setup before activating a rule.");
+    throw new UserFacingError("Set up protection before changing the rate.");
   }
 
   const result = await createAndPublishPricingRule({
@@ -140,20 +161,20 @@ export async function activatePricingRule(
     publishSnapshot,
   });
   const verified = await readShippingProtectionState(admin, shopDomain);
-  if (!verified.ready) throw new Error("Pricing was published, but protection health checks need repair.");
+  if (!verified.ready) throw new UserFacingError("The new rate is live, but setup needs attention. Run Repair setup.");
   return {
     ...result,
     state: verified,
   };
 }
 
-export async function setupShippingProtection(admin, shopDomain) {
+async function runSetup(admin, shopDomain) {
   const core = await loadCore(admin);
   const domain = shopDomain ?? core.shop.myshopifyDomain;
   if (domain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
   const capabilities = observedShopifyCapabilities(core.shop);
   if (!capabilities.checkoutUiSupported || !capabilities.cartTransformUpdateSupported) {
-    throw new Error("This shop cannot use the checkout block and Cart Transform price update strategy.");
+    throw new UserFacingError("This store's Shopify plan doesn't support the checkout protection offer.");
   }
   await ensureInstalledShop(domain, core.shop.id);
   const existingContract = core.shopConfig ?? core.transformConfig;
@@ -191,7 +212,7 @@ export async function setupShippingProtection(admin, shopDomain) {
     );
 
     if (!core.onlineStore) {
-      throw new Error("The Online Store publication is unavailable.");
+      throw new UserFacingError("The Online Store sales channel is needed to offer protection. Add it in Shopify, then run setup again.");
     }
 
     const transform = await ensureTransform(admin, core, disabledContract);
@@ -209,7 +230,10 @@ export async function setupShippingProtection(admin, shopDomain) {
     }
 
     const activeRule = await getActivePricingRule(domain);
-    if (activeRule) {
+    // A rule is tied to one variant; if repair replaced the product or
+    // variant, publish a new version at the same rate instead.
+    if (activeRule && activeRule.productId === repaired.product.id &&
+      activeRule.variantId === repaired.variantId) {
       const enabledContract = pricingContractForRule(
         activeRule,
         repaired.product.id,
@@ -223,14 +247,14 @@ export async function setupShippingProtection(admin, shopDomain) {
         shopDomain: domain,
         productId: repaired.product.id,
         variantId: repaired.variantId,
-        rateBasisPoints: DEFAULT_RATE_BASIS_POINTS,
+        rateBasisPoints: activeRule?.rateBasisPoints ?? DEFAULT_RATE_BASIS_POINTS,
         publishSnapshot,
       });
     }
 
     const state = await readShippingProtectionState(admin, domain);
     if (!state.ready) {
-      throw new Error("Setup completed, but one or more health checks failed.");
+      throw new UserFacingError("Setup finished, but some checks still fail. See Needs attention.");
     }
 
     const settings = await enableShopProtection(domain);

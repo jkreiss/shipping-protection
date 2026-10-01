@@ -147,13 +147,6 @@ export function protectionAttributes(configuration) {
   ];
 }
 
-/** @param {CheckoutLine} line */
-export function hasProtectionProvenance(line) {
-  return (line.attributes ?? []).some(({ key }) =>
-    PROTECTION_ATTRIBUTE_KEYS.includes(key),
-  );
-}
-
 /**
  * @param {CheckoutLine} line
  * @param {ShippingProtectionConfiguration} configuration
@@ -248,14 +241,13 @@ export function calculateRoundedFee(amounts, rateBasisPoints, minorUnits) {
 }
 
 /**
+ * Protection is the configured variant only. Line properties are
+ * customer-editable, so a merchandise line carrying them stays merchandise.
  * @param {CheckoutLine[]} lines
  * @param {string} variantId
  */
 export function protectionLines(lines, variantId) {
-  return lines.filter(
-    (line) =>
-      line.merchandise.id === variantId || hasProtectionProvenance(line),
-  );
+  return lines.filter((line) => line.merchandise.id === variantId);
 }
 
 /**
@@ -266,7 +258,6 @@ export function eligibleMerchandiseLines(lines, variantId) {
   return lines.filter(
     (line) =>
       line.merchandise.id !== variantId &&
-      !hasProtectionProvenance(line) &&
       line.merchandise.requiresShipping === true,
   );
 }

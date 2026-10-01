@@ -1,12 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
   completedPaymentAt,
-  hashCheckoutToken,
   normalizeGraphqlOrder,
   normalizeWebhookOrder,
 } from "./order-normalization";
-
-const secret = "a-dedicated-test-secret";
 
 function webhookPayload(overrides = {}) {
   return {
@@ -47,16 +44,13 @@ function webhookPayload(overrides = {}) {
 
 describe("order normalization", () => {
   test("keeps normalized facts while excluding PII and arbitrary properties", () => {
-    const normalized = normalizeWebhookOrder(webhookPayload(), secret);
+    const normalized = normalizeWebhookOrder(webhookPayload());
     expect(normalized).toMatchObject({
       shopifyOrderId: "gid://shopify/Order/1001",
       currencyCode: "AUD",
       subtotalAmount: "100.0000",
     });
-    expect(normalized.checkoutTokenHash).toBe(
-      hashCheckoutToken("sensitive-checkout-token", secret),
-    );
-    expect(normalized.checkoutTokenHash).not.toContain("sensitive-checkout-token");
+    expect(normalized).not.toHaveProperty("checkoutTokenHash");
     expect(normalized.lines[0]).toMatchObject({
       quantity: 2,
       preDiscountAmount: "100.0000",
@@ -69,14 +63,12 @@ describe("order normalization", () => {
     expect(serialized).not.toContain("Never");
     expect(serialized).not.toContain("PII street");
     expect(serialized).not.toContain("gift_message");
+    expect(serialized).not.toContain("sensitive-checkout-token");
   });
 
-  test("rejects malformed payloads and weak hash secrets", () => {
-    expect(() => normalizeWebhookOrder({}, secret)).toThrow(
+  test("rejects malformed payloads", () => {
+    expect(() => normalizeWebhookOrder({})).toThrow(
       "Malformed orders/create payload",
-    );
-    expect(() => normalizeWebhookOrder(webhookPayload(), "short")).toThrow(
-      "CHECKOUT_TOKEN_HASH_SECRET",
     );
   });
 
@@ -106,18 +98,20 @@ describe("order normalization", () => {
               product: { id: "gid://shopify/Product/21" },
               variant: { id: "gid://shopify/ProductVariant/31" },
               customAttributes: [{ key: "ignored", value: "value" }],
+              sellingPlan: { sellingPlanId: "gid://shopify/SellingPlan/1" },
             },
           ],
         },
       },
-      secret,
     );
     expect(normalized.lines[0]).toMatchObject({
       originalUnitAmount: "50.0000",
       preDiscountAmount: "100.0000",
       finalAmount: "100.0000",
       protectionAttributes: {},
+      hasSellingPlan: true,
     });
+    expect(JSON.stringify(normalized)).not.toContain("sensitive-checkout-token");
   });
 
   test("keeps the presentment unit price the customer was charged in", () => {
@@ -133,12 +127,12 @@ describe("order normalization", () => {
       lineItems: { nodes: [line(presentmentMoney)] },
     });
 
-    const normalized = normalizeGraphqlOrder(order({ amount: "32.50", currencyCode: "USD" }), secret);
+    const normalized = normalizeGraphqlOrder(order({ amount: "32.50", currencyCode: "USD" }));
     expect(normalized.presentmentCurrencyCode).toBe("USD");
     expect(normalized.lines[0].presentmentUnitAmount).toBe("32.50");
 
     // A presentment amount in another currency can't be compared, so it's dropped.
-    const mismatched = normalizeGraphqlOrder(order({ amount: "50.00", currencyCode: "AUD" }), secret);
+    const mismatched = normalizeGraphqlOrder(order({ amount: "50.00", currencyCode: "AUD" }));
     expect(mismatched.lines[0].presentmentUnitAmount).toBeNull();
   });
 

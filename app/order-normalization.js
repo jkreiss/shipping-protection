@@ -1,5 +1,3 @@
-import { createHmac } from "node:crypto";
-
 export const PROTECTION_ATTRIBUTE_NAMES = Object.freeze([
   "_yasas_protection_rule_id",
   "_yasas_protection_rule_version",
@@ -81,15 +79,7 @@ function allowListedAttributes(attributes) {
   );
 }
 
-export function hashCheckoutToken(token, secret) {
-  if (!token) return null;
-  if (typeof secret !== "string" || secret.length < 16) {
-    throw new Error("CHECKOUT_TOKEN_HASH_SECRET must contain at least 16 characters.");
-  }
-  return createHmac("sha256", secret).update(String(token)).digest("hex");
-}
-
-export function normalizeWebhookOrder(payload, hashSecret) {
+export function normalizeWebhookOrder(payload) {
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.line_items)) {
     throw new Error("Malformed orders/create payload.");
   }
@@ -124,7 +114,6 @@ export function normalizeWebhookOrder(payload, hashSecret) {
       "id",
     ),
     name: requiredString(payload.name, "name"),
-    checkoutTokenHash: hashCheckoutToken(payload.checkout_token, hashSecret),
     shopifyCreatedAt: requiredDate(payload.created_at, "created_at"),
     shopifyUpdatedAt: requiredDate(payload.updated_at, "updated_at"),
     processedAt: payload.processed_at
@@ -151,7 +140,7 @@ function shopMoney(moneySet, fallback = "0") {
   return moneySet?.shopMoney?.amount ?? fallback;
 }
 
-export function normalizeGraphqlOrder(order, hashSecret) {
+export function normalizeGraphqlOrder(order) {
   if (!order || typeof order !== "object" || !Array.isArray(order.lineItems?.nodes)) {
     throw new Error("Malformed Admin GraphQL order.");
   }
@@ -189,6 +178,8 @@ export function normalizeGraphqlOrder(order, hashSecret) {
       ),
       finalAmount: scaledToMoney(moneyToScaled(finalAmount)),
       protectionAttributes: allowListedAttributes(line.customAttributes),
+      // Shopify rejects Cart Transform operations on carts with a selling plan, so those carts keep the $0.00 price.
+      hasSellingPlan: Boolean(line.sellingPlan),
       // The Cart Transform prices in the customer's currency; kept only to check that price.
       presentmentUnitAmount: presentmentCurrencyCode && presentment?.currencyCode === presentmentCurrencyCode
         ? presentment.amount : null,
@@ -198,7 +189,6 @@ export function normalizeGraphqlOrder(order, hashSecret) {
   return {
     shopifyOrderId: requiredString(order.id, "id"),
     name: requiredString(order.name, "name"),
-    checkoutTokenHash: hashCheckoutToken(order.checkoutToken, hashSecret),
     shopifyCreatedAt: requiredDate(order.createdAt, "createdAt"),
     shopifyUpdatedAt: requiredDate(order.updatedAt, "updatedAt"),
     processedAt: order.processedAt ? requiredDate(order.processedAt, "processedAt") : null,

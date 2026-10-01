@@ -1,13 +1,7 @@
-import { PROTECTION_ATTRIBUTE_NAMES, moneyToScaled, scaledToMoney } from "./order-normalization.js";
+import { moneyToScaled, scaledToMoney } from "./order-normalization.js";
 import { classifyProtectionRefund } from "./protection-refunds.js";
 import { PRICING_SCHEMA_VERSION, calculateFee, currencyMinorUnits } from "./pricing-contract.js";
 import { reportFailure } from "./observability.server.js";
-
-function hasProvenance(line) {
-  return PROTECTION_ATTRIBUTE_NAMES.some(
-    (name) => line.protectionAttributes[name] !== undefined,
-  );
-}
 
 function protectionAttribution(line, rules) {
   const attributes = line.protectionAttributes;
@@ -55,7 +49,10 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
   const matched = expectedFee !== null && protectedLines.every(
     (line) => moneyToScaled(unitAmount(line)) === moneyToScaled(expectedFee),
   );
-  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
+  if (matched) return { pricingCheck: "MATCHED", expectedFee };
+  // Shopify skips the Cart Transform when any line has a selling plan, so $0.00 is expected.
+  const subscription = normalized.lines.some((line) => line.hasSellingPlan);
+  return { pricingCheck: subscription ? "SUBSCRIPTION" : "UNMATCHED", expectedFee };
 }
 
 export async function persistNormalizedOrder(
@@ -66,12 +63,13 @@ export async function persistNormalizedOrder(
   const rules = await transaction.pricingRule.findMany({
     where: { shopId: shop.id },
   });
+  // Protection is identified by the app's own variant, as the Cart Transform
+  // does. Line properties are customer-editable, so they only attribute a
+  // protection line to its rule; they never make a line protection.
   const protectionVariants = new Set(rules.map(({ variantId }) => variantId));
   const lines = normalized.lines.map((line) => ({
     ...line,
-    isProtection:
-      (line.variantId && protectionVariants.has(line.variantId)) ||
-      hasProvenance(line),
+    isProtection: Boolean(line.variantId && protectionVariants.has(line.variantId)),
   }));
   const existing = await transaction.order.findUnique({
     where: { shopId_shopifyOrderId: { shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId } },

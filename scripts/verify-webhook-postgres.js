@@ -22,7 +22,7 @@ const attributes = [
 
 function sampleOrder() {
   return {
-    id: orderId, name: "#9001", checkoutToken: null,
+    id: orderId, name: "#9001",
     createdAt: "2026-09-23T00:00:00Z", updatedAt: "2026-09-23T00:01:00Z",
     processedAt: "2026-09-23T00:00:30Z", currencyCode: "AUD", test: true,
     cancelledAt: null, displayFinancialStatus: "PAID", fullyPaid: true,

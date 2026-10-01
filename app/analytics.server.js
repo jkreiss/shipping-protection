@@ -4,7 +4,8 @@ import { aggregateAnalytics, analyticsRange, dailyTrend } from "./analytics";
 import { logEvent } from "./observability.server";
 
 // The worker reconciles every shop about every 10 minutes, so an older last
-// sync means it is down or falling behind.
+// sync means it is down or falling behind. Single orders that fail to store
+// are an operator problem (Sentry: webhook_terminal), not a merchant warning.
 const SYNC_STALE_MS = 60 * 60_000;
 
 const SHOP_QUERY = `#graphql
@@ -28,7 +29,7 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
   const includeTest = search.get("test") === "1";
   const dateFilter = databaseRange(range);
   const syncedAt = shop.orderReconciliationSince;
-  const [orders, refunds, failedSinceSync] = await Promise.all([
+  const [orders, refunds] = await Promise.all([
     database.order.findMany({ where: { shopId: shop.id, OR: [
       { firstPaidAt: dateFilter },
       { firstPaidAt: null, shopifyCreatedAt: dateFilter, financialStatus: { in: ["PAID", "PARTIALLY_REFUNDED", "REFUNDED"] } },
@@ -45,10 +46,6 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
       status: true, amount: true, currencyCode: true, succeededAt: true,
       order: { select: { isTest: true } },
     } }),
-    // Failures before the last completed sync were re-checked by that sync.
-    syncedAt ? database.webhookDelivery.count({ where: {
-      shopId: shop.id, status: "FAILED", failedAt: { gte: syncedAt },
-    } }) : 0,
   ]);
   return {
     ...aggregateAnalytics({ orders, refunds, timeZone: ianaTimezone, currencyCode, range, includeTest }),
@@ -56,7 +53,7 @@ export async function readAnalytics({ admin, shopDomain, search, database = pris
     rowCounts: { orders: orders.length, refunds: refunds.length },
     sync: {
       complete: Boolean(shop.orderReconciliationSince) && !shop.orderReconciliationCursor,
-      behind: Boolean(syncedAt) && (now.getTime() - syncedAt.getTime() > SYNC_STALE_MS || failedSinceSync > 0),
+      behind: Boolean(syncedAt) && now.getTime() - syncedAt.getTime() > SYNC_STALE_MS,
       cursor: Boolean(shop.orderReconciliationCursor),
       reconciledThrough: shop.orderReconciliationSince?.toISOString() ?? null,
       historyLimited: !shop.orderHistoryStartAt || !shop.orderReconciliationSince ||

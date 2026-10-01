@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { UserFacingError } from "./user-facing-error";
 import {
   DEFAULT_RATE_BASIS_POINTS,
   basisPointsToPercent,
@@ -98,7 +99,7 @@ describe("pricing contract", () => {
   test.each(["", "abc", "0", "0.001", "100.01", "-1", "1e2", null])(
     "rejects invalid merchant percentage %s",
     (input) => {
-      expect(() => percentToBasisPoints(input)).toThrow(RangeError);
+      expect(() => percentToBasisPoints(input)).toThrow(UserFacingError);
     },
   );
 

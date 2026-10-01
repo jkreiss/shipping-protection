@@ -52,6 +52,7 @@ Common logic should be shared only where Shopify execution constraints allow it.
 - Setup creates an unlisted Shipping Protection product with one $0.00 variant.
 - The checkout block (`insurance-ext`) lets the customer add that variant.
 - The Cart Transform Function (`shipping-protection-transform`) prices it from the `function-configuration` metafield: rate in basis points, applied to shippable merchandise before discounts.
+- A cart or order line is protection only when its variant is the protection variant (on one of the shop's `PricingRule` rows, for ingestion). The `_yasas_protection_*` line properties are customer-editable: use them to attribute a protection line to its rule, never to decide that a line is protection. Setup publishes a new rule version whenever repair replaces the product or variant.
 - The checkout block needs Shopify Plus; Cart Transform price updates need the shop's `updateOperation` eligibility (Plus or development stores).
 - The merchant must still place the block in the checkout editor. The app cannot verify placement, so "Active" in the Admin means setup checks pass, not that customers see the block.
 
@@ -62,7 +63,7 @@ Remember:
 - provide Function-required configuration using Shopify-supported inputs/metafields
 - the Function runs on every cart, including carts without protection; the Cart Transform goes live when setup runs, not when the block is placed
 
-`blockOnFailure` is `false` (decided 2026-09-30): a Function error never blocks checkout. The protection line then keeps the variant's own price, $0.00 by design: a failure gives protection away free rather than charging the customer a price they weren't shown. The safeguard is the alert below, since a Function failure is usually repeated (a bad deploy or config affects every cart) rather than one-off; if it fires, fix or roll back the Shopify app version. The Function still sets price 0 explicitly whenever a protection line shouldn't be charged (protection disabled, no shippable merchandise, mixed currencies), and leaves the line unchanged only when its configuration is unreadable. Ingestion records `ProtectionPurchase.pricingCheck` (`MATCHED` when the fee equals the attributed rule's rate in the customer's currency) and emits `protection_price_unmatched` for paid orders that weren't charged the live price; the Overview shows the count. Setup replaces an existing blocking transform, because Shopify cannot update the flag in place.
+`blockOnFailure` is `false` (decided 2026-09-30): a Function error never blocks checkout. The protection line then keeps the variant's own price, $0.00 by design: a failure gives protection away free rather than charging the customer a price they weren't shown. The safeguard is the alert below, since a Function failure is usually repeated (a bad deploy or config affects every cart) rather than one-off; if it fires, fix or roll back the Shopify app version. The Function still sets price 0 explicitly whenever a protection line shouldn't be charged (protection disabled, no shippable merchandise, mixed currencies), and leaves the line unchanged only when its configuration is unreadable. Ingestion records `ProtectionPurchase.pricingCheck` (`MATCHED` when the fee equals the attributed rule's rate in the customer's currency) and emits `protection_price_unmatched` for paid orders that weren't charged the live price; the Overview shows the count. When the order has a selling plan (subscription), Shopify skips the Cart Transform, so a $0.00 fee is expected: the check is `SUBSCRIPTION`, with no alert and no unmatched count. The order still counts as protected, and so does a good-faith transform failure (decided 2026-10-01). Setup replaces an existing blocking transform, because Shopify cannot update the flag in place.
 
 ### Theme/storefront strategy
 
@@ -102,6 +103,7 @@ Current conventions:
 - Rates are stored as integer basis points (`PricingRule.rateBasisPoints`, the Function configuration, and `ProtectionPurchase`), so fees stay integer-exact.
 - Merchants enter and see rates as plain percentages ("1" means 1%, at most two decimal places). Convert only at the Admin UI boundary with `percentToBasisPoints` / `basisPointsToPercent` in `app/pricing-contract.js`; never show basis points to merchants.
 - Changing the rate publishes a new `PricingRule` version. It applies to new checkouts only; past orders keep the rule they were charged under.
+- Setup and rate changes run one at a time per shop (`withShopSettingsLock`, a lease on `Shop.settingsLockedUntil`), because each publishes pricing to Shopify and then records it locally.
 
 ## Protection Purchase Model
 

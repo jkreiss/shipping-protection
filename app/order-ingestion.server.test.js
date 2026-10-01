@@ -48,7 +48,6 @@ function normalizedOrder(protectionAttributes = null) {
   return {
     shopifyOrderId: "gid://shopify/Order/1",
     name: "#1",
-    checkoutTokenHash: "hashed",
     shopifyCreatedAt: new Date("2026-09-23T00:00:00Z"),
     shopifyUpdatedAt: new Date("2026-09-23T00:01:00Z"),
     processedAt: new Date("2026-09-23T00:00:30Z"),
@@ -161,6 +160,27 @@ describe("normalized order persistence", () => {
         }),
       }),
     );
+  });
+
+  test("never treats merchandise as protection because of its line properties", async () => {
+    // Customers can set line properties themselves (theme forms, /cart/add.js).
+    const tx = transaction();
+    const order = normalizedOrder();
+    order.lines[0].protectionAttributes = {
+      _yasas_protection_rule_id: "rule-1",
+      _yasas_protection_rule_version: "1",
+      _yasas_protection_rate_bps: "25",
+      _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+      _yasas_protection_contract_version: "2",
+    };
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.createMany.mock.calls[0][0].data[0]).toMatchObject({ isProtection: false });
+    expect(tx.storedOrder()).toMatchObject({
+      paidEligible: true, paidProtected: false, paidProtectionFee: "0.0000",
+      paidMerchandiseAmount: "100.0000",
+    });
   });
 
   test("does not attribute an unknown pricing contract version", async () => {
@@ -319,6 +339,32 @@ describe("live price check", () => {
     } finally {
       events.restore();
     }
+  });
+
+  test("treats a $0.00 protection fee on a subscription order as expected, not a failure", async () => {
+    const events = stderrEvents();
+    try {
+      const tx = transaction();
+      const paid = chargedProtection(normalizedOrder(attributed), "0.0000");
+      paid.lines[0].hasSellingPlan = true;
+      paid.paidAt = new Date("2026-09-23T00:02:00Z");
+      await persistNormalizedOrder(tx, shop, paid);
+
+      expect(tx.storedPurchase().pricingCheck).toBe("SUBSCRIPTION");
+      expect(tx.storedPurchase().purchasedAt).toEqual(paid.paidAt);
+      expect(events.named("protection_price_unmatched")).toEqual([]);
+    } finally {
+      events.restore();
+    }
+  });
+
+  test("still marks a subscription order matched when the live price was charged", async () => {
+    const tx = transaction();
+    const order = normalizedOrder(attributed);
+    order.lines[0].hasSellingPlan = true;
+    order.lines[1].originalUnitAmount = order.lines[1].finalAmount = order.lines[1].preDiscountAmount = "0.2500";
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
   });
 
   test("does not alert for a paid order charged the live price", async () => {

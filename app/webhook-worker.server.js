@@ -86,7 +86,6 @@ export async function processNextDelivery({
   database = prisma,
   claim = claimDelivery,
   adminForShop = async (shop) => (await import("./shopify.server.js")).unauthenticated.admin(shop),
-  hashSecret = process.env.CHECKOUT_TOKEN_HASH_SECRET,
 } = {}) {
   const batch = await claim(database);
   if (!batch) return false;
@@ -103,7 +102,7 @@ export async function processNextDelivery({
     }
     const { admin } = await adminForShop(shop.shopDomain);
     const order = await fetchShopifyOrder(admin, batch.shopifyOrderId, { shop: shop.shopDomain });
-    const normalized = normalizeGraphqlOrder(order, hashSecret);
+    const normalized = normalizeGraphqlOrder(order);
     // Look rows up by primary key so the Serializable check locks only this batch.
     const ids = context.deliveryIds;
     await retrySerializationFailures(() => database.$transaction(async (transaction) => {

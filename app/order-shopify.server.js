@@ -2,7 +2,7 @@ import { adminGraphql } from "./shopify/admin-graphql.server.js";
 
 // Keep this selection shared by direct webhook refreshes and reconciliation.
 export const ORDER_FIELDS = `
-  id name checkoutToken createdAt updatedAt processedAt currencyCode presentmentCurrencyCode
+  id name createdAt updatedAt processedAt currencyCode presentmentCurrencyCode
   test cancelledAt displayFinancialStatus fullyPaid
   subtotalPriceSet { shopMoney { amount currencyCode } }
   totalPriceSet { shopMoney { amount currencyCode } }
@@ -19,6 +19,7 @@ export const ORDER_FIELDS = `
       originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
       discountedTotalSet { shopMoney { amount currencyCode } }
       product { id } variant { id } customAttributes { key value }
+      sellingPlan { sellingPlanId }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -53,7 +54,8 @@ export { adminGraphql };
 const LINE_FIELDS = `id quantity requiresShipping
   originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
   discountedTotalSet { shopMoney { amount currencyCode } }
-  product { id } variant { id } customAttributes { key value }`;
+  product { id } variant { id } customAttributes { key value }
+  sellingPlan { sellingPlanId }`;
 const REFUND_LINE_FIELDS = `lineItem { id } subtotalSet { shopMoney { amount currencyCode } }`;
 const TRANSACTION_FIELDS = `id kind status processedAt createdAt amountSet { shopMoney { amount currencyCode } }`;
 

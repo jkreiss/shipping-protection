@@ -48,7 +48,7 @@ the offer takes real customer money.
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress, correct schema, webhook subscriptions, or working checkout. |
 | Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables theft, loss, and damage flags. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) copy advertise loss, theft, and damage in transit. | **Launch blocker.** Align configuration and all customer copy with the benefits approved for the pilot and the product/legal boundary in [AGENTS.md](../AGENTS.md). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
-| Dependency risk | README records unresolved Prisma dependency advisories. This audit did not run a new dependency scan. | Needs current assessment for the release SHA and a recorded remediation or risk decision. |
+| Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`). The remaining production advisories are in the Prisma CLI's config loader only; README records the assessment. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
 ### Settings that need live verification
 
@@ -96,7 +96,6 @@ Confirm these values without copying their contents into logs:
 | `SHOPIFY_APP_URL` | Matches production HTTPS origin and callback configuration; no trailing slash. |
 | `SCOPES` | Matches **production** TOML; changes require the matching Shopify app version and granted installation access. |
 | `DATABASE_URL` | Correct production database, TLS required, Supabase Session pooler on port 5432. Web/worker pool sizes fit the database budget. |
-| `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated production secret, at least 16 characters; stable across web/worker and releases. Preserve securely for recovery. |
 | `NODE_ENV`, `APP_ENV` | Both `production` in production. Staging uses `NODE_ENV=production`, `APP_ENV=staging`. |
 | `PORT` | Matches the web service's domain target; `3000` for the documented setup. |
 | `SENTRY_DSN` | Correct environment-specific server monitoring configuration. |
@@ -122,6 +121,27 @@ Append to the existing `DATABASE_URL` (it already has `?`, so start with `&`):
   Settings**) and raise it if needed, rather than cutting worker loops. Then set
   web `&connection_limit=3`–`4` and worker `&connection_limit=8` with the default
   4 loops, keeping twice the combined limits within the pool size.
+
+**To do: retire the checkout-token hash (noted 2026-10-01).** The app no longer
+reads, fetches, or stores checkout tokens; migration
+`20261002000000_clear_checkout_token_hash` cleared existing hashes but kept the
+nullable `Order.checkoutTokenHash` column, so containers still running the old
+code during that deploy keep working.
+
+- [ ] After that release is live on **both** staging and production, delete
+  `CHECKOUT_TOKEN_HASH_SECRET` from the web and worker Railway variables.
+- [ ] In a later release, remove `checkoutTokenHash` from `prisma/schema.prisma`
+  and add a migration that drops the column.
+
+**To do: narrower access scopes (noted 2026-10-01).** The unused
+`write_metaobjects` and `write_metaobject_definitions` scopes were removed from
+every `shopify.app*.toml`. For staging, then production:
+
+- [ ] Run `npx shopify app deploy --config <env>` so installations drop the
+  scopes (Shopify sends `app/scopes_update`).
+- [ ] Set the Railway `SCOPES` variable on web and worker to
+  `write_products,read_orders,write_publications,write_cart_transforms`.
+  Removing scopes doesn't require merchants to re-approve the app.
 
 ## 4. Staging acceptance and recovery rehearsal
 
@@ -507,14 +527,27 @@ is set; informational performance/cost events are JSON logs.
 | --- | --- | --- |
 | Checkout blocked or incorrect fee | Any confirmed app-related occurrence | Immediate response; contain the offer and inspect the Function/version/configuration. This needs merchant reports and checkout smoke checks as well as backend alerts. |
 | `protection_price_unmatched` | Investigate the first new occurrence; urgent at 3 distinct affected orders in an hour | Sentry alert. Repeated events can result from retries, so group by shop/order and verify Shopify amounts. |
-| `webhook_terminal` | Any new terminal failure | Sentry alert; identify affected order and recover/verify it. |
+| `webhook_terminal` | Any new terminal failure | Sentry alert; identify affected order and recover/verify it. The merchant is not warned about single-order failures, so this alert is the only signal. |
+| `reconciliation_order_failed`, `refund_recheck_failed` | Same order failing on repeated turns | Sentry alert. Reconciliation queued the order as a `RECONCILE` delivery and moved on; its final failure also raises `webhook_terminal`. |
 | `worker_loop_failed`, `reconciliation_failed`, `shopify_graphql_failed` | Repeated failures over 10 minutes, or immediately if ingestion stops | Sentry/log alerts; inspect access, API costs, and database resources. |
 | Oldest pending/processing delivery | Over 5 minutes normally; over 30 minutes after a peak burst ends | Read-only database polling/manual pilot review. No automatic backlog-age monitor exists in the repo. |
-| Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns after 1 hour or a newer terminal failure. |
+| Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns the merchant only when the last completed sync is over 1 hour old. |
 | Worker liveness | No processing while due work exists | Railway process status plus queue/cursor progress. There is no independent worker heartbeat endpoint. |
 | Overview latency | p95 `overview_loaded.durationMs` over 2 seconds at representative volume | Log aggregation or a recorded staging measurement; inspect row counts/database load. |
 | API capacity | Sustained low `currentlyAvailable` with increasing queue age | `shopify_graphql_cost` logs, including requested/actual cost and restore rate; reduce pressure or revise queries. |
 | Refund / attribution quality | New unresolved refund or paid purchase attribution issue | Dashboard notices and tenant-scoped records; verify against Shopify before using totals. |
+
+**To do: Sentry alert rules (noted 2026-10-01, for the final monitoring pass).**
+Every report of one event name (for example `webhook_terminal`) shares a message,
+so Sentry groups them into a single issue. Its default rule notifies only when an
+issue is first created, so after the first failed order later ones would go
+unnoticed.
+
+- [ ] For each Sentry-alerted signal in the table above, create an alert rule on
+  event frequency (for example "more than 0 events in 1 hour", filtered by the
+  event's message), not only "a new issue is created".
+- [ ] Rehearse in staging: force one terminal delivery failure twice, on two
+  different orders, and confirm both notify the operator.
 
 For manual diagnostics, use the production Supabase SQL editor or an approved
 read-only connection. Replace the shop domain with the **verified incident

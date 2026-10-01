@@ -9,6 +9,8 @@ import {
   readShippingProtectionState,
   setupShippingProtection,
 } from "../shipping-protection.server";
+import { UserFacingError } from "../user-facing-error";
+import { reportFailure } from "../observability.server";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -42,6 +44,8 @@ export const action = async ({ request }) => {
       success: "Shipping protection is set up.",
     };
   } catch (error) {
+    const userFacing = error instanceof UserFacingError;
+    if (!userFacing) reportFailure("settings_action_failed", error, { shop: session.shop, intent });
     let state = null;
     try {
       state = await readShippingProtectionState(admin, session.shop);
@@ -51,7 +55,9 @@ export const action = async ({ request }) => {
 
     return {
       state,
-      error: error instanceof Error ? error.message : "Settings could not be saved.",
+      error: userFacing
+        ? error.message
+        : "Something went wrong and your settings weren't saved. Try again in a few minutes.",
     };
   }
 };

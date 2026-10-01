@@ -11,7 +11,6 @@ describe("analytics database scope", () => {
       }) },
       order: { findMany: vi.fn().mockResolvedValue([]) },
       protectionRefund: { findMany: vi.fn().mockResolvedValue([]) },
-      webhookDelivery: { count: vi.fn().mockResolvedValue(0) },
     };
     const admin = { graphql: async () => ({ json: async () => ({ data: {
       shop: { currencyCode: "AUD", ianaTimezone: "Australia/Sydney" },
@@ -42,7 +41,6 @@ describe("analytics database scope", () => {
       protectionPurchase: { findMany: vi.fn().mockResolvedValue([
         { id: "p1", purchasedAt: new Date("2026-09-02T00:00:00Z"), feeAmount: "0.5000", currencyCode: "AUD", order },
       ]) },
-      webhookDelivery: { count: vi.fn().mockResolvedValue(0) },
     };
     const admin = { graphql: async () => ({ json: async () => ({ data: {
       shop: { currencyCode: "AUD", ianaTimezone: "Australia/Sydney" },
@@ -63,7 +61,7 @@ describe("order sync status", () => {
   const admin = { graphql: async () => ({ json: async () => ({ data: {
     shop: { currencyCode: "AUD", ianaTimezone: "Australia/Sydney" },
   } }) }) };
-  function database({ syncedAt, failedSinceSync = 0, cursor = null }) {
+  function database({ syncedAt, cursor = null }) {
     return {
       shop: { findUnique: vi.fn().mockResolvedValue({
         id: "shop-1", orderHistoryStartAt: new Date("2026-08-01T00:00:00Z"),
@@ -71,27 +69,18 @@ describe("order sync status", () => {
       }) },
       order: { findMany: vi.fn().mockResolvedValue([]) },
       protectionRefund: { findMany: vi.fn().mockResolvedValue([]) },
-      webhookDelivery: { count: vi.fn().mockResolvedValue(failedSinceSync) },
     };
   }
   const read = (db) => readAnalytics({ admin, shopDomain: "one.myshopify.com",
     search: new URLSearchParams("range=30"), database: db, now });
 
-  test("is current when the last sync finished recently with no failures since", async () => {
-    const db = database({ syncedAt: new Date("2026-09-30T11:50:00Z") });
-    expect((await read(db)).sync.behind).toBe(false);
-    // Only failures after the last completed sync count; earlier ones were re-checked.
-    expect(db.webhookDelivery.count).toHaveBeenCalledWith({ where: {
-      shopId: "shop-1", status: "FAILED", failedAt: { gte: new Date("2026-09-30T11:50:00Z") },
-    } });
+  // Single orders that fail to store alert the operator, not the merchant.
+  test("is current when the last sync finished recently", async () => {
+    expect((await read(database({ syncedAt: new Date("2026-09-30T11:50:00Z") }))).sync.behind).toBe(false);
   });
 
   test("is behind when the last completed sync is over an hour old", async () => {
     expect((await read(database({ syncedAt: new Date("2026-09-30T10:30:00Z") }))).sync.behind).toBe(true);
-  });
-
-  test("is behind when an order update failed after the last sync", async () => {
-    expect((await read(database({ syncedAt: new Date("2026-09-30T11:50:00Z"), failedSinceSync: 2 }))).sync.behind).toBe(true);
   });
 
   test("is not behind while the first backfill is still running", async () => {

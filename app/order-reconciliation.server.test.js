@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
-import { RECONCILIATION_OVERLAP_MS, reconcileOrders, reconciliationDue } from "./order-reconciliation.server";
+import {
+  MAX_CONSECUTIVE_ORDER_FAILURES, RECONCILIATION_INTERVAL_MS, RECONCILIATION_OVERLAP_MS,
+  reconcileOrders, reconciliationDue,
+} from "./order-reconciliation.server";
 
 const shopDomain = "one.myshopify.com";
 const minute = 60_000;
@@ -38,6 +41,7 @@ function fakeDatabase({ shop = {}, localOrders = [] } = {}) {
   const shopRow = { id: "shop-1", shopDomain, orderReconciliationSince: null, orderReconciliationCursor: null,
     orderReconciliationUntil: null, orderHistoryStartAt: null, ...shop };
   const shopUpdates = [];
+  const queued = [];
   const database = {
     shop: {
       findUnique: async () => ({ ...shopRow }),
@@ -48,9 +52,12 @@ function fakeDatabase({ shop = {}, localOrders = [] } = {}) {
         where.shopId === "shop-1" && where.shopifyOrderId.in.includes(shopifyOrderId)),
     },
     protectionRefund: { findMany: async () => [] },
+    webhookDelivery: {
+      upsert: vi.fn(async ({ create }) => { queued.push(create); return { id: create.webhookId }; }),
+    },
     $transaction: async (run) => run(database),
   };
-  return { database, shopRow, shopUpdates };
+  return { database, shopRow, shopUpdates, queued };
 }
 
 const id = (n) => `gid://shopify/Order/${n}`;
@@ -68,7 +75,7 @@ describe("order reconciliation", () => {
     ] });
     const persist = vi.fn(async () => {});
 
-    const result = await reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" });
+    const result = await reconcileOrders({ admin, shopDomain, database, persist });
 
     expect(fetched).toEqual([id(2), id(3)]);
     expect(persist).toHaveBeenCalledTimes(2);
@@ -79,7 +86,7 @@ describe("order reconciliation", () => {
     const { admin } = fakeAdmin([[{ id: id(1), updatedAt: "2026-09-29T00:00:00Z" }], [{ id: id(2), updatedAt: "2026-09-29T00:01:00Z" }]]);
     const { database, shopUpdates, shopRow } = fakeDatabase();
 
-    await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, hashSecret: "a-dedicated-test-secret" });
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {} });
 
     expect(shopUpdates[0]).toMatchObject({ orderReconciliationCursor: "1" });
     expect(shopUpdates[1]).toMatchObject({ orderReconciliationCursor: null, orderReconciliationUntil: null });
@@ -91,7 +98,7 @@ describe("order reconciliation", () => {
     const { admin, searches } = fakeAdmin([[]]);
     const { database } = fakeDatabase({ shop: { orderReconciliationSince: lastEnd, orderHistoryStartAt: new Date("2026-08-01T00:00:00Z") } });
 
-    await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, hashSecret: "a-dedicated-test-secret" });
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {} });
 
     const since = new Date(lastEnd.getTime() - RECONCILIATION_OVERLAP_MS).toISOString();
     expect(searches[0].query).toContain(`updated_at:>='${since}'`);
@@ -104,18 +111,56 @@ describe("order reconciliation", () => {
       .mockRejectedValueOnce(Object.assign(new Error("write conflict"), { code: "P2034" }))
       .mockResolvedValueOnce(undefined);
 
-    const result = await reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" });
+    const result = await reconcileOrders({ admin, shopDomain, database, persist });
 
     expect(persist).toHaveBeenCalledTimes(2);
     expect(result.complete).toBe(true);
   });
 
-  test("keeps the cursor when an order on the page fails to store", async () => {
+  test("queues an order that can't be stored and keeps reconciling the rest", async () => {
+    const { admin } = fakeAdmin([[
+      { id: id(1), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(2), updatedAt: "2026-09-29T00:01:00Z" },
+      { id: id(3), updatedAt: "2026-09-29T00:02:00Z" },
+    ], [{ id: id(4), updatedAt: "2026-09-29T00:03:00Z" }]]);
+    const { database, shopUpdates, queued } = fakeDatabase();
+    const persist = vi.fn(async (_transaction, _shop, normalized) => {
+      if (normalized.shopifyOrderId === id(2)) throw new Error("bad order data");
+    });
+
+    const result = await reconcileOrders({ admin, shopDomain, database, persist });
+
+    expect(persist.mock.calls.map(([, , order]) => order.shopifyOrderId)).toEqual([id(1), id(2), id(3), id(4)]);
+    expect(queued).toEqual([expect.objectContaining({
+      shopId: "shop-1", shopifyOrderId: id(2), topic: "RECONCILE", status: "PENDING",
+      webhookId: `reconcile:${id(2)}:2026-09-29T00:01:00Z`,
+    })]);
+    expect(result).toMatchObject({ complete: true, ordersFetched: 3, ordersFailed: 1, ordersSkipped: 0 });
+    expect(shopUpdates.at(-1)).toMatchObject({ orderReconciliationCursor: null });
+  });
+
+  test("stops and keeps the cursor when orders keep failing in a row", async () => {
+    const { admin } = fakeAdmin([[
+      { id: id(1), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(2), updatedAt: "2026-09-29T00:01:00Z" },
+      { id: id(3), updatedAt: "2026-09-29T00:02:00Z" },
+    ], [{ id: id(4), updatedAt: "2026-09-29T00:03:00Z" }]]);
+    const { database, shopUpdates } = fakeDatabase();
+    const persist = vi.fn().mockRejectedValue(new Error("shopify down"));
+
+    await expect(reconcileOrders({ admin, shopDomain, database, persist }))
+      .rejects.toThrow("shopify down");
+    expect(persist).toHaveBeenCalledTimes(MAX_CONSECUTIVE_ORDER_FAILURES);
+    expect(shopUpdates).toEqual([]);
+  });
+
+  test("keeps the cursor when a failed order can't be queued", async () => {
     const { admin } = fakeAdmin([[{ id: id(1), updatedAt: "2026-09-29T00:00:00Z" }], [{ id: id(2), updatedAt: "2026-09-29T00:01:00Z" }]]);
     const { database, shopUpdates } = fakeDatabase();
+    database.webhookDelivery.upsert.mockRejectedValue(new Error("database down"));
     const persist = vi.fn().mockRejectedValue(new Error("database down"));
 
-    await expect(reconcileOrders({ admin, shopDomain, database, persist, hashSecret: "a-dedicated-test-secret" }))
+    await expect(reconcileOrders({ admin, shopDomain, database, persist }))
       .rejects.toThrow("database down");
     expect(shopUpdates).toEqual([]);
   });
@@ -124,12 +169,62 @@ describe("order reconciliation", () => {
     const { admin } = fakeAdmin([[{ id: id(1), updatedAt: "2026-09-29T00:00:00Z" }], [{ id: id(2), updatedAt: "2026-09-29T00:01:00Z" }]]);
     const { database, shopRow } = fakeDatabase();
 
-    const first = await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, timeBudgetMs: 0, hashSecret: "a-dedicated-test-secret" });
+    const first = await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, timeBudgetMs: 0 });
     expect(first).toMatchObject({ pages: 1, complete: false });
     expect(shopRow.orderReconciliationCursor).toBe("1");
 
-    const second = await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, hashSecret: "a-dedicated-test-secret" });
+    const second = await reconcileOrders({ admin, shopDomain, database, persist: async () => {} });
     expect(second).toMatchObject({ pages: 1, complete: true });
+  });
+});
+
+describe("pending refund recheck", () => {
+  test("polls only pending refunds, least recently checked first", async () => {
+    const { admin } = fakeAdmin([[]]);
+    const { database } = fakeDatabase();
+    database.protectionRefund.findMany = vi.fn(async () => []);
+    const before = Date.now();
+
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {} });
+
+    const [args] = database.protectionRefund.findMany.mock.calls[0];
+    expect(args).toMatchObject({
+      where: { shopId: "shop-1", status: "PENDING" },
+      orderBy: { updatedAt: "asc" },
+      distinct: ["orderId"],
+      take: 20,
+    });
+    expect(args.where.updatedAt.lt.getTime()).toBeLessThanOrEqual(before - RECONCILIATION_INTERVAL_MS + 1000);
+  });
+
+  test("a recheck that fails moves to the back and doesn't stop the others", async () => {
+    const pending = [
+      { orderId: "order-7", order: { shopifyOrderId: id(7) } },
+      { orderId: "order-8", order: { shopifyOrderId: id(8) } },
+    ];
+    const { admin, fetched } = fakeAdmin([[
+      { id: id(7), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(8), updatedAt: "2026-09-29T00:00:00Z" },
+    ]]);
+    const { database } = fakeDatabase({ localOrders: [
+      { shopifyOrderId: id(7), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+      { shopifyOrderId: id(8), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+    ] });
+    database.protectionRefund.findMany = vi.fn(async () => pending);
+    database.protectionRefund.updateMany = vi.fn(async () => ({ count: 1 }));
+    const persist = vi.fn(async (_transaction, _shop, normalized) => {
+      if (normalized.shopifyOrderId === id(7)) throw new Error("bad order data");
+    });
+
+    const result = await reconcileOrders({ admin, shopDomain, database, persist });
+
+    expect(fetched).toEqual([id(7), id(8)]);
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(database.protectionRefund.updateMany).toHaveBeenCalledWith({
+      where: { shopId: "shop-1", orderId: "order-7", status: "PENDING" },
+      data: { updatedAt: expect.any(Date) },
+    });
+    expect(result.complete).toBe(true);
   });
 });
 
