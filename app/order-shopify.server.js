@@ -2,7 +2,7 @@ import { adminGraphql } from "./shopify/admin-graphql.server.js";
 
 // Keep this selection shared by direct webhook refreshes and reconciliation.
 export const ORDER_FIELDS = `
-  id name checkoutToken createdAt updatedAt processedAt currencyCode presentmentCurrencyCode
+  id name createdAt updatedAt processedAt currencyCode presentmentCurrencyCode
   test cancelledAt displayFinancialStatus fullyPaid
   subtotalPriceSet { shopMoney { amount currencyCode } }
   totalPriceSet { shopMoney { amount currencyCode } }

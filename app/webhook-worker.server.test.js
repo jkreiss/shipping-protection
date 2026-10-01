@@ -26,7 +26,7 @@ function worker({ transactionError }) {
   const batch = { shopId: "shop-1", shopifyOrderId: order.id, leaseToken: "lease-1",
     deliveries: [{ id: "d-1", topic: "ORDERS_PAID", attempts: 8 }, { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2 }] };
   const run = () => processNextDelivery({
-    database, claim: async () => batch, adminForShop: async () => ({ admin }), hashSecret: "a-dedicated-test-secret",
+    database, claim: async () => batch, adminForShop: async () => ({ admin }),
   });
   return { run, updates };
 }

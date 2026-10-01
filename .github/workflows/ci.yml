@@ -24,7 +24,6 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/insurance_test?schema=public
-      CHECKOUT_TOKEN_HASH_SECRET: ci-checkout-token-hash-secret
       VERIFY_ISOLATED_DB: "1"
       CI: true
     steps:

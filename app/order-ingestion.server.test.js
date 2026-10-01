@@ -48,7 +48,6 @@ function normalizedOrder(protectionAttributes = null) {
   return {
     shopifyOrderId: "gid://shopify/Order/1",
     name: "#1",
-    checkoutTokenHash: "hashed",
     shopifyCreatedAt: new Date("2026-09-23T00:00:00Z"),
     shopifyUpdatedAt: new Date("2026-09-23T00:01:00Z"),
     processedAt: new Date("2026-09-23T00:00:30Z"),

@@ -96,7 +96,6 @@ Confirm these values without copying their contents into logs:
 | `SHOPIFY_APP_URL` | Matches production HTTPS origin and callback configuration; no trailing slash. |
 | `SCOPES` | Matches **production** TOML; changes require the matching Shopify app version and granted installation access. |
 | `DATABASE_URL` | Correct production database, TLS required, Supabase Session pooler on port 5432. Web/worker pool sizes fit the database budget. |
-| `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated production secret, at least 16 characters; stable across web/worker and releases. Preserve securely for recovery. |
 | `NODE_ENV`, `APP_ENV` | Both `production` in production. Staging uses `NODE_ENV=production`, `APP_ENV=staging`. |
 | `PORT` | Matches the web service's domain target; `3000` for the documented setup. |
 | `SENTRY_DSN` | Correct environment-specific server monitoring configuration. |
@@ -122,6 +121,17 @@ Append to the existing `DATABASE_URL` (it already has `?`, so start with `&`):
   Settings**) and raise it if needed, rather than cutting worker loops. Then set
   web `&connection_limit=3`–`4` and worker `&connection_limit=8` with the default
   4 loops, keeping twice the combined limits within the pool size.
+
+**To do: retire the checkout-token hash (noted 2026-10-01).** The app no longer
+reads, fetches, or stores checkout tokens; migration
+`20261002000000_clear_checkout_token_hash` cleared existing hashes but kept the
+nullable `Order.checkoutTokenHash` column, so containers still running the old
+code during that deploy keep working.
+
+- [ ] After that release is live on **both** staging and production, delete
+  `CHECKOUT_TOKEN_HASH_SECRET` from the web and worker Railway variables.
+- [ ] In a later release, remove `checkoutTokenHash` from `prisma/schema.prisma`
+  and add a migration that drops the column.
 
 ## 4. Staging acceptance and recovery rehearsal
 

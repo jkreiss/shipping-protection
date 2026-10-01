@@ -192,6 +192,7 @@ model Order {
   shopId               String
   shopifyOrderId       String
   name                 String
+  // Unused and always null; dropped in a follow-up release (see docs/production-readiness.md).
   checkoutTokenHash    String?
   shopifyCreatedAt     DateTime
   shopifyUpdatedAt     DateTime

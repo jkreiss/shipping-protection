@@ -35,8 +35,7 @@ Supabase CLI link does not set `DATABASE_URL` for Prisma. The app stores Shopify
 access tokens in its database, so disable **Integrations → Data API** for this
 project in the Supabase dashboard.
 
-Set `CHECKOUT_TOKEN_HASH_SECRET` to a dedicated random secret. The backend uses
-it to hash checkout tokens before storing their hashes. Then run:
+Then run:
 
 ```shell
 npm run setup
@@ -200,7 +199,6 @@ Transform are Shopify extensions, deployed through Shopify CLI separately.
    | `SHOPIFY_API_SECRET` | Client secret for that app |
    | `SCOPES` | Same comma-separated scopes as `shopify.app.toml` |
    | `DATABASE_URL` | Supabase Session pooler URL, port 5432, with `schema=public&sslmode=require` |
-   | `CHECKOUT_TOKEN_HASH_SECRET` | Dedicated random secret of at least 16 characters |
    | `NODE_ENV` | `production` |
    | `PORT` | `3000`, matching the manually selected domain target port |
    | `APP_ENV` | `staging` or `production` |

@@ -29,8 +29,8 @@ export function reconciliationDue(shop, now = new Date()) {
   return now.getTime() - shop.orderReconciliationSince.getTime() >= RECONCILIATION_INTERVAL_MS;
 }
 
-async function storeOrder(database, persist, shop, order, hashSecret) {
-  const normalized = normalizeGraphqlOrder(assertCompleteOrder(order), hashSecret);
+async function storeOrder(database, persist, shop, order) {
+  const normalized = normalizeGraphqlOrder(assertCompleteOrder(order));
   await retrySerializationFailures(() => database.$transaction(
     (transaction) => persist(transaction, shop, normalized),
     { isolationLevel: "Serializable", timeout: 20_000 },
@@ -42,7 +42,6 @@ export async function reconcileOrders({
   admin,
   shopDomain,
   pageSize = 250,
-  hashSecret = process.env.CHECKOUT_TOKEN_HASH_SECRET,
   database = prisma,
   maxPages = 1000,
   timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
@@ -92,7 +91,7 @@ export async function reconcileOrders({
       // shop: hand it to the worker's retries and keep the window moving.
       try {
         const order = await fetchShopifyOrder(admin, item.id, options);
-        const normalized = await storeOrder(database, persist, shop, order, hashSecret);
+        const normalized = await storeOrder(database, persist, shop, order);
         if (normalized.shopifyUpdatedAt > newestUpdatedAt) newestUpdatedAt = normalized.shopifyUpdatedAt;
         ordersFetched += 1;
         consecutiveFailures = 0;
@@ -138,7 +137,7 @@ export async function reconcileOrders({
   for (const entry of pending) {
     try {
       const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, options);
-      await storeOrder(database, persist, shop, order, hashSecret);
+      await storeOrder(database, persist, shop, order);
     } catch (error) {
       reportFailure("refund_recheck_failed", error, { shopId: shop.id, shopifyOrderId: entry.order.shopifyOrderId });
       // Move it to the back of the queue so one bad order can't hold the front.

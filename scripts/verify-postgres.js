@@ -29,7 +29,7 @@ function graphqlOrder(id, protectedOrder) {
   });
   const total = protectedOrder ? "100.25" : "100.00";
   return {
-    id, name: id.endsWith("9001") ? "#9001" : "#9002", checkoutToken: null,
+    id, name: id.endsWith("9001") ? "#9001" : "#9002",
     createdAt: timestamp.toISOString(), updatedAt: "2026-09-23T01:00:00Z",
     processedAt: timestamp.toISOString(), currencyCode: "AUD", test: true,
     cancelledAt: null, displayFinancialStatus: "PAID", fullyPaid: true,
@@ -89,7 +89,6 @@ function normalizedOrder({ id, name, protectedOrder }) {
   return {
     shopifyOrderId: id,
     name,
-    checkoutTokenHash: null,
     shopifyCreatedAt: timestamp,
     shopifyUpdatedAt: timestamp,
     processedAt: timestamp,
