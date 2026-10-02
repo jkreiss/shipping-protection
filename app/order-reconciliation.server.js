@@ -38,6 +38,9 @@ async function storeOrder(database, persist, shop, order) {
   return normalized;
 }
 
+// onProgress runs after each listing page, order, and refund recheck, so the
+// worker can show a long turn is still moving (the time budget is only checked
+// between pages).
 export async function reconcileOrders({
   admin,
   shopDomain,
@@ -46,6 +49,7 @@ export async function reconcileOrders({
   maxPages = 1000,
   timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
   persist = persistNormalizedOrder,
+  onProgress,
 }) {
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 250) {
     throw new RangeError("Reconciliation page size must be from 1 to 250.");
@@ -76,6 +80,7 @@ export async function reconcileOrders({
       after,
       query: searchWindow(since, until),
     }, options);
+    onProgress?.();
     const connection = data.orders;
     const listed = connection.nodes;
     const local = listed.length ? await database.order.findMany({
@@ -101,6 +106,8 @@ export async function reconcileOrders({
         if (consecutiveFailures >= MAX_CONSECUTIVE_ORDER_FAILURES) throw error;
         await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
         ordersFailed += 1;
+      } finally {
+        onProgress?.();
       }
     }
     ordersListed += listed.length;
@@ -145,6 +152,8 @@ export async function reconcileOrders({
         where: { shopId: shop.id, orderId: entry.orderId, status: "PENDING" },
         data: { updatedAt: new Date() },
       });
+    } finally {
+      onProgress?.();
     }
   }
 

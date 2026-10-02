@@ -82,6 +82,23 @@ describe("order reconciliation", () => {
     expect(result).toMatchObject({ ordersListed: 3, ordersFetched: 2, ordersSkipped: 1, complete: true });
   });
 
+  test("reports progress after each page and each order it tries, so a long turn shows it is alive", async () => {
+    const { admin } = fakeAdmin([[
+      { id: id(1), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(2), updatedAt: "2026-09-29T00:05:00Z" },
+      { id: id(3), updatedAt: "2026-09-29T00:10:00Z" },
+    ]]);
+    const { database } = fakeDatabase({ localOrders: [
+      { shopifyOrderId: id(1), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+    ] });
+    const onProgress = vi.fn();
+
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, onProgress });
+
+    // One listing page, then the two orders that were missing or newer.
+    expect(onProgress).toHaveBeenCalledTimes(3);
+  });
+
   test("saves the cursor after each stored page and closes the window at the end", async () => {
     const { admin } = fakeAdmin([[{ id: id(1), updatedAt: "2026-09-29T00:00:00Z" }], [{ id: id(2), updatedAt: "2026-09-29T00:01:00Z" }]]);
     const { database, shopUpdates, shopRow } = fakeDatabase();
@@ -195,6 +212,28 @@ describe("pending refund recheck", () => {
       take: 20,
     });
     expect(args.where.updatedAt.lt.getTime()).toBeLessThanOrEqual(before - RECONCILIATION_INTERVAL_MS + 1000);
+  });
+
+  test("reports progress after each refund recheck", async () => {
+    const pending = [
+      { orderId: "order-7", order: { shopifyOrderId: id(7) } },
+      { orderId: "order-8", order: { shopifyOrderId: id(8) } },
+    ];
+    const { admin } = fakeAdmin([[
+      { id: id(7), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(8), updatedAt: "2026-09-29T00:00:00Z" },
+    ]]);
+    const { database } = fakeDatabase({ localOrders: [
+      { shopifyOrderId: id(7), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+      { shopifyOrderId: id(8), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+    ] });
+    database.protectionRefund.findMany = vi.fn(async () => pending);
+    const onProgress = vi.fn();
+
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {}, onProgress });
+
+    // One listing page (both orders already stored), then two rechecks.
+    expect(onProgress).toHaveBeenCalledTimes(3);
   });
 
   test("a recheck that fails moves to the back and doesn't stop the others", async () => {

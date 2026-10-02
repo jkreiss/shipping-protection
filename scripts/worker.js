@@ -26,7 +26,8 @@ async function reconcileShop(shop) {
   const started = Date.now();
   try {
     const { admin } = await unauthenticated.admin(shop.shopDomain);
-    const result = await reconcileOrders({ admin, shopDomain: shop.shopDomain });
+    const result = await reconcileOrders({ admin, shopDomain: shop.shopDomain,
+      onProgress: () => workerHeartbeat("reconciliation") });
     reconcileRetryAt.delete(shop.id);
     logEvent("reconciliation_completed", { shopId: shop.id, pages: result.pages,
       ordersListed: result.ordersListed, ordersFetched: result.ordersFetched, ordersFailed: result.ordersFailed, ordersSkipped: result.ordersSkipped,
