@@ -211,7 +211,8 @@ services, deployment branch, commands, and complete per-service variable blocks.
    | `NODE_ENV` | `production` |
    | `PORT` | `3000`, matching the manually selected domain target port |
    | `APP_ENV` | `staging` or `production` |
-   | `SENTRY_DSN` | Environment-specific server error-monitoring DSN; optional locally |
+   | `SENTRY_DSN` | Environment-specific server error-monitoring DSN; optional locally. Prod and staging share one Sentry project (split by `APP_ENV`); a load-test environment must use its own project or none, so it cannot use up production's event quota |
+| `SENTRY_WORKER_MONITOR` | Worker only, optional: slug of a Sentry Cron monitor. The worker checks in about once a minute, and Sentry alerts when check-ins stop. Needs `SENTRY_DSN` |
    | `WORKER_CONCURRENCY` | Worker only, optional: parallel webhook delivery loops, 1 to 16 (default 4) |
 
    Set `&connection_limit=` on `DATABASE_URL` for **both** services. Without
