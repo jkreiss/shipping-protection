@@ -13,6 +13,7 @@
     "start": "react-router-serve ./build/server/index.js",
     "worker": "node scripts/worker.js",
     "load:mock": "node scripts/load/mock-shopify.js",
+    "load:smoke": "node --env-file-if-exists=.env.load-smoke scripts/load/smoke.js",
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",
     "verify:postgres": "node scripts/verify-postgres.js",

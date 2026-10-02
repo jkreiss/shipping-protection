@@ -1,8 +1,9 @@
 # Mock Shopify Admin API
 
 This is the first piece of the isolated load environment: an HTTP mock and an
-environment-gated Admin GraphQL transport. It does not provision infrastructure,
-seed a database, send webhooks, or run the burst/soak scenarios yet.
+environment-gated Admin GraphQL transport. It does not provision infrastructure
+or run the burst/soak scenarios yet. `npm run load:smoke` seeds one fake merchant,
+sends a small signed webhook set, and checks the resulting financial records.
 
 ## Railway setup: three services in the load environment
 
@@ -161,10 +162,9 @@ the explicit value above is deliberately paired with the example pool limits.
 3. Confirm web/worker have the matching mock URL/token and the isolated database
    URL. Missing configuration will fail application startup or the first fetch.
 4. Seed a fake merchant, session, and pricing rule, then send a small signed
-   webhook set and inspect the stored orders/purchases/refunds. **The seeder and
-   webhook sender are not implemented yet**; infrastructure startup alone does
-   not seed tenants or prove ingestion works. The contract below is for those
-   next scripts.
+   webhook set with `npm run load:smoke` as described below. Infrastructure startup
+   alone does not seed tenants or prove ingestion works. The full burst/soak
+   harness is not implemented yet.
 
 Never set mock variables in staging or production: startup rejects them outside
 `APP_ENV=load`. Load mode rejects a missing mock URL/token, avoiding fall-through
@@ -177,10 +177,78 @@ Use `SHOPIFY_ADMIN_MOCK_URL=http://127.0.0.1:4010` on local web/worker processes
 The scripts do not load `.env` automatically; export variables or use Node's
 `--env-file` option with a separate ignored load-only file.
 
-## Dataset and future seed contract
+## Quick smoke test against the deployed environment
+
+Run this from your local repository, with Node 22.12 or later and dependencies
+installed. The smoke command automatically reads the root `.env.load-smoke` file;
+it does not read `.env`. No access to Railway's private mock URL is needed from
+your laptop: the deployed worker makes that request.
+
+1. Set the mock service to `MOCK_SHOPS=1`, `MOCK_ORDERS_PER_SHOP=20`, and all three
+   fault settings to `0`. Deploy those settings. Orders 1, 2, and 10 must exist.
+2. Copy the example and fill in the **load** values:
+
+   ```sh
+   cp scripts/load/smoke.env.example .env.load-smoke
+   ```
+
+   Set `DATABASE_URL` to the isolated Supabase Session pooler URL; the example
+   uses just one additional connection for the local harness. Set
+   `LOAD_SUPABASE_PROJECT_REF` to that same project's reference (the identifier
+   used in the pooler username `postgres.<reference>`). Set `SHOPIFY_APP_URL` to
+   the load web's public HTTPS origin and `SHOPIFY_API_SECRET` to the **exact same
+   dummy secret** as deployed web/worker. Keep `LOAD_SMOKE_CONFIRM=load-only`
+   only after verifying those targets. Leave the file ignored; never commit it.
+3. Generate your local Prisma client if you have just installed dependencies,
+   then run:
+
+   ```sh
+   npx prisma generate
+   npm run load:smoke
+   ```
+
+The command checks web health, refuses a database containing non-load shops,
+then seeds `load-1.myshopify.com`, its dummy offline session, and its pricing
+rule in one transaction. For a newly seeded shop it initializes the reconciliation
+watermark to now, so this smoke test does not start a full historical backfill.
+Existing fake-shop data is preserved; reruns create fresh webhook IDs and check
+the same three order records. An existing fake shop with a pending backfill,
+partial window, or watermark older than ten minutes is refused. Do not run it
+during an active large campaign.
+
+It sends eight signed HTTP deliveries for orders 1, 2, and 10: six unique events
+plus two exact duplicate deliveries, with updated/refund topics arriving before
+paid/create topics. It waits up to 180 seconds for the **deployed worker**, then
+checks the three paid orders, two attributed and correctly priced AUD 2 purchases,
+and one confirmed AUD 2 refund. It reads only these orders when checking financial
+totals, so other reconciled mock orders do not affect the result. Success prints:
+
+```text
+PASS: 3 paid orders, 2 purchases totaling AUD 4, 1 refund totaling AUD 2; 6 unique deliveries processed.
+```
+
+This leaves the fake merchant and records in the isolated database for inspection;
+it does not delete them. It does not test Shopify OAuth, browser dashboard login,
+or the full reconciliation backfill. To test the latter later, deliberately reset
+the fake shop's reconciliation watermark/cursor after verifying dataset dates.
+
+If the command fails:
+
+- HTTP 401: check the web URL and matching dummy Shopify secret.
+- HTTP 500 on receipt: check web logs and migrated tables/database configuration.
+- Worker timeout: check `worker_started`, worker retry logs, the offline session,
+  mock private hostname/port/token, and mock order count. The public web health
+  check alone does not prove worker or mock connectivity.
+- Incorrect purchase/refund result: check that the deployed mock uses the current
+  fixture version and the fake pricing rule still matches it.
+
+`APP_ENV=load` in the local file gates the harness; it does not change Railway's
+environment. Web and worker must already be deployed with their load settings.
+
+## Dataset and seed contract
 
 `dataset.js` exports `shopDomain`, `orderId`, `generatedOrder`, and the protection
-product/variant/rule identifiers for use by the later seeder/sender. Orders are
+product/variant/rule identifiers shared by the smoke test and future load scripts. Orders are
 generated on demand, so a 200,000-order dataset does not occupy server memory.
 Set the same start timestamp and interval for every replica and harness process.
 Choose dates inside the worker's initial 60-day reconciliation window; the final
