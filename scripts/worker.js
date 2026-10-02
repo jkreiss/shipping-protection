@@ -3,7 +3,7 @@ import prisma from "../app/db.server.js";
 import { unauthenticated } from "../app/shopify.server.js";
 import { processNextDelivery, workerConcurrency } from "../app/webhook-worker.server.js";
 import { reconcileOrders, reconciliationDue } from "../app/order-reconciliation.server.js";
-import { logEvent, reportFailure, workerHeartbeat } from "../app/observability.server.js";
+import { expectWorkerLoops, logEvent, reportFailure, workerHeartbeat } from "../app/observability.server.js";
 
 const pollMs = 2_000;
 const reconcileIdleMs = 30_000;
@@ -48,6 +48,7 @@ async function reconciliationPass() {
   let worked = false;
   for (const shop of shops) {
     if (stopping) break;
+    workerHeartbeat("reconciliation");
     if (!reconciliationDue(shop) || (reconcileRetryAt.get(shop.id) ?? 0) > Date.now()) continue;
     worked = true;
     await reconcileShop(shop);
@@ -57,9 +58,9 @@ async function reconciliationPass() {
 
 // Each loop claims one order's queued deliveries at a time; an empty queue
 // makes it wait before polling again. A loop finishes its current batch on SIGTERM.
-async function deliveryLoop() {
+async function deliveryLoop(id) {
   while (!stopping) {
-    workerHeartbeat();
+    workerHeartbeat(`delivery-${id}`);
     try {
       if (await processNextDelivery()) continue;
     } catch (error) {
@@ -71,6 +72,7 @@ async function deliveryLoop() {
 
 async function reconciliationLoop() {
   while (!stopping) {
+    workerHeartbeat("reconciliation");
     let worked = false;
     try {
       worked = await reconciliationPass();
@@ -82,8 +84,9 @@ async function reconciliationLoop() {
 }
 
 logEvent("worker_started", { concurrency });
+expectWorkerLoops(["reconciliation", ...Array.from({ length: concurrency }, (_, id) => `delivery-${id}`)]);
 await Promise.all([
-  ...Array.from({ length: concurrency }, () => deliveryLoop()),
+  ...Array.from({ length: concurrency }, (_, id) => deliveryLoop(id)),
   reconciliationLoop(),
 ]);
 await prisma.$disconnect();

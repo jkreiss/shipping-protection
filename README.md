@@ -212,7 +212,7 @@ services, deployment branch, commands, and complete per-service variable blocks.
    | `PORT` | `3000`, matching the manually selected domain target port |
    | `APP_ENV` | `staging` or `production` |
    | `SENTRY_DSN` | Environment-specific server error-monitoring DSN; optional locally. Prod and staging share one Sentry project (split by `APP_ENV`); a load-test environment must use its own project or none, so it cannot use up production's event quota |
-| `SENTRY_WORKER_MONITOR` | Worker only, optional: slug of a Sentry Cron monitor. The worker checks in about once a minute, and Sentry alerts when check-ins stop. Needs `SENTRY_DSN` |
+| `SENTRY_WORKER_MONITOR` | Worker only, optional: slug of a Sentry Cron monitor. The worker checks in about once a minute while all its loops are running, and Sentry alerts when check-ins stop. Needs `SENTRY_DSN` |
    | `WORKER_CONCURRENCY` | Worker only, optional: parallel webhook delivery loops, 1 to 16 (default 4) |
 
    Set `&connection_limit=` on `DATABASE_URL` for **both** services. Without
@@ -294,6 +294,14 @@ code runs only in the Prisma CLI while it loads this repository's own
 configuration (for example `prisma migrate deploy`); the Prisma client the app
 runs does not include it, and no request input reaches it. npm's suggested fix
 is a Prisma downgrade, so leave it until Prisma ships a patched release.
+
+**To do (no custom domain yet):** once the app has its production domain, create
+a Sentry Uptime monitor on `https://<domain>/healthz` that alerts the operator on
+any non-200 response, and confirm it fires against a stopped staging web service.
+Railway's health check only gates deploys and restarts, so until this exists a
+web outage after deploy goes unnoticed. Set `SENTRY_WORKER_MONITOR` on the worker
+service too, so a dead worker also alerts. See the runbook's
+[monitoring to-do](docs/production-readiness.md).
 
 Railway's [service settings](https://docs.railway.com/services),
 [public networking](https://docs.railway.com/networking/public-networking), and

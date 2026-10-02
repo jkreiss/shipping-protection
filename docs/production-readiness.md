@@ -45,7 +45,7 @@ the offer takes real customer money.
 | Webhook processing | [Worker](../app/webhook-worker.server.js) coalesces up to 100 queued deliveries for one order, has 4 loops by default, 15-minute leases, and at most 8 attempts. | Confirmed in repository. Measure real throughput and restart recovery in staging. |
 | Reconciliation | [Reconciliation](../app/order-reconciliation.server.js) backfills a 60-day window, lists up to 250 orders per page, fetches missing/newer orders, and overlaps successive windows by 10 minutes. | Confirmed in repository. Measure page cost and backfill completion. A 60-second turn is checked between pages; a slow page can take longer. |
 | Dashboard | [Overview reads](../app/analytics.server.js) use stored orders and refunds; they still make a bounded Shopify shop currency/timezone query. `overview_loaded` records duration and row counts. | Confirmed in repository. Measure latency with pilot-sized data. |
-| Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress, correct schema, webhook subscriptions, or working checkout. |
+| Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress (the worker has its own Sentry Cron heartbeat), correct schema, webhook subscriptions, or working checkout. |
 | Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables theft, loss, and damage flags. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) copy advertise loss, theft, and damage in transit. | **Launch blocker.** Align configuration and all customer copy with the benefits approved for the pilot and the product/legal boundary in [AGENTS.md](../AGENTS.md). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
 | Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`). The remaining production advisories are in the Prisma CLI's config loader only; README records the assessment. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
@@ -532,7 +532,8 @@ is set; informational performance/cost events are JSON logs.
 | `worker_loop_failed`, `reconciliation_failed`, `shopify_graphql_failed` | Repeated failures over 10 minutes, or immediately if ingestion stops | Sentry/log alerts; inspect access, API costs, and database resources. |
 | Oldest pending/processing delivery | Over 5 minutes normally; over 30 minutes after a peak burst ends | Read-only database polling/manual pilot review. No automatic backlog-age monitor exists in the repo. |
 | Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns the merchant only when the last completed sync is over 1 hour old. |
-| Worker liveness | No processing while due work exists | Railway process status plus queue/cursor progress. There is no independent worker heartbeat endpoint. |
+| Worker liveness | Sentry Cron monitor misses check-ins (about 10 minutes) | `SENTRY_WORKER_MONITOR` on the worker service. The worker checks in about once a minute, but only while every delivery loop and the reconciliation loop have ticked in the last 3 minutes, so one hung loop is caught. It cannot see a loop that is running but making no progress; for that use queue/cursor progress below. |
+| Web uptime | `/healthz` fails (503 or no response) | Sentry Uptime Monitoring (or another external pinger) on `https://<web domain>/healthz`. Railway's health check only gates deploys and restarts. |
 | Overview latency | p95 `overview_loaded.durationMs` over 2 seconds at representative volume | Log aggregation or a recorded staging measurement; inspect row counts/database load. |
 | API capacity | Sustained low `currentlyAvailable` with increasing queue age | `shopify_graphql_cost` logs, including requested/actual cost and restore rate; reduce pressure or revise queries. |
 | Refund / attribution quality | New unresolved refund or paid purchase attribution issue | Dashboard notices and tenant-scoped records; verify against Shopify before using totals. |
@@ -546,6 +547,11 @@ unnoticed.
 - [ ] For each Sentry-alerted signal in the table above, create an alert rule on
   event frequency (for example "more than 0 events in 1 hour", filtered by the
   event's message), not only "a new issue is created".
+- [ ] Confirm `SENTRY_WORKER_MONITOR` is set on the production worker service to
+  the Cron monitor's slug, then stop the worker in staging and confirm the missed
+  check-in alert reaches the operator.
+- [ ] Confirm the Sentry Uptime monitor on `/healthz` alerts the operator (for
+  example by pointing a staging monitor at a stopped web service).
 - [ ] Rehearse in staging: force one terminal delivery failure twice, on two
   different orders, and confirm both notify the operator.
 

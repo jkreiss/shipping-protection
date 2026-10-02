@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import process from "node:process";
 import * as Sentry from "@sentry/node";
-import { failureCode, reportFailure, scrubEvent, sentryOptions, workerHeartbeat } from "./observability.server.js";
+import { failureCode, reportFailure, scrubEvent, sentryOptions, expectWorkerLoops, workerHeartbeat } from "./observability.server.js";
 
 vi.mock("@sentry/node", () => ({ init: vi.fn(), captureMessage: vi.fn(), captureCheckIn: vi.fn() }));
 
@@ -106,22 +106,40 @@ describe("Sentry events", () => {
 
 describe("worker heartbeat", () => {
   const env = { SENTRY_DSN: "https://dsn", SENTRY_WORKER_MONITOR: "worker-loop" };
+  const loops = ["delivery-0", "reconciliation"];
 
   test("stays off unless a DSN and monitor slug are set", () => {
-    expect(workerHeartbeat(10_000_000, {})).toBe(false);
-    expect(workerHeartbeat(10_000_000, { SENTRY_DSN: "https://dsn" })).toBe(false);
-    expect(workerHeartbeat(10_000_000, { SENTRY_WORKER_MONITOR: "worker-loop" })).toBe(false);
+    expectWorkerLoops(loops, 10_000_000);
+    expect(workerHeartbeat("delivery-0", 10_000_000, {})).toBe(false);
+    expect(workerHeartbeat("delivery-0", 10_000_000, { SENTRY_DSN: "https://dsn" })).toBe(false);
+    expect(workerHeartbeat("delivery-0", 10_000_000, { SENTRY_WORKER_MONITOR: "worker-loop" })).toBe(false);
     expect(Sentry.captureCheckIn).not.toHaveBeenCalled();
   });
 
-  test("checks in at most once a minute", () => {
-    expect(workerHeartbeat(20_000_000, env)).toBe(true);
-    expect(workerHeartbeat(20_000_000 + 59_000, env)).toBe(false);
-    expect(workerHeartbeat(20_000_000 + 60_000, env)).toBe(true);
+  test("checks in at most once a minute while every loop is alive", () => {
+    expectWorkerLoops(loops, 20_000_000);
+    expect(workerHeartbeat("delivery-0", 20_000_000, env)).toBe(true);
+    expect(workerHeartbeat("reconciliation", 20_000_000 + 59_000, env)).toBe(false);
+    expect(workerHeartbeat("delivery-0", 20_000_000 + 60_000, env)).toBe(true);
     expect(Sentry.captureCheckIn).toHaveBeenCalledTimes(2);
     expect(Sentry.captureCheckIn).toHaveBeenCalledWith(
       { monitorSlug: "worker-loop", status: "ok" },
       expect.objectContaining({ schedule: { type: "interval", value: 5, unit: "minute" } }),
     );
+  });
+
+  test("stops checking in when a loop that was running goes quiet", () => {
+    expectWorkerLoops(loops, 30_000_000);
+    expect(workerHeartbeat("reconciliation", 30_000_000, env)).toBe(true);
+    // Only the delivery loop keeps ticking; the reconciliation loop is hung.
+    expect(workerHeartbeat("delivery-0", 30_000_000 + 120_000, env)).toBe(true);
+    expect(workerHeartbeat("delivery-0", 30_000_000 + 4 * 60_000, env)).toBe(false);
+    expect(Sentry.captureCheckIn).toHaveBeenCalledTimes(2);
+  });
+
+  test("stops checking in when a loop never starts", () => {
+    expectWorkerLoops(loops, 40_000_000);
+    expect(workerHeartbeat("delivery-0", 40_000_000 + 4 * 60_000, env)).toBe(false);
+    expect(Sentry.captureCheckIn).not.toHaveBeenCalled();
   });
 });

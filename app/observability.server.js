@@ -29,12 +29,25 @@ export function sentryOptions(env = process.env) {
 if (process.env.SENTRY_DSN) Sentry.init(sentryOptions());
 
 // Optional liveness signal for the worker: set SENTRY_WORKER_MONITOR to a Sentry
-// Cron monitor slug and Sentry alerts when check-ins stop arriving.
+// Cron monitor slug and Sentry alerts when check-ins stop arriving. Each worker
+// loop reports in, and the check-in is sent only while every expected loop has
+// done so recently, so one hung loop silences it even if the others keep going.
 const HEARTBEAT_EVERY_MS = 60_000;
+// A reconciliation turn on one shop is time-boxed to a minute; allow a few.
+const LOOP_STALE_MS = 3 * 60_000;
+const loopSeen = new Map();
 let lastHeartbeat = 0;
-export function workerHeartbeat(now = Date.now(), env = process.env) {
+
+export function expectWorkerLoops(names, now = Date.now()) {
+  loopSeen.clear();
+  for (const name of names) loopSeen.set(name, now);
+}
+
+export function workerHeartbeat(loop, now = Date.now(), env = process.env) {
+  loopSeen.set(loop, now);
   const monitorSlug = env.SENTRY_WORKER_MONITOR;
   if (!env.SENTRY_DSN || !monitorSlug || now - lastHeartbeat < HEARTBEAT_EVERY_MS) return false;
+  for (const seen of loopSeen.values()) if (now - seen > LOOP_STALE_MS) return false;
   lastHeartbeat = now;
   Sentry.captureCheckIn(
     { monitorSlug, status: "ok" },
