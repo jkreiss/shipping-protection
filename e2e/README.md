@@ -11,25 +11,23 @@ and disables retries. A full successful run places three test orders, refunds
 the first protection fee, and restores the original protection percentage.
 Test orders and their financial records remain available for inspection.
 
-## Verification status — 1 October 2026
+## Verification status — 2 October 2026
 
-The read-only staging login, fixture products, physical-only discount, and
-saved Shopify sign-in have been prepared locally. The Admin Settings test
-and all four desktop checkout cases passed in live runs. The offline safety
+The complete live suite passed once against the staging store: all 10 tests,
+including purchase snapshots, a native protection-fee refund, Overview
+financial deltas, and mobile checkout (about 16 minutes). The offline safety
 and recovery tests pass with the existing Vitest suite.
 
-The complete live suite has **not** passed yet. The first payment submission
-displayed a network error; its checkout request returned HTTP 401 and
-redirected to the storefront password page. No paid order from that run was
-ingested. Purchase snapshots, native refunds, Overview financial deltas,
-mobile checkout, and a complete repeated run still need live verification.
-The mobile summary selector was updated after inspecting Shopify's current
-controls; its rerun then stopped at the protection-health preflight.
-The latest Settings check showed protection **Not active**, with its variant
-failing the required $0.00, taxable, non-shipping configuration check. The
-original 0.25% rate is restored and no recovery journal remains. Resolve the
-staging protection setup and storefront authentication before rerunning the
-financial and mobile tests.
+A second complete run, to confirm that retained orders and rate history do not
+affect the results, is still to be done before production. Each run places
+three more test orders and leaves them in the store.
+
+Failures during setup were test-side: Shopify's mobile checkout renders the
+order summary twice, Admin's order search can lag a new order, the refund page
+does not expose line items as table rows and hides its button text from
+`innerText`, and Overview totals are compared in whole cents. If a live check
+fails after Shopify changes its markup, inspect the failure trace and update
+the shared helpers before changing the assertions' intent.
 
 Keep the failing tests enabled. Do not mark financial coverage as passing,
 retry payment automatically, or substitute database writes for native orders.
