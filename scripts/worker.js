@@ -3,7 +3,7 @@ import prisma from "../app/db.server.js";
 import { unauthenticated } from "../app/shopify.server.js";
 import { processNextDelivery, workerConcurrency } from "../app/webhook-worker.server.js";
 import { reconcileOrders, reconciliationDue } from "../app/order-reconciliation.server.js";
-import { logEvent, reportFailure } from "../app/observability.server.js";
+import { logEvent, reportFailure, workerHeartbeat } from "../app/observability.server.js";
 
 const pollMs = 2_000;
 const reconcileIdleMs = 30_000;
@@ -59,6 +59,7 @@ async function reconciliationPass() {
 // makes it wait before polling again. A loop finishes its current batch on SIGTERM.
 async function deliveryLoop() {
   while (!stopping) {
+    workerHeartbeat();
     try {
       if (await processNextDelivery()) continue;
     } catch (error) {
