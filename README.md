@@ -317,6 +317,20 @@ explains the separate app configuration deployment.
    npx shopify app deploy --config staging
    ```
 
+### Draft changelogs
+
+Every push to `main` creates or updates one **Next release** draft in GitHub
+Releases. The notes include non-merge commits since the most recently published
+stable release, including direct pushes and commits from merged branches. Before
+the first published release, they include the full commit history. You can also
+run **Generate Draft Changelog** manually from the Actions tab on `main`.
+
+After the corresponding commit has passed production checks, review the draft,
+change its temporary `changelog-draft-*` tag to your release version (for example,
+`v0.1.0`), and publish it. The next push starts a new draft from that published
+tag. Automated updates regenerate the draft notes, so make final copy edits
+when publishing.
+
 ### Release to production
 
 Work on `main`. Every push to `main` deploys to staging. Production deploys
