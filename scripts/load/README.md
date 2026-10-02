@@ -179,13 +179,46 @@ The scripts do not load `.env` automatically; export variables or use Node's
 
 ## Quick smoke test against the deployed environment
 
+### What runs where
+
+The Railway mock defines the available commerce orders. The local smoke command
+seeds application configuration and sends webhook notifications; it does not
+create or change the mock's orders. The deployed worker receives those
+notifications through the inbox and fetches the orders from the mock.
+
+| Component | Job in this test |
+| --- | --- |
+| Railway `shopify-mock` | Makes orders 1–20 available for `load-1.myshopify.com`, with timestamps, prices, payments, and refunds |
+| Local `npm run load:smoke` | Seeds the fake merchant/session/pricing rule, sends notifications for orders 1, 2, and 10, then checks stored results |
+| Railway web | Verifies each notification's signature and stores its delivery in the inbox |
+| Railway worker | Fetches order data from the mock and persists orders, purchases, and refunds to Supabase |
+
+For example, `MOCK_ORDERS_PER_SHOP=5` will fail this smoke test because order 10
+does not exist. `MOCK_START_AT`/`MOCK_INTERVAL_MS` control order timestamps, while
+latency and fault settings control the responses the worker receives. The local
+test selects which of those available orders to notify the app about.
+
+### Run the test from your local terminal
+
 Run this from your local repository, with Node 22.12 or later and dependencies
 installed. The smoke command automatically reads the root `.env.load-smoke` file;
 it does not read `.env`. No access to Railway's private mock URL is needed from
 your laptop: the deployed worker makes that request.
 
-1. Set the mock service to `MOCK_SHOPS=1`, `MOCK_ORDERS_PER_SHOP=20`, and all three
-   fault settings to `0`. Deploy those settings. Orders 1, 2, and 10 must exist.
+1. In the Railway **mock service**, set these values, deploy them, and wait until
+   the web, worker, and mock deployments have finished successfully:
+
+   ```dotenv
+   MOCK_SHOPS=1
+   MOCK_ORDERS_PER_SHOP=20
+   MOCK_HTTP429_EVERY=0
+   MOCK_HTTP500_EVERY=0
+   MOCK_THROTTLE_EVERY=0
+   ```
+
+   Keep the remaining service variables from the setup blocks above. The mock
+   must contain orders 1, 2, and 10. Your laptop does not need to run a second
+   mock server or worker.
 2. Copy the example and fill in the **load** values:
 
    ```sh
@@ -199,6 +232,19 @@ your laptop: the deployed worker makes that request.
    the load web's public HTTPS origin and `SHOPIFY_API_SECRET` to the **exact same
    dummy secret** as deployed web/worker. Keep `LOAD_SMOKE_CONFIRM=load-only`
    only after verifying those targets. Leave the file ignored; never commit it.
+
+   | Local variable | Value to enter |
+   | --- | --- |
+   | `APP_ENV` | Keep `load` |
+   | `LOAD_SMOKE_CONFIRM` | Keep `load-only` after checking the targets |
+   | `LOAD_SUPABASE_PROJECT_REF` | Your isolated Supabase project reference |
+   | `DATABASE_URL` | That project's Session pooler URL, with the password URL-encoded and `connection_limit=1` |
+   | `SHOPIFY_APP_URL` | The load web's public HTTPS origin, without a trailing slash |
+   | `SHOPIFY_API_SECRET` | The exact dummy secret configured on Railway web/worker |
+   | `SCOPES` | Keep the example's scopes if Railway uses the setup above; otherwise match Railway |
+
+   Do not put the mock's private URL or bearer token in this local file; the
+   deployed worker already has those variables.
 3. Generate your local Prisma client if you have just installed dependencies,
    then run:
 
@@ -206,6 +252,8 @@ your laptop: the deployed worker makes that request.
    npx prisma generate
    npm run load:smoke
    ```
+
+### Expected results and troubleshooting
 
 The command checks web health, refuses a database containing non-load shops,
 then seeds `load-1.myshopify.com`, its dummy offline session, and its pricing
