@@ -39,7 +39,22 @@ function fakeAdmin(responses) {
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+
+describe("load environment isolation", () => {
+  test("refuses an override outside the load environment", async () => {
+    vi.stubEnv("APP_ENV", "production");
+    vi.stubEnv("SHOPIFY_ADMIN_MOCK_URL", "http://localhost:4010");
+    const admin = fakeAdmin([{ data: { shop: { name: "Real" } } }]);
+    await expect(adminGraphql(admin, QUERY, {}, { shop: "load-1.myshopify.com" })).rejects.toThrow(/load/);
+  });
+
+  test("load mode without a mock never falls through to Shopify", async () => {
+    vi.stubEnv("APP_ENV", "load");
+    vi.stubEnv("SHOPIFY_ADMIN_MOCK_URL", "");
+    await expect(adminGraphql(fakeAdmin([{ data: {} }]), QUERY)).rejects.toThrow(/MOCK_URL/);
+  });
+});
 
 describe("adminGraphql throttling", () => {
   test("waits for the bucket to refill and retries a throttled query", async () => {

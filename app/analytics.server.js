@@ -23,7 +23,7 @@ function databaseRange(range) {
 export async function readAnalytics({ admin, shopDomain, search, database = prisma, now = new Date() }) {
   const shop = await database.shop.findUnique({ where: { shopDomain } });
   if (!shop) throw new Error("The authenticated shop is not installed.");
-  const data = await adminGraphql(admin, SHOP_QUERY);
+  const data = await adminGraphql(admin, SHOP_QUERY, {}, { shop: shopDomain });
   const { currencyCode, ianaTimezone } = data.shop;
   const range = analyticsRange(search, ianaTimezone);
   const includeTest = search.get("test") === "1";

@@ -1,4 +1,5 @@
 import { logEvent, reportFailure } from "../observability.server.js";
+import { loadAdminConfig, loadAdminGraphql } from "./load-admin.server.js";
 
 const MAX_THROTTLE_RETRIES = 3;
 const MAX_WAIT_MS = 30_000;
@@ -54,11 +55,14 @@ async function waitForShop(shop, sleep) {
 export async function adminGraphql(admin, query, variables = {}, { shop, sleep = defaultSleep } = {}) {
   const operation = query.match(/\b(?:query|mutation)\s+([A-Za-z_][A-Za-z_0-9]*)/)?.[1] ?? "anonymous";
   try {
+    const mock = loadAdminConfig();
     for (let attempt = 0; ; attempt += 1) {
       await waitForShop(shop, sleep);
       let payload;
       try {
-        const response = await admin.graphql(query, { variables });
+        const response = mock
+          ? await loadAdminGraphql(mock, shop, query, variables)
+          : await admin.graphql(query, { variables });
         payload = await response.json();
       } catch (error) {
         if (!isThrottled(error) || attempt >= MAX_THROTTLE_RETRIES) throw error;

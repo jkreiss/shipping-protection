@@ -6,6 +6,10 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server.js";
+import { loadAdminConfig } from "./shopify/load-admin.server.js";
+
+// Reject a misconfigured load/production deployment before serving requests.
+loadAdminConfig();
 
 class ShopAwareSessionStorage {
   constructor(database) {

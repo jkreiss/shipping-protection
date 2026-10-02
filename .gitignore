@@ -29,6 +29,7 @@ node_modules/
 database.sqlite*
 
 # Tool output
+.load-results/
 coverage/
 *.log
 *.tsbuildinfo
