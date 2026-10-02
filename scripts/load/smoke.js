@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import process from "node:process";
 import { orderId, PROTECTION_PRODUCT_ID, PROTECTION_VARIANT_ID, PROTECTION_RULE_ID, shopDomain } from "./dataset.js";
 
-class SmokeError extends Error {}
+export class SmokeError extends Error {}
 const requireCheck = (condition, message) => { if (!condition) throw new SmokeError(message); };
 const IDS = [1, 2, 10];
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,7 +25,7 @@ export function smokeConfig(env = process.env) {
 }
 
 export function signedDelivery(config, topic, id, webhookId) {
-  const payload = topic === "refunds/create" ? { id: 10, order_id: id } : { id, admin_graphql_api_id: orderId(id) };
+  const payload = topic === "refunds/create" ? { id, order_id: id } : { id, admin_graphql_api_id: orderId(id) };
   const body = JSON.stringify(payload);
   return { url: `${config.origin}/webhooks/${topic}`, options: {
     method: "POST", body, redirect: "error", signal: AbortSignal.timeout(30_000),
@@ -65,15 +65,17 @@ export function assertSmokeShopReady(shop, now) {
     "Existing fake shop has a backfill or reconciliation window pending; finish that campaign before running a quick smoke test.");
 }
 
-async function seed(database, config) {
+export async function seedLoadShop(database, config, { fresh = false, watermark = new Date() } = {}) {
   // A fresh isolated database may contain earlier load fixtures, but no real shops.
   const realShop = await database.shop.findFirst({ where: { NOT: { shopDomain: { startsWith: "load-" } } }, select: { id: true } });
   requireCheck(!realShop, "Database contains non-load shops; refusing to seed.");
   return database.$transaction(async (tx) => {
+    requireCheck(!fresh || !await tx.shop.findUnique({ where: { shopDomain: config.shop } }),
+      "Campaign requires fresh shops. Choose an unused LOAD_SHOP_START; existing data is preserved.");
     const now = new Date();
     const shop = await tx.shop.upsert({ where: { shopDomain: config.shop },
       // Avoid triggering a potentially large initial backfill during this quick test.
-      create: { shopDomain: config.shop, orderReconciliationSince: now }, update: {} });
+      create: { shopDomain: config.shop, orderReconciliationSince: watermark }, update: {} });
     assertSmokeShopReady(shop, now);
     const effectiveAt = new Date("2000-01-01T00:00:00Z");
     const rule = await tx.pricingRule.upsert({ where: { shopId_ruleId: { shopId: shop.id, ruleId: PROTECTION_RULE_ID } },
@@ -94,7 +96,7 @@ async function seed(database, config) {
 export async function runSmoke(database, config) {
   const health = await fetch(`${config.origin}/healthz`, { redirect: "error", signal: AbortSignal.timeout(30_000) });
   requireCheck(health.ok, `Load web health check returned HTTP ${health.status}.`);
-  const shop = await seed(database, config);
+  const shop = await seedLoadShop(database, config);
   process.stdout.write("Seeded load-1.myshopify.com and its dummy offline session/pricing rule.\n");
   const run = `smoke-${randomUUID()}`;
   const events = [["orders/paid", 1], ["orders/updated", 2], ["refunds/create", 10],

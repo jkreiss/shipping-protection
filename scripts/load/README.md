@@ -1,9 +1,9 @@
 # Mock Shopify Admin API
 
 This is the first piece of the isolated load environment: an HTTP mock and an
-environment-gated Admin GraphQL transport. It does not provision infrastructure
-or run the burst/soak scenarios yet. `npm run load:smoke` seeds one fake merchant,
-sends a small signed webhook set, and checks the resulting financial records.
+environment-gated Admin GraphQL transport, with smoke, burst, and reconciliation
+harnesses. It does not provision infrastructure. `npm run load:smoke` seeds one
+fake merchant, sends a small signed webhook set, and checks the resulting records.
 
 ## Railway setup: three services in the load environment
 
@@ -163,8 +163,8 @@ the explicit value above is deliberately paired with the example pool limits.
    URL. Missing configuration will fail application startup or the first fetch.
 4. Seed a fake merchant, session, and pricing rule, then send a small signed
    webhook set with `npm run load:smoke` as described below. Infrastructure startup
-   alone does not seed tenants or prove ingestion works. The full burst/soak
-   harness is not implemented yet.
+   alone does not seed tenants or prove ingestion works. Run the burst and
+   reconciliation scenarios below next. A timed soak harness is not implemented.
 
 Never set mock variables in staging or production: startup rejects them outside
 `APP_ENV=load`. Load mode rejects a missing mock URL/token, avoiding fall-through
@@ -277,8 +277,7 @@ PASS: 3 paid orders, 2 purchases totaling AUD 4, 1 refund totaling AUD 2; 6 uniq
 
 This leaves the fake merchant and records in the isolated database for inspection;
 it does not delete them. It does not test Shopify OAuth, browser dashboard login,
-or the full reconciliation backfill. To test the latter later, deliberately reset
-the fake shop's reconciliation watermark/cursor after verifying dataset dates.
+or the full reconciliation backfill. Use `load:reconcile` below for that test.
 
 If the command fails:
 
@@ -292,6 +291,126 @@ If the command fails:
 
 `APP_ENV=load` in the local file gates the harness; it does not change Railway's
 environment. Web and worker must already be deployed with their load settings.
+
+## Burst and reconciliation tests
+
+Run these **locally**, against the deployed web/worker/mock and isolated Supabase
+database, using the same `.env.load-smoke` credentials as the passing smoke test.
+Deploy the updated `load-testing` commit to all three services first.
+These commands seed fresh shops and retain their data. They refuse existing shops;
+for subsequent campaigns choose an unused `LOAD_SHOP_START`. Shop 1 is reserved
+for smoke. Do not run campaigns concurrently or change mock settings mid-run.
+
+### First small runs
+
+In **Railway's mock service**, set and deploy:
+
+```dotenv
+MOCK_SHOPS=3
+MOCK_ORDERS_PER_SHOP=20
+MOCK_HTTP429_EVERY=0
+MOCK_HTTP500_EVERY=0
+MOCK_THROTTLE_EVERY=0
+```
+
+Keep `MOCK_START_AT` within the last 59 days and all generated dates in the past.
+Add these values to your **local `.env.load-smoke`**:
+
+```dotenv
+LOAD_ORDERS_PER_SHOP=20
+LOAD_SHOPS=1
+LOAD_CONCURRENCY=8
+LOAD_TIMEOUT_SECONDS=600
+# Copy the exact deployed MOCK_START_AT and MOCK_INTERVAL_MS values:
+LOAD_MOCK_START_AT=2026-09-01T00:00:00.000Z
+LOAD_MOCK_INTERVAL_MS=1000
+```
+
+Update the example date to match your deployed mock. Then run:
+
+```sh
+LOAD_SHOP_START=2 npm run load:burst
+LOAD_SHOP_START=3 npm run load:reconcile
+```
+
+The burst sends **44 HTTP deliveries, 42 unique events** for 20 orders: it submits
+updated before paid, refunds before paid on every tenth order, plus exact paid
+duplicates. Concurrent HTTP requests make actual arrival and processing order
+variable; the exact financial set must hold regardless of that order.
+It pauses discovery for its shops with a future reconciliation watermark, so only
+webhook processing can populate them. It waits for every unique event to be
+processed and checks exactly 20 paid orders, 10 purchases (AUD 20), and 2 confirmed
+refunds (AUD 4). It leaves those shops' future watermark in place for inspection.
+
+Reconciliation seeds shop 3, sends **no webhooks**, and enables the worker's normal
+initial 60-day discovery. It waits for the completed window and queued refreshes,
+then checks the same exact financial set. It resets discovery and repeats the
+scan, checking again that no orders, purchases, or refunds were double-counted.
+Existing order versions can be skipped on the second scan, as in normal operation.
+
+For reconciliation, `LOAD_ORDERS_PER_SHOP` must equal the deployed
+`MOCK_ORDERS_PER_SHOP`; otherwise the expected complete set will differ. For burst
+it may be smaller, but never larger. Both need `MOCK_SHOPS` at least
+`LOAD_SHOP_START + LOAD_SHOPS - 1`. The local date values validate the planned
+window; they do not reconfigure or inspect Railway's private mock. Confirm they
+match in Railway before running.
+
+### Larger campaigns
+
+After the small runs pass, use fresh shops. For roughly **22,000 burst deliveries**,
+set the Railway mock to `MOCK_SHOPS=4`, `MOCK_ORDERS_PER_SHOP=10000`, keep all dates
+in range, and redeploy. Then:
+
+```sh
+LOAD_SHOP_START=4 LOAD_ORDERS_PER_SHOP=10000 LOAD_TIMEOUT_SECONDS=7200 npm run load:burst
+```
+
+The sender issues requests as quickly as the configured concurrency permits;
+actual submission duration is measured, so confirm it fits your peak-day target.
+Worker drain can take substantially longer, depending on mock latency, retries,
+and `WORKER_CONCURRENCY`. The timeout covers seeding, submission, and worker waits.
+Final record verification runs afterward and can add time for large datasets.
+
+For a **2 million order reconciliation** across 10 fresh merchants, set Railway
+mock `MOCK_SHOPS=14`, `MOCK_ORDERS_PER_SHOP=200000`; set timestamps so the final
+order is still in the past. Then:
+
+```sh
+LOAD_SHOP_START=5 LOAD_SHOPS=10 LOAD_ORDERS_PER_SHOP=200000 LOAD_TIMEOUT_SECONDS=86400 npm run load:reconcile
+```
+
+This is a large workload with two discovery scans and full verification after
+each. It may exceed 24 hours with the current single reconciliation loop and
+100–200 ms mock latency. Start with smaller sizes to estimate throughput. Configure
+faults in Railway only after a clean baseline passes, for example 429 every 101,
+500 every 211, and GraphQL throttle every 53 requests. Retry/backoff is exercised
+by the actual deployed worker.
+
+### Reports, limits, and retained data
+
+Each campaign prints progress and saves a secret-free JSON report under ignored
+`.load-results/`. It records pass/fail, selected shops, exact verified totals,
+submission and post-submission drain time (burst), both scan durations
+(reconciliation), HTTP attempts/retries, maximum HTTP latency, and a bounded
+latency histogram. Histogram bucket `i` is an upper bound of `2 ** i` milliseconds.
+Backlog is sampled every five seconds during worker waits; the reported maximum
+is an observed value, and burst sampling begins after submission.
+
+Verification reads 500 orders per page and checks each record's tenant, payment,
+protection attribution/pricing, amount/currency, and refund linkage. Database
+uniqueness plus exact counts and ID bounds check the complete expected set without
+holding millions of orders in local memory. This measures fixture correctness and
+worker throughput. Record Railway worker memory/CPU and Supabase connection counts
+alongside the report; those provider metrics and browser `overview_loaded` timing
+are not collected by these commands. Real Shopify cost limits still need a pilot.
+
+On failure, the command exits nonzero and retains seeded shops/inbox/order records.
+Inspect Railway logs and the report. A rerun must select unused shops (and increase
+`MOCK_SHOPS` accordingly); it never deletes financial records or resumes an old
+campaign. An interrupted reconciliation may continue in Railway; let it finish or
+pause the load worker before starting another campaign. Delete the isolated load
+infrastructure after your campaign when ready; these scripts do not provision or
+tear it down.
 
 ## Dataset and seed contract
 
