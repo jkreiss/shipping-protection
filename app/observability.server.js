@@ -78,3 +78,12 @@ export function reportFailure(event, error, fields = {}) {
     Sentry.captureMessage(event, { level: "error", tags: { code, errorName: name, ...fields } });
   }
 }
+
+// An operator alert for a state that is not an exception, such as a sync that
+// has fallen behind. Sent at error level so the same alert rules apply.
+export function reportCondition(event, fields = {}) {
+  process.stderr.write(`${JSON.stringify({ level: "error", event, at: new Date().toISOString(), ...fields })}\n`);
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureMessage(event, { level: "error", tags: { ...fields } });
+  }
+}
