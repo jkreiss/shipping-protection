@@ -12,6 +12,9 @@ const BACKFILL_MS = 60 * 86400000;
 // so the overlap costs only the listing.
 export const RECONCILIATION_OVERLAP_MS = 10 * 60_000;
 export const RECONCILIATION_INTERVAL_MS = 10 * 60_000;
+// Alert earlier than the merchant-facing banner, which waits an hour.
+export const SYNC_BEHIND_MS = 30 * 60_000;
+export const SYNC_BEHIND_REPORT_EVERY_MS = 10 * 60_000;
 const DEFAULT_TIME_BUDGET_MS = 60_000;
 // This many failed orders in a row means Shopify or the database is down, not
 // that the orders are bad: stop and retry the page rather than queue them all.
@@ -27,6 +30,31 @@ function searchWindow(since, until) {
 export function reconciliationDue(shop, now = new Date()) {
   if (!shop.orderReconciliationSince || shop.orderReconciliationCursor) return true;
   return now.getTime() - shop.orderReconciliationSince.getTime() >= RECONCILIATION_INTERVAL_MS;
+}
+
+// Whole minutes since the shop's last completed sync window, once that is past
+// the alert threshold; null while the shop is current or has no window yet.
+export function syncBehindMinutes(shop, now = new Date()) {
+  if (!shop.orderReconciliationSince) return null;
+  const behindMs = now.getTime() - shop.orderReconciliationSince.getTime();
+  return behindMs > SYNC_BEHIND_MS ? Math.floor(behindMs / 60_000) : null;
+}
+
+// Shops to report now. reportedAt (shop id -> time) holds the last report so a
+// long outage raises one alert every few minutes, not one per pass.
+export function shopsToReportBehind(shops, reportedAt, now = new Date()) {
+  const due = [];
+  for (const shop of shops) {
+    const minutes = syncBehindMinutes(shop, now);
+    if (minutes === null) {
+      reportedAt.delete(shop.id);
+      continue;
+    }
+    if (now.getTime() - (reportedAt.get(shop.id) ?? 0) < SYNC_BEHIND_REPORT_EVERY_MS) continue;
+    reportedAt.set(shop.id, now.getTime());
+    due.push({ shopId: shop.id, minutesBehind: minutes });
+  }
+  return due;
 }
 
 async function storeOrder(database, persist, shop, order) {

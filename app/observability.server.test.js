@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import process from "node:process";
 import * as Sentry from "@sentry/node";
-import { failureCode, reportFailure, scrubEvent, sentryOptions, expectWorkerLoops, workerHeartbeat } from "./observability.server.js";
+import { failureCode, reportCondition, reportFailure, scrubEvent, sentryOptions, expectWorkerLoops, workerHeartbeat } from "./observability.server.js";
 
 vi.mock("@sentry/node", () => ({ init: vi.fn(), captureMessage: vi.fn(), captureCheckIn: vi.fn() }));
 
@@ -141,5 +141,16 @@ describe("worker heartbeat", () => {
     expectWorkerLoops(loops, 40_000_000);
     expect(workerHeartbeat("delivery-0", 40_000_000 + 4 * 60_000, env)).toBe(false);
     expect(Sentry.captureCheckIn).not.toHaveBeenCalled();
+  });
+});
+
+describe("condition reports", () => {
+  test("log an error-level event with its fields and no error details", () => {
+    const logged = capture();
+    reportCondition("order_sync_behind", { shopId: "shop_1", minutesBehind: 45 });
+    const [entry] = logged();
+    expect(entry).toMatchObject({ level: "error", event: "order_sync_behind", shopId: "shop_1", minutesBehind: 45 });
+    expect(entry).not.toHaveProperty("code");
+    expect(entry).not.toHaveProperty("errorName");
   });
 });

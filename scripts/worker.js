@@ -2,14 +2,15 @@ import process from "node:process";
 import prisma from "../app/db.server.js";
 import { unauthenticated } from "../app/shopify.server.js";
 import { processNextDelivery, workerConcurrency } from "../app/webhook-worker.server.js";
-import { reconcileOrders, reconciliationDue } from "../app/order-reconciliation.server.js";
-import { expectWorkerLoops, logEvent, reportFailure, workerHeartbeat } from "../app/observability.server.js";
+import { reconcileOrders, reconciliationDue, shopsToReportBehind } from "../app/order-reconciliation.server.js";
+import { expectWorkerLoops, logEvent, reportCondition, reportFailure, workerHeartbeat } from "../app/observability.server.js";
 
 const pollMs = 2_000;
 const reconcileIdleMs = 30_000;
 const reconcileFailureBackoffMs = 5 * 60_000;
 // In-memory only: a restart simply retries failed shops sooner.
 const reconcileRetryAt = new Map();
+const behindReportedAt = new Map();
 const concurrency = workerConcurrency(process.env.WORKER_CONCURRENCY);
 let stopping = false;
 
@@ -46,6 +47,9 @@ async function reconciliationPass() {
     where: { installationState: "INSTALLED" }, orderBy: { id: "asc" },
     select: { id: true, shopDomain: true, orderReconciliationSince: true, orderReconciliationCursor: true },
   });
+  for (const { shopId, minutesBehind } of shopsToReportBehind(shops, behindReportedAt)) {
+    reportCondition("order_sync_behind", { shopId, minutesBehind });
+  }
   let worked = false;
   for (const shop of shops) {
     if (stopping) break;

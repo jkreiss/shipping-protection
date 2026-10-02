@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   MAX_CONSECUTIVE_ORDER_FAILURES, RECONCILIATION_INTERVAL_MS, RECONCILIATION_OVERLAP_MS,
-  reconcileOrders, reconciliationDue,
+  reconcileOrders, reconciliationDue, shopsToReportBehind, SYNC_BEHIND_MS, SYNC_BEHIND_REPORT_EVERY_MS, syncBehindMinutes,
 } from "./order-reconciliation.server";
 
 const shopDomain = "one.myshopify.com";
@@ -277,5 +277,41 @@ describe("when a shop needs reconciling", () => {
     ["finished a window 2 minutes ago", { orderReconciliationSince: new Date(now - 2 * minute) }, false],
   ])("a shop that %s: %s", (_label, shop, due) => {
     expect(reconciliationDue({ orderReconciliationCursor: null, ...shop }, now)).toBe(due);
+  });
+});
+
+describe("order sync falling behind", () => {
+  const now = new Date("2026-10-02T12:00:00Z");
+  const syncedAgo = (ms) => ({ id: "shop", orderReconciliationSince: new Date(now.getTime() - ms) });
+
+  test("reports whole minutes only once past the threshold", () => {
+    expect(syncBehindMinutes(syncedAgo(SYNC_BEHIND_MS), now)).toBeNull();
+    expect(syncBehindMinutes(syncedAgo(SYNC_BEHIND_MS + 1), now)).toBe(30);
+    expect(syncBehindMinutes(syncedAgo(95 * minute + 59_000), now)).toBe(95);
+  });
+
+  test("ignores a shop that has not completed a first window", () => {
+    expect(syncBehindMinutes({ id: "shop", orderReconciliationSince: null }, now)).toBeNull();
+  });
+
+  test("reports a behind shop once per interval and again after it", () => {
+    const reportedAt = new Map();
+    const shops = [syncedAgo(45 * minute)];
+
+    expect(shopsToReportBehind(shops, reportedAt, now)).toEqual([{ shopId: "shop", minutesBehind: 45 }]);
+    expect(shopsToReportBehind(shops, reportedAt, new Date(now.getTime() + SYNC_BEHIND_REPORT_EVERY_MS - 1))).toEqual([]);
+    expect(shopsToReportBehind(shops, reportedAt, new Date(now.getTime() + SYNC_BEHIND_REPORT_EVERY_MS))).toHaveLength(1);
+  });
+
+  test("reports again promptly when a recovered shop falls behind a second time", () => {
+    const reportedAt = new Map();
+    shopsToReportBehind([syncedAgo(45 * minute)], reportedAt, now);
+    expect(shopsToReportBehind([syncedAgo(5 * minute)], reportedAt, now)).toEqual([]);
+    expect(shopsToReportBehind([syncedAgo(40 * minute)], reportedAt, now)).toHaveLength(1);
+  });
+
+  test("tracks shops independently and skips current ones", () => {
+    const shops = [{ ...syncedAgo(10 * minute), id: "fresh" }, { ...syncedAgo(60 * minute), id: "stale" }];
+    expect(shopsToReportBehind(shops, new Map(), now)).toEqual([{ shopId: "stale", minutesBehind: 60 }]);
   });
 });
