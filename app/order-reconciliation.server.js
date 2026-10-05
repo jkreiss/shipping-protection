@@ -177,7 +177,7 @@ export async function reconcileOrders({
       reportFailure("refund_recheck_failed", error, { shopId: shop.id, shopifyOrderId: entry.order.shopifyOrderId });
       // Move it to the back of the queue so one bad order can't hold the front.
       await database.protectionRefund.updateMany({
-        where: { shopId: shop.id, orderId: entry.orderId, status: "PENDING" },
+        where: { shopId: shop.id, orderId: { equals: entry.orderId }, status: "PENDING" },
         data: { updatedAt: new Date() },
       });
     } finally {
