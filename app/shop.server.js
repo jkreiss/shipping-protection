@@ -20,7 +20,7 @@ export async function markShopUninstalled(shopDomain) {
   await prisma.$transaction(async (transaction) => {
     await transaction.session.deleteMany({ where: { shop: shopDomain } });
     await transaction.shop.updateMany({
-      where: { shopDomain },
+      where: { shopDomain: { equals: shopDomain } },
       data: {
         installationState: "UNINSTALLED",
         uninstalledAt: new Date(),
@@ -42,15 +42,15 @@ export async function redactShopData(transaction, shopDomain) {
   await transaction.claimEvent.deleteMany({ where: { shopId: shop.id } });
   await transaction.claim.deleteMany({ where: { shopId: shop.id } });
   await transaction.protectionRefund.deleteMany({ where: { shopId: shop.id } });
-  await transaction.protectionPurchase.deleteMany({ where: { shopId: shop.id } });
-  await transaction.orderLine.deleteMany({ where: { shopId: shop.id } });
-  await transaction.order.deleteMany({ where: { shopId: shop.id } });
+  await transaction.protectionPurchase.deleteMany({ where: { shopId: { equals: shop.id } } });
+  await transaction.orderLine.deleteMany({ where: { shopId: { equals: shop.id } } });
+  await transaction.order.deleteMany({ where: { shopId: { equals: shop.id } } });
   await transaction.shop.update({ where: { id: shop.id }, data: {
     activePricingRuleId: null, activePricingRuleShopId: null,
   } });
   await transaction.pricingRule.deleteMany({ where: { shopId: shop.id } });
   await transaction.session.deleteMany({ where: { shop: shopDomain } });
-  await transaction.shop.deleteMany({ where: { shopDomain } });
+  await transaction.shop.deleteMany({ where: { shopDomain: { equals: shopDomain } } });
 }
 
 // Records the scopes Shopify reports for an installation (app/scopes_update).
@@ -59,7 +59,7 @@ export async function redactShopData(transaction, shopDomain) {
 export async function recordGrantedScopes({ shopDomain, sessionId, scopes, database = prisma }) {
   if (!Array.isArray(scopes) || !scopes.every((scope) => typeof scope === "string")) return false;
   await database.session.updateMany({
-    where: { id: sessionId, shop: shopDomain },
+    where: { id: { equals: sessionId }, shop: { equals: shopDomain } },
     data: { scope: scopes.join(",") },
   });
   return true;
