@@ -24,6 +24,5 @@ COPY public ./public
 
 ENV NODE_ENV=production
 EXPOSE 3000
-RUN chown -R 1000:1000 /app
-USER 1000
+USER node
 CMD ["npm", "run", "start"]
