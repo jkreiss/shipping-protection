@@ -3,6 +3,7 @@ import { observedShopifyCapabilities, resolveConfiguration } from "./resolve-con
 
 const enabled = {
   protectionEnabled: true,
+  protectionRateEditable: true,
   attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
   stolenCoverageEnabled: true,
   lostCoverageEnabled: true,
@@ -26,12 +27,20 @@ describe("merchant configuration resolution", () => {
     expect(resolveConfiguration(enabled, capabilities, true)).toMatchObject({
       strategy: "CHECKOUT_UI_CART_TRANSFORM",
       protectionEnabled: true,
+      protectionRateEditable: true,
       merchantActivationRequired: true,
       returnsEnabled: false,
       freeReturnsEnabled: false,
       claimIntakeEnabled: false,
       autoApprovalEnabled: false,
     });
+  });
+
+  test("keeps a rate restriction independent of checkout readiness", () => {
+    const state = resolveConfiguration({ ...enabled, protectionRateEditable: false }, supported, true);
+    expect(state.protectionEnabled).toBe(true);
+    expect(state.protectionRateEditable).toBe(false);
+    expect(resolveConfiguration(undefined, supported, false).protectionRateEditable).toBe(false);
   });
 
   test("falls back when a shop lacks Plus even if line updates are eligible", () => {

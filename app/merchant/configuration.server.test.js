@@ -47,4 +47,13 @@ describe("shop configuration persistence", () => {
         attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" }),
     }));
   });
+
+  test("setup preserves the operator's rate restriction", async () => {
+    const existing = { shopId: "one", protectionEnabled: false, protectionRateEditable: false };
+    const db = database({ id: "one", configuration: existing });
+    db.shopConfiguration.upsert.mockImplementation(async ({ update }) => ({ ...existing, ...update }));
+    const config = await enableShopProtection("one.myshopify.com", db);
+    expect(config.protectionEnabled).toBe(true);
+    expect(config.protectionRateEditable).toBe(false);
+  });
 });

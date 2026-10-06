@@ -121,6 +121,8 @@ model Shop {
 model ShopConfiguration {
   shopId             String @id
   protectionEnabled  Boolean @default(false)
+  // Operator-controlled permission; merchants cannot change it in Settings.
+  protectionRateEditable Boolean @default(true)
   stolenCoverageEnabled Boolean @default(false)
   lostCoverageEnabled Boolean @default(false)
   damagedCoverageEnabled Boolean @default(false)

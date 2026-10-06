@@ -90,6 +90,17 @@ Merchants choose which benefits their store offers (for example, theft only, or 
 
 ### Pricing
 
+`ShopConfiguration.protectionRateEditable` is an operator-controlled permission
+that defaults to true. `resolveConfiguration` exposes it, Settings hides the rate
+form when false, and `activatePricingRule` enforces it on the server before any
+Shopify pricing publication. Merchant form fields must never change this
+permission. `npm run merchant:rate-editing -- store.myshopify.com locked|editable`
+sets access for one installed store from a trusted operator shell with database
+credentials. Operator access changes use the same per-shop settings lock as rate
+publishing. Setup updates preserve the permission and the existing rate.
+
+Potential pricing models for future work:
+
 - fixed fee
 - percentage
 - order-value tiers
@@ -155,6 +166,6 @@ It combines:
 - what the app implements (`IMPLEMENTED_CAPABILITIES`)
 - protection setup health checks
 
-It returns the effective strategy, whether protection is enabled, human-readable reasons when it is not, coverage flags, and returns/claim-intake/auto-approval availability.
+It returns the effective strategy, whether protection is enabled, rate-editing permission, human-readable reasons when it is not enabled, coverage flags, and returns/claim-intake/auto-approval availability.
 
 Extend that function rather than duplicating capability resolution in routes or extensions.
