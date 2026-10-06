@@ -58,6 +58,35 @@ enum ProtectionRefundStatus {
   UNATTRIBUTED
 }
 
+// How a shop's revenue share is billed. FREE shops are never billed.
+enum BillingMode {
+  FREE
+  GROSS_SHARE
+  NET_SHARE
+}
+
+// PENDING_APPROVAL and ACTIVE are open; the rest are ended. A database index
+// allows at most one open agreement per shop.
+enum BillingAgreementStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  DECLINED
+  CANCELLED
+  SUPERSEDED
+}
+
+enum BillingChargeStatus {
+  PENDING
+  BILLED
+  CAP_EXCEEDED
+  VOID
+}
+
+enum BillingSourceType {
+  PURCHASE
+  REFUND
+}
+
 enum ClaimType {
   LOST
   STOLEN
@@ -114,6 +143,7 @@ model Shop {
   purchases         ProtectionPurchase[]
   claims            Claim[]
   claimEvents       ClaimEvent[]
+  billingAgreements BillingAgreement[]
 
   @@unique([activePricingRuleId, activePricingRuleShopId])
 }
@@ -346,6 +376,85 @@ model ClaimEvent {
   claim Claim @relation(fields: [shopId, claimId], references: [shopId, id], onDelete: Cascade)
 
   @@index([shopId, claimId, createdAt, id])
+}
+
+// Operator-set revenue-share terms for one shop. Terms are never edited: new
+// terms supersede the old row. Only a cap increase awaiting the merchant's
+// approval (pendingCappedAmount) and the Shopify subscription IDs are filled in later.
+model BillingAgreement {
+  id                  String                 @id @default(cuid())
+  shopId              String
+  version             Int
+  mode                BillingMode
+  rateBasisPoints     Int
+  cappedAmount        Decimal?               @db.Decimal(20, 4)
+  pendingCappedAmount Decimal?               @db.Decimal(20, 4)
+  currencyCode        String?
+  subscriptionGid     String?                @unique
+  usageLineItemGid    String?
+  status              BillingAgreementStatus
+  requestedAt         DateTime               @default(now())
+  activatedAt         DateTime?
+  endedAt             DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  shop    Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  entries BillingEntry[]
+  charges BillingCharge[]
+
+  @@unique([shopId, version])
+  @@unique([id, shopId])
+  @@index([status])
+}
+
+// Append-only: a source's billed amount is the sum of its entries. A change
+// to the source adds a delta entry with the next revision.
+model BillingEntry {
+  id           String            @id @default(cuid())
+  shopId       String
+  agreementId  String
+  sourceType   BillingSourceType
+  sourceId     String
+  revision     Int
+  amount       Decimal           @db.Decimal(20, 4)
+  currencyCode String
+  chargeId     String?
+  createdAt    DateTime          @default(now())
+
+  agreement BillingAgreement @relation(fields: [agreementId, shopId], references: [id, shopId], onDelete: Cascade)
+  charge    BillingCharge?   @relation(fields: [chargeId, shopId], references: [id, shopId], onDelete: NoAction)
+
+  @@unique([shopId, sourceType, sourceId, revision])
+  @@index([shopId, agreementId, chargeId])
+}
+
+// One usage charge sent to Shopify. Its id is the usage record's idempotency key.
+// periodDate (UTC) allows one daily charge per agreement; a final settlement
+// before terms change has none.
+model BillingCharge {
+  id             String              @id @default(cuid())
+  shopId         String
+  agreementId    String
+  periodDate     DateTime?           @db.Date
+  baseAmount     Decimal             @db.Decimal(20, 4)
+  chargeAmount   Decimal             @db.Decimal(20, 4)
+  currencyCode   String
+  status         BillingChargeStatus @default(PENDING)
+  usageRecordGid String?
+  attempts       Int                 @default(0)
+  nextAttemptAt  DateTime            @default(now())
+  errorMessage   String?
+  billedAt       DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  agreement BillingAgreement @relation(fields: [agreementId, shopId], references: [id, shopId], onDelete: Cascade)
+  entries   BillingEntry[]
+
+  @@unique([id, shopId])
+  @@unique([agreementId, periodDate])
+  @@index([status, nextAttemptAt])
 }
 
 model Session {
