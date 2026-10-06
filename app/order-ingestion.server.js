@@ -53,10 +53,7 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
     (sum, line) => sum + moneyToScaled(unitAmount(line)) * BigInt(line.quantity), 0n,
   );
   const matched = expectedFee !== null && charged === moneyToScaled(expectedFee);
-  if (matched) return { pricingCheck: "MATCHED", expectedFee };
-  // Shopify skips the Cart Transform when any line has a selling plan, so $0.00 is expected.
-  const subscription = normalized.lines.some((line) => line.hasSellingPlan);
-  return { pricingCheck: subscription ? "SUBSCRIPTION" : "UNMATCHED", expectedFee };
+  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
 }
 
 function orderContentHash(normalized) {
@@ -102,6 +99,9 @@ export async function persistNormalizedOrder(
     .filter((line) => !line.isProtection && line.requiresShipping)
     .reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n));
   const protectedLines = lines.filter((line) => line.isProtection);
+  // Shopify skips the Cart Transform when any line has a selling plan, so the
+  // protection line is never charged: a subscription order is not protected.
+  const purchasable = protectedLines.length > 0 && !normalized.lines.some((line) => line.hasSellingPlan);
   const firstPayment = Boolean(normalized.paidAt && !existing?.firstPaidAt);
   const paidFacts = firstPayment ? {
     firstPaidAt: normalized.paidAt,
@@ -170,7 +170,7 @@ export async function persistNormalizedOrder(
   }
   let confirmedPurchase = existingPurchase?.purchasedAt ? existingPurchase : null;
 
-  if (!confirmedPurchase && (!existing?.firstPaidAt || firstPayment) && protectedLines.length > 0) {
+  if (!confirmedPurchase && (!existing?.firstPaidAt || firstPayment) && purchasable) {
     const attributions = protectedLines.map((line) => protectionAttribution(line, rules));
     const firstAttribution = attributions[0];
     const allMatch = attributions.every((entry) =>
@@ -222,7 +222,7 @@ export async function persistNormalizedOrder(
           feeAmount: purchase.feeAmount, expectedFeeAmount: expectedFee,
         }));
     }
-  } else if (!confirmedPurchase && (protectedLines.length === 0 || existing?.firstPaidAt)) {
+  } else if (!confirmedPurchase && (!purchasable || existing?.firstPaidAt)) {
     await transaction.protectionPurchase.deleteMany({
       where: { ...purchaseKey, purchasedAt: null },
     });

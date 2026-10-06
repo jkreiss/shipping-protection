@@ -77,8 +77,18 @@ describe("worker failure handling", () => {
     expect(stdout.filter(({ event }) => event === "webhook_skipped_uninstalled")).toHaveLength(2);
   });
 
-  test("fails at once when Shopify won't return the order", async () => {
+  test("fails quietly when Shopify won't return the order, such as one past 60 days", async () => {
     const { run, updates } = worker({ shopifyOrder: null });
+    const { stderr, stdout } = await run();
+
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "FAILED"]]);
+    expect(updates.map(({ data }) => data.errorMessage)).toEqual(["ORDER_UNAVAILABLE", "ORDER_UNAVAILABLE"]);
+    expect(stderr.filter(({ event }) => event?.startsWith("webhook_"))).toEqual([]);
+    expect(stdout.filter(({ event }) => event === "webhook_order_unavailable")).toHaveLength(2);
+  });
+
+  test("fails at once, with an alert, for an order too large to snapshot", async () => {
+    const { run, updates } = worker({ shopifyOrder: { ...order, transactionsCount: { count: 251 } } });
     const { stderr } = await run();
 
     expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "FAILED"]]);

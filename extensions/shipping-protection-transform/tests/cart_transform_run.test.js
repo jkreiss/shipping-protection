@@ -271,9 +271,9 @@ describe("cart transform", () => {
     ]);
   });
 
-  test("never prices protection below the fee when no line has a single unit", () => {
-    // Raising the quantity must not make protection free: 0.25 over 3 units
-    // rounds up to 0.09 each.
+  test("never prices protection above the fee when no line has a single unit", () => {
+    // The checkout block resets the quantity to 1; until then the buyer is
+    // never charged more than the fee: 0.25 over 3 units rounds down to 0.08.
     const protection = protectionLine("a-protection", 3);
     const other = protectionLine("z-protection", 2);
     const result = cartTransformRun(
@@ -281,12 +281,12 @@ describe("cart transform", () => {
     );
 
     expect(result.operations).toEqual([
-      expectedUpdate(protection.id, "0.09"),
+      expectedUpdate(protection.id, "0.08"),
       expectedUpdate(other.id, "0"),
     ]);
   });
 
-  test("rounds the per-unit fee up in zero-decimal currencies", () => {
+  test("rounds the per-unit fee down in zero-decimal currencies", () => {
     const protection = protectionLine("protection", 2);
     const result = cartTransformRun(
       input([
@@ -295,7 +295,7 @@ describe("cart transform", () => {
       ]),
     );
 
-    // 0.25% of 1000 JPY is 3 JPY (rounded); over 2 units, 2 JPY each.
-    expect(result.operations).toEqual([expectedUpdate(protection.id, "2")]);
+    // 0.25% of 1000 JPY is 3 JPY (rounded); over 2 units, 1 JPY each.
+    expect(result.operations).toEqual([expectedUpdate(protection.id, "1")]);
   });
 });
