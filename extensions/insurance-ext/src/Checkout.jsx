@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   actualProtectionTotal,
   containsSellingPlan,
+  deliveryEligibility,
   eligibleMerchandiseLines,
-  hasEligibleDelivery,
   protectionLines,
   protectionAttributes,
   protectionAttributesMatch,
@@ -21,6 +21,7 @@ export default async () => {
 export function ShippingProtection() {
   const lines = shopify.lines.value;
   const deliveryGroups = shopify.deliveryGroups.value;
+  const orderDiscountAllocations = shopify.discountAllocations.value;
   const instructions = shopify.instructions.value.lines;
   const appMetafields = shopify.appMetafields.value;
   const configuration = useMemo(
@@ -44,12 +45,14 @@ export function ShippingProtection() {
         : [],
     [configuration, lines],
   );
-  const quote = configuration ? reconstructQuote(lines, configuration) : null;
+  const quote = configuration
+    ? reconstructQuote(lines, configuration, orderDiscountAllocations)
+    : null;
   const mutationsAvailable =
     instructions.canAddCartLine &&
     instructions.canRemoveCartLine &&
     instructions.canUpdateCartLine;
-  const eligibleDelivery = hasEligibleDelivery(
+  const delivery = deliveryEligibility(
     deliveryGroups,
     new Set(eligibleLines.map(({ id }) => id)),
   );
@@ -57,7 +60,7 @@ export function ShippingProtection() {
     configuration?.enabled &&
     !containsSellingPlan(lines) &&
     eligibleLines.length > 0 &&
-    eligibleDelivery &&
+    delivery === "eligible" &&
     quote &&
     quote.amount > 0 &&
     mutationsAvailable,
@@ -79,8 +82,11 @@ export function ShippingProtection() {
 
     let removeTarget = null;
     let updateTarget = null;
+    // While delivery is pending the offer is hidden, but the buyer's line
+    // stays until checkout settles on an option.
     if (
       !shouldOffer &&
+      delivery !== "pending" &&
       currentProtectionLines.length > 0 &&
       instructions.canRemoveCartLine
     ) {
@@ -152,6 +158,7 @@ export function ShippingProtection() {
   }, [
     configuration,
     currentProtectionLines,
+    delivery,
     instructions.canRemoveCartLine,
     instructions.canUpdateCartLine,
     lineFingerprint,

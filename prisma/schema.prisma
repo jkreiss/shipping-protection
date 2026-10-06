@@ -33,9 +33,9 @@ enum ProtectionAttributionStatus {
 
 // Whether the protection line was charged the live price at the attributed
 // rule's rate. UNMATCHED usually means the Cart Transform failed and the
-// variant's fallback price was charged instead. SUBSCRIPTION is a mismatch on an
-// order with a selling plan: Shopify skips the Cart Transform there, so the
-// $0.00 price is the intended outcome, not a failure.
+// variant's fallback price was charged instead. SUBSCRIPTION is no longer
+// written: orders with a selling plan are not protected (decided 2026-10-06),
+// so they get no purchase. Older rows may still hold it.
 enum ProtectionPricingCheck {
   MATCHED
   UNMATCHED
@@ -204,6 +204,8 @@ model Order {
   checkoutTokenHash    String?
   shopifyCreatedAt     DateTime
   shopifyUpdatedAt     DateTime
+  // Tells apart two different copies with the same shopifyUpdatedAt second.
+  contentHash          String?
   processedAt          DateTime?
   isTest               Boolean   @default(false)
   cancelledAt          DateTime?

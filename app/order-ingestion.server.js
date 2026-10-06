@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { moneyToScaled, scaledToMoney } from "./order-normalization.js";
 import { classifyProtectionRefund } from "./protection-refunds.js";
 import { PRICING_SCHEMA_VERSION, calculateFee, currencyMinorUnits } from "./pricing-contract.js";
 import { reportFailure } from "./observability.server.js";
+import { queueOrderRefresh } from "./webhook-inbox.server.js";
 
 function protectionAttribution(line, rules) {
   const attributes = line.protectionAttributes;
@@ -46,19 +48,25 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
     rule.rateBasisPoints,
     currencyMinorUnits(currencyCode),
   );
-  const matched = expectedFee !== null && protectedLines.every(
-    (line) => moneyToScaled(unitAmount(line)) === moneyToScaled(expectedFee),
+  // The Function charges the fee once per order, so compare the total charged.
+  const charged = protectedLines.reduce(
+    (sum, line) => sum + moneyToScaled(unitAmount(line)) * BigInt(line.quantity), 0n,
   );
-  if (matched) return { pricingCheck: "MATCHED", expectedFee };
-  // Shopify skips the Cart Transform when any line has a selling plan, so $0.00 is expected.
-  const subscription = normalized.lines.some((line) => line.hasSellingPlan);
-  return { pricingCheck: subscription ? "SUBSCRIPTION" : "UNMATCHED", expectedFee };
+  const matched = expectedFee !== null && charged === moneyToScaled(expectedFee);
+  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
 }
 
+function orderContentHash(normalized) {
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
+
+// Runs inside the caller's transaction, which can still roll back or retry, so
+// alerts go into afterCommit for the caller to send once it commits.
 export async function persistNormalizedOrder(
   transaction,
   shop,
   normalized,
+  afterCommit = [],
 ) {
   const rules = await transaction.pricingRule.findMany({
     where: { shopId: shop.id },
@@ -75,11 +83,25 @@ export async function persistNormalizedOrder(
     where: { shopId_shopifyOrderId: { shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId } },
   });
   if (existing?.shopifyUpdatedAt > normalized.shopifyUpdatedAt) return existing;
+  const contentHash = orderContentHash(normalized);
+  // Shopify's updatedAt is to the second, so two different copies from the
+  // same second can't be ordered. Store this one and refetch the order once
+  // both writes have settled; keyed by version, so it is fetched only once.
+  if (existing && existing.shopifyUpdatedAt.getTime() === normalized.shopifyUpdatedAt.getTime() &&
+    existing.contentHash !== contentHash) {
+    await queueOrderRefresh({
+      shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId,
+      version: normalized.shopifyUpdatedAt.toISOString(), reason: "same-second", database: transaction,
+    });
+  }
   const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.quantity > 0);
   const coveredMerchandise = scaledToMoney(lines
     .filter((line) => !line.isProtection && line.requiresShipping)
     .reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n));
   const protectedLines = lines.filter((line) => line.isProtection);
+  // Shopify skips the Cart Transform when any line has a selling plan, so the
+  // protection line is never charged: a subscription order is not protected.
+  const purchasable = protectedLines.length > 0 && !normalized.lines.some((line) => line.hasSellingPlan);
   const firstPayment = Boolean(normalized.paidAt && !existing?.firstPaidAt);
   const paidFacts = firstPayment ? {
     firstPaidAt: normalized.paidAt,
@@ -105,10 +127,12 @@ export async function persistNormalizedOrder(
     create: {
       shopId: shop.id,
       ...fields,
+      contentHash,
       ...paidFacts,
     },
     update: {
       ...fields,
+      contentHash,
     },
   });
   if (firstPayment && existing) {
@@ -146,7 +170,7 @@ export async function persistNormalizedOrder(
   }
   let confirmedPurchase = existingPurchase?.purchasedAt ? existingPurchase : null;
 
-  if (!confirmedPurchase && (!existing?.firstPaidAt || firstPayment) && protectedLines.length > 0) {
+  if (!confirmedPurchase && (!existing?.firstPaidAt || firstPayment) && purchasable) {
     const attributions = protectedLines.map((line) => protectionAttribution(line, rules));
     const firstAttribution = attributions[0];
     const allMatch = attributions.every((entry) =>
@@ -192,12 +216,13 @@ export async function persistNormalizedOrder(
       update: purchase,
     });
     if (firstPayment && pricingCheck === "UNMATCHED") {
-      reportFailure("protection_price_unmatched", new Error("Protection was not charged the live price."), {
-        shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId,
-        feeAmount: purchase.feeAmount, expectedFeeAmount: expectedFee,
-      });
+      afterCommit.push(() => reportFailure("protection_price_unmatched",
+        new Error("Protection was not charged the live price."), {
+          shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId,
+          feeAmount: purchase.feeAmount, expectedFeeAmount: expectedFee,
+        }));
     }
-  } else if (!confirmedPurchase && (protectedLines.length === 0 || existing?.firstPaidAt)) {
+  } else if (!confirmedPurchase && (!purchasable || existing?.firstPaidAt)) {
     await transaction.protectionPurchase.deleteMany({
       where: { ...purchaseKey, purchasedAt: null },
     });

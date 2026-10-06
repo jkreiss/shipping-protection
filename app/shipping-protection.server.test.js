@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
   publishSnapshot: vi.fn(),
   createAndPublishPricingRule: vi.fn(),
   enableShopProtection: vi.fn(),
+  writeJsonMetafield: vi.fn(),
+  disableKnownConfiguration: vi.fn(),
+  activateProduct: vi.fn(),
+  assertFunctionDeployed: vi.fn(),
 }));
 
 vi.mock("./shopify/protection-admin.server", () => ({
@@ -20,11 +24,12 @@ vi.mock("./shopify/protection-admin.server", () => ({
   loadProduct: mocks.loadProduct,
   findProduct: mocks.findProduct,
   buildChecks: mocks.buildChecks,
-  writeJsonMetafield: vi.fn(),
-  disableKnownConfiguration: vi.fn(),
+  writeJsonMetafield: mocks.writeJsonMetafield,
+  disableKnownConfiguration: mocks.disableKnownConfiguration,
   repairProduct: mocks.repairProduct,
   ensureTransform: mocks.ensureTransform,
-  activateProduct: vi.fn(),
+  activateProduct: mocks.activateProduct,
+  assertFunctionDeployed: mocks.assertFunctionDeployed,
   publishSnapshot: mocks.publishSnapshot,
   productIsPublished: () => true,
   variantIsReady: () => true,
@@ -233,6 +238,25 @@ describe("setup republishing", () => {
     expect(state.configuration.protectionRateEditable).toBe(false);
   });
 
+  test("recovers the rate checkout charges when the published copies differ and no active rule exists", async () => {
+    const core = await mocks.loadCore();
+    mocks.loadCore.mockResolvedValue({
+      ...core,
+      transformConfig: { ...core.shopConfig, rateBasisPoints: 80 },
+    });
+    mocks.getShopConfiguration.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.enableShopProtection.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.repairProduct.mockResolvedValue({ product: { id: "gid://shopify/Product/1" }, variantId: "gid://shopify/ProductVariant/1" });
+    mocks.getActivePricingRule.mockResolvedValueOnce(null)
+      .mockResolvedValue({ ...ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"), rateBasisPoints: 80 });
+    await setupShippingProtection({}, "one.myshopify.com");
+    expect(mocks.createAndPublishPricingRule).toHaveBeenCalledWith(expect.objectContaining({ rateBasisPoints: 80 }));
+  });
+
   test("publishes a new rule at the same rate when repair replaced the variant", async () => {
     mocks.repairProduct.mockResolvedValue({ product: { id: "gid://shopify/Product/1" }, variantId: "gid://shopify/ProductVariant/2" });
     mocks.getActivePricingRule
@@ -247,5 +271,86 @@ describe("setup republishing", () => {
       productId: "gid://shopify/Product/1", variantId: "gid://shopify/ProductVariant/2", rateBasisPoints: 40,
     }));
     expect(mocks.publishSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("repairing a live store", () => {
+  const liveContract = { schemaVersion: 2, enabled: true, productId: "gid://shopify/Product/1",
+    variantId: "gid://shopify/ProductVariant/1", ruleId: "rule-1", ruleVersion: 3, rateBasisPoints: 40,
+    basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: "2026-09-01T00:00:00.000Z" };
+  const coreWith = (overrides) => ({
+    shop: {
+      id: "gid://shopify/Shop/1", name: "One", myshopifyDomain: "one.myshopify.com",
+      plan: { shopifyPlus: true },
+      features: { cartTransform: { eligibleOperations: { updateOperation: true } } },
+    },
+    shopConfig: liveContract,
+    transformConfig: liveContract,
+    transform: { id: "transform-1", blockOnFailure: false },
+    onlineStore: { id: "publication-1" },
+    ...overrides,
+  });
+  const disabledWrites = () => mocks.writeJsonMetafield.mock.calls
+    .filter(([, , , value]) => value?.enabled === false);
+
+  beforeEach(() => {
+    mocks.repairProduct.mockResolvedValue({ product: { id: "gid://shopify/Product/1" }, variantId: "gid://shopify/ProductVariant/1" });
+    mocks.ensureTransform.mockResolvedValue({ id: "transform-1" });
+  });
+
+  test("keeps protection enabled when repair fails part way", async () => {
+    mocks.loadCore.mockResolvedValue(coreWith());
+    mocks.activateProduct.mockRejectedValueOnce(new Error("Shopify is unavailable"));
+
+    await expect(setupShippingProtection({}, "one.myshopify.com")).rejects.toThrow("Shopify is unavailable");
+
+    expect(mocks.disableKnownConfiguration).not.toHaveBeenCalled();
+    expect(disabledWrites()).toEqual([]);
+    expect(mocks.ensureTransform).toHaveBeenCalledWith({}, expect.anything(), liveContract, { overwrite: false });
+  });
+
+  test("keeps protection enabled when the final health check fails", async () => {
+    mocks.loadCore.mockResolvedValue(coreWith());
+    mocks.loadProduct.mockResolvedValue({ status: "UNLISTED", variantsCount: { count: 1 }, variants: { nodes: [{}] } });
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    mocks.buildChecks.mockReturnValue([{ id: "transform", ok: false }]);
+
+    await expect(setupShippingProtection({}, "one.myshopify.com")).rejects.toThrow("some checks still fail");
+
+    expect(mocks.disableKnownConfiguration).not.toHaveBeenCalled();
+    expect(disabledWrites()).toEqual([]);
+  });
+
+  test("stops before changing anything when Online Store is missing", async () => {
+    mocks.loadCore.mockResolvedValue(coreWith({ onlineStore: null }));
+
+    await expect(setupShippingProtection({}, "one.myshopify.com")).rejects.toThrow("Online Store sales channel");
+
+    expect(mocks.disableKnownConfiguration).not.toHaveBeenCalled();
+    expect(mocks.repairProduct).not.toHaveBeenCalled();
+    expect(mocks.writeJsonMetafield).not.toHaveBeenCalled();
+  });
+
+  test("stops before changing anything when the Function isn't deployed", async () => {
+    mocks.loadCore.mockResolvedValue(coreWith());
+    mocks.assertFunctionDeployed.mockImplementationOnce(() => { throw new Error("Deploy the Function"); });
+
+    await expect(setupShippingProtection({}, "one.myshopify.com")).rejects.toThrow("Deploy the Function");
+
+    expect(mocks.repairProduct).not.toHaveBeenCalled();
+    expect(mocks.writeJsonMetafield).not.toHaveBeenCalled();
+  });
+
+  test("still disables a partial setup on a store that wasn't live", async () => {
+    const disabled = { ...liveContract, enabled: false };
+    mocks.loadCore.mockResolvedValue(coreWith({ shopConfig: disabled, transformConfig: disabled }));
+    mocks.activateProduct.mockRejectedValueOnce(new Error("Shopify is unavailable"));
+
+    await expect(setupShippingProtection({}, "one.myshopify.com")).rejects.toThrow("Shopify is unavailable");
+
+    expect(mocks.disableKnownConfiguration).toHaveBeenCalled();
+    expect(mocks.ensureTransform).toHaveBeenCalledWith({}, expect.anything(),
+      expect.objectContaining({ enabled: false }), { overwrite: true });
+    expect(disabledWrites().length).toBeGreaterThan(0);
   });
 });

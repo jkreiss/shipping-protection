@@ -100,6 +100,19 @@ async function appendPages(admin, initial, query, id, pick, options) {
   return { nodes, pageInfo: { hasNextPage: false, endCursor: page.endCursor }, paged: count > 1 };
 }
 
+// Shopify's answer won't change on a retry, such as an order outside the
+// app's access or too large to snapshot, so the worker stops at once.
+export class PermanentOrderError extends Error {
+  name = "PermanentOrderError";
+}
+
+// Shopify returned no order: deleted, or older than the 60 days the app can
+// read without read_all_orders. Protection is non-refundable once shipped, so
+// a late refund on such an order needs no record.
+export class OrderUnavailableError extends PermanentOrderError {
+  name = "OrderUnavailableError";
+}
+
 export function assertCompleteOrder(order) {
   if (!order) throw new Error("Shopify order is unavailable to this app.");
   if (order.lineItems?.pageInfo?.hasNextPage || (order.transactionsCount?.count ?? order.transactions?.length ?? 0) > 250 ||
@@ -114,12 +127,12 @@ export function assertCompleteOrder(order) {
 export async function fetchShopifyOrder(admin, id, options = {}) {
   const data = await adminGraphql(admin, ORDER_QUERY, { id }, options);
   const order = data.order;
-  if (!order) throw new Error("Shopify order is unavailable to this app.");
+  if (!order) throw new OrderUnavailableError("Shopify order is unavailable to this app.");
   if ((order.transactionsCount?.count ?? order.transactions?.length ?? 0) > 250) {
-    throw new Error("Shopify order has more payment transactions than this API can return safely.");
+    throw new PermanentOrderError("Shopify order has more payment transactions than this API can return safely.");
   }
   if ((order.refunds?.length ?? 0) >= 250) {
-    throw new Error("Shopify order has too many refunds for a complete financial snapshot.");
+    throw new PermanentOrderError("Shopify order has too many refunds for a complete financial snapshot.");
   }
   const connections = [];
   const page = async (initial, query, ownerId, pick) => {

@@ -131,7 +131,9 @@ export async function reconcilePublishedPricingRule(
   if (rule.state === "ACTIVE" && shop.activePricingRuleId === rule.id) {
     return rule;
   }
-  if (rule.state !== "PENDING" && rule.state !== "ACTIVE") return null;
+  // A publish that errored, such as a timeout, may still have reached Shopify.
+  // Shopify's live config is authoritative, so a FAILED rule it uses is active.
+  if (rule.state === "SUPERSEDED") return null;
 
   return finalizeRule(database, shop.id, rule.id);
 }

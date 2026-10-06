@@ -62,8 +62,8 @@ the Checkout Editor and save it. Shop Pay activation is separate.
 Each shop has a `ShopConfiguration` row. New shops default to protection off,
 attachment strategy `NONE`, and all returns, claim-intake, and auto-approval
 flags off. Successful setup enables the shop metafield and Cart Transform
-pricing used by the checkout block, with the existing loss, theft, and damage
-offer. Historical rates stay on pricing rules and protection purchases.
+pricing used by the checkout block. Customer copy names no specific benefits
+until legal review decides which ones are sold. Historical rates stay on pricing rules and protection purchases.
 Existing shops with an active pricing rule are backfilled during migration.
 Orders are recognised as protected only by the variant on one of the shop's
 pricing rules, so a legacy Shopify metafield without a database rule, or a rule

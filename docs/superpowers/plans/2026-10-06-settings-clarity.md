@@ -60,3 +60,9 @@ Files: `app/routes/app.settings.jsx`, `docs/agents/admin-ui.md`, neutral setup m
 - Independent read-only review found no critical, important, or minor issues. Its missing-rule recovery observation led to one fix: setup now preserves the validated published rate when a database pricing rule needs recovery. The regression test failed at 25 basis points before the fix and passed at the existing 40 afterward; the full suite passed again.
 - Permission changes reach already-open pages on reload or the next settings response; every rate submission checks the current server permission. The existing settings lease is reused. Actual Shopify checkout appearance was not tested in a live browser.
 - Implementation was developed on `chore/settings-clarity`; no live database configuration was changed during verification.
+
+## Integration verification
+
+- Integrated the already-merged security and protection-scope changes from main (`e2934e7`). Preserved the coverage restriction test and the distinction between setup readiness and block placement.
+- Recovery now prefers the live Cart Transform rate when the database rule is missing and the published copies differ. The regression reproduced a reset from 80 to 40 basis points before the fix and passes at 80 afterward.
+- Combined suite: 321 tests passed; lint, the Settings no-nested-ternary check, and required type checks passed. Independent integration review found no meaningful regressions.

@@ -58,7 +58,12 @@ const FOUR_MINOR_UNIT_CURRENCIES = new Set(["CLF", "UYW"]);
 
 /**
  * @typedef {{amount: number, currencyCode: string}} CheckoutMoney
- * @typedef {{discountedAmount: CheckoutMoney}} CheckoutDiscountAllocation
+ * @typedef {{
+ *   type: string,
+ *   code?: string,
+ *   title?: string,
+ *   discountedAmount: CheckoutMoney
+ * }} CheckoutDiscountAllocation
  * @typedef {{
  *   id: string,
  *   quantity: number,
@@ -262,17 +267,32 @@ export function eligibleMerchandiseLines(lines, variantId) {
   );
 }
 
+/** @param {CheckoutDiscountAllocation} allocation */
+function discountIdentity(allocation) {
+  return `${allocation.type}:${allocation.code ?? allocation.title ?? ""}`;
+}
+
 /**
+ * The Function prices from each line's pre-discount subtotal. A line's
+ * `totalAmount` has only line-level discounts taken off, so those are added
+ * back. Order-level discounts were never taken off, so any share of one that
+ * appears on a line is skipped.
  * @param {CheckoutLine[]} lines
  * @param {ShippingProtectionConfiguration} configuration
+ * @param {CheckoutDiscountAllocation[]} [orderDiscountAllocations] the Discounts API's order-level allocations
  */
-export function reconstructQuote(lines, configuration) {
+export function reconstructQuote(
+  lines,
+  configuration,
+  orderDiscountAllocations = [],
+) {
   const eligibleLines = eligibleMerchandiseLines(
     lines,
     configuration.variantId,
   );
   if (eligibleLines.length === 0) return null;
 
+  const orderDiscounts = new Set(orderDiscountAllocations.map(discountIdentity));
   const currencyCode = eligibleLines[0].cost.totalAmount.currencyCode;
   /** @type {string[]} */
   const amounts = [];
@@ -282,6 +302,7 @@ export function reconstructQuote(lines, configuration) {
     amounts.push(String(line.cost.totalAmount.amount));
 
     for (const allocation of line.discountAllocations) {
+      if (orderDiscounts.has(discountIdentity(allocation))) continue;
       if (allocation.discountedAmount.currencyCode !== currencyCode)
         return null;
       amounts.push(String(allocation.discountedAmount.amount));
@@ -321,24 +342,34 @@ export function actualProtectionTotal(lines, variantId) {
 }
 
 /**
+ * "pending" means checkout hasn't settled on delivery yet: the groups or a
+ * selected option are missing while rates load, such as after an address
+ * change. That is not a reason to remove protection the buyer chose.
  * @param {CheckoutDeliveryGroup[]} deliveryGroups
  * @param {Set<string>} eligibleLineIds
+ * @returns {"eligible" | "ineligible" | "pending"}
  */
-export function hasEligibleDelivery(deliveryGroups, eligibleLineIds) {
+export function deliveryEligibility(deliveryGroups, eligibleLineIds) {
   const relevantGroups = deliveryGroups.filter((group) =>
     group.targetedCartLines.some(({ id }) => eligibleLineIds.has(id)),
   );
-  if (relevantGroups.length === 0) return false;
+  if (relevantGroups.length === 0) return "pending";
 
-  return relevantGroups.every((group) => {
+  let pending = false;
+  for (const group of relevantGroups) {
     if (group.groupType !== "oneTimePurchase" || !group.isDeliveryRequired) {
-      return false;
+      return "ineligible";
     }
     const selected = group.deliveryOptions.find(
       ({ handle }) => handle === group.selectedDeliveryOption?.handle,
     );
-    return Boolean(selected && ALLOWED_DELIVERY_TYPES.has(selected.type));
-  });
+    if (!selected) {
+      pending = true;
+    } else if (!ALLOWED_DELIVERY_TYPES.has(selected.type)) {
+      return "ineligible";
+    }
+  }
+  return pending ? "pending" : "eligible";
 }
 
 /**

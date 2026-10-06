@@ -6,8 +6,8 @@ uses checkout UI extensions and a Cart Transform line-price update.
 
 The extension reads the app-owned Shop JSON metafield
 `$app.shipping_protection_config`. The app home setup flow creates and enables
-that configuration together with the unlisted product and blocking Cart
-Transform.
+that configuration together with the unlisted product and the Cart Transform,
+created with `blockOnFailure: false` so a Function error never blocks checkout.
 
 The offer is never preselected. It is hidden for digital-only carts,
 subscriptions, direct store pickup, zero-rounded fees, invalid configuration,

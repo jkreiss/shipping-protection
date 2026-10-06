@@ -88,18 +88,40 @@ function parseConfiguration(value) {
 }
 
 /**
- * @param {{ id: string }[]} lines
+ * The amount divided over quantity units, rounded down at the amount's own
+ * precision, so the units together are never charged more than the amount.
+ * @param {string} amount
+ * @param {number} quantity
+ */
+function perUnitRoundedDown(amount, quantity) {
+  const [whole, fraction = ""] = amount.split(".");
+  const minor = BigInt(whole + fraction) / BigInt(quantity);
+  if (fraction.length === 0) return minor.toString();
+  const digits = minor.toString().padStart(fraction.length + 1, "0");
+  return `${digits.slice(0, -fraction.length)}.${digits.slice(-fraction.length)}`;
+}
+
+/**
+ * The fee is charged once per cart: on the first single-unit protection line,
+ * with every other protection line at zero. Without a single-unit line the
+ * first line is charged the fee per unit rounded down, so a raised quantity is
+ * never charged more than the fee; the checkout block resets it to one unit.
+ * @param {{ id: string, quantity: number }[]} lines
  * @param {string} amount
  * @returns {CartTransformRunResult}
  */
 function priceLines(lines, amount) {
+  const charged = lines.find((line) => line.quantity === 1) ?? lines[0];
+  const chargedAmount = charged.quantity === 1
+    ? amount
+    : perUnitRoundedDown(amount, charged.quantity);
   return {
     operations: lines.map((line) => ({
       lineUpdate: {
         cartLineId: line.id,
         price: {
           adjustment: {
-            fixedPricePerUnit: { amount },
+            fixedPricePerUnit: { amount: line === charged ? chargedAmount : "0" },
           },
         },
       },

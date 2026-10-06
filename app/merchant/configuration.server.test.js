@@ -56,4 +56,15 @@ describe("shop configuration persistence", () => {
     expect(config.protectionEnabled).toBe(true);
     expect(config.protectionRateEditable).toBe(false);
   });
+
+  test("enables only theft after delivery, never consumer-law remedies", async () => {
+    const db = database({ id: "one" });
+    await enableShopProtection("one.myshopify.com", db);
+    const { create, update } = db.shopConfiguration.upsert.mock.calls[0][0];
+    for (const flags of [create, update]) {
+      expect(flags).toMatchObject({
+        stolenCoverageEnabled: true, lostCoverageEnabled: false, damagedCoverageEnabled: false,
+      });
+    }
+  });
 });

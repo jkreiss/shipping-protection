@@ -484,6 +484,21 @@ describe("shipping protection checkout UI", () => {
     });
   });
 
+  test("keeps the buyer's protection while delivery options reload", async () => {
+    const protection = protectionLine();
+    setCheckout({ lines: [merchandiseLine(), protection] });
+    extension.shopify.deliveryGroups.value = extension.shopify.deliveryGroups.value
+      .map((group) => ({ ...group, selectedDeliveryOption: undefined }));
+    const applyCartLinesChange = vi
+      .fn()
+      .mockResolvedValue(createResult("applyCartLinesChange"));
+    extension.shopify.applyCartLinesChange = applyCartLinesChange;
+    await renderExtension();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(applyCartLinesChange).not.toHaveBeenCalled();
+  });
+
   test.each([
     ["direct pickup", "pickup", false],
     ["subscription", "shipping", true],

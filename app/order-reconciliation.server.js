@@ -59,10 +59,15 @@ export function shopsToReportBehind(shops, reportedAt, now = new Date()) {
 
 async function storeOrder(database, persist, shop, order) {
   const normalized = normalizeGraphqlOrder(assertCompleteOrder(order));
+  let afterCommit = [];
   await retrySerializationFailures(() => database.$transaction(
-    (transaction) => persist(transaction, shop, normalized),
+    (transaction) => {
+      afterCommit = [];
+      return persist(transaction, shop, normalized, afterCommit);
+    },
     { isolationLevel: "Serializable", timeout: 20_000 },
   ));
+  for (const report of afterCommit) report();
   return normalized;
 }
 

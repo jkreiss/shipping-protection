@@ -5,7 +5,7 @@ import { once } from "node:events";
 import process from "node:process";
 import prisma from "../app/db.server.js";
 import { receiveOrderWebhook } from "../app/webhook-inbox.server.js";
-import { claimDelivery, processNextDelivery } from "../app/webhook-worker.server.js";
+import { claimDelivery, MAX_DELIVERY_ATTEMPTS, processNextDelivery } from "../app/webhook-worker.server.js";
 import { redactShopData } from "../app/shop.server.js";
 
 if (process.env.VERIFY_ISOLATED_DB !== "1") {
@@ -132,9 +132,10 @@ async function verifyCoalescing() {
   const partial = await newShop();
   await receiveOrderWebhook({ shopDomain: partial.shopDomain, topic: "ORDERS_CREATE", webhookId: "p-1", payload: { id: 9501 } });
   await receiveOrderWebhook({ shopDomain: partial.shopDomain, topic: "ORDERS_PAID", webhookId: "p-2", payload: { id: 9501 } });
-  await prisma.webhookDelivery.updateMany({ where: { shopId: partial.id, webhookId: "p-1" }, data: { attempts: 7 } });
+  await prisma.webhookDelivery.updateMany({ where: { shopId: partial.id, webhookId: "p-1" }, data: { attempts: MAX_DELIVERY_ATTEMPTS - 1 } });
   await processNextDelivery({ adminForShop: async () => { throw new Error("temporary Admin failure"); } });
-  assert.deepEqual((await statuses(partial.id)).map(({ status, attempts }) => [status, attempts]), [["FAILED", 8], ["PENDING", 1]]);
+  assert.deepEqual((await statuses(partial.id)).map(({ status, attempts }) => [status, attempts]),
+    [["FAILED", MAX_DELIVERY_ATTEMPTS], ["PENDING", 1]]);
 }
 
 async function verifyKilledWorker() {

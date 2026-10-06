@@ -1,5 +1,66 @@
 import { describe, expect, test } from "vitest";
-import { buildChecks, ensureTransform } from "./protection-admin.server";
+import { buildChecks, ensureTransform, repairProduct } from "./protection-admin.server";
+
+function productAdmin(product) {
+  const operations = [];
+  return {
+    operations,
+    graphql: async (query, { variables } = {}) => {
+      if (!query.replace(/#[^\n]*/g, "").trim()) throw new Error("syntax error, unexpected end of file");
+      const name = query.match(/\b(?:mutation|query)\s+(\w+)/)?.[1];
+      operations.push({ name, variables });
+      const data = {
+        ShippingProtectionProductByIdentifier: { productByIdentifier: product },
+        UpdateShippingProtectionProduct: { productUpdate: { product: { id: product.id }, userErrors: [] } },
+        ConfigureShippingProtectionVariant: { productVariantsBulkUpdate: { productVariants: [], userErrors: [] } },
+      }[name];
+      if (!data) throw new Error(`Unexpected operation ${name}`);
+      return { json: async () => ({ data }) };
+    },
+  };
+}
+
+const liveProduct = (descriptionHtml) => ({
+  id: "gid://shopify/Product/1", title: "Shipping Protection", handle: "shipping-protection",
+  status: "UNLISTED", descriptionHtml, variantsCount: { count: 1 },
+  variants: { nodes: [{ id: "gid://shopify/ProductVariant/1" }] },
+});
+
+describe("repairing the protection product", () => {
+  const productUpdates = (admin) => admin.operations
+    .filter(({ name }) => name === "UpdateShippingProtectionProduct")
+    .map(({ variables }) => variables.product);
+
+  test("never takes a live product off sale", async () => {
+    const admin = productAdmin(liveProduct("Merchant wording"));
+
+    await repairProduct(admin, liveProduct("Merchant wording"), "gid://shopify/ProductVariant/1");
+
+    expect(productUpdates(admin)).toHaveLength(1);
+    expect(productUpdates(admin)[0]).not.toHaveProperty("status");
+  });
+
+  test("keeps a description the merchant wrote", async () => {
+    const admin = productAdmin(liveProduct("<p>Merchant wording</p>"));
+
+    await repairProduct(admin, liveProduct("<p>Merchant wording</p>"), "gid://shopify/ProductVariant/1");
+
+    expect(productUpdates(admin)[0]).not.toHaveProperty("descriptionHtml");
+  });
+
+  test.each([
+    ["", "an empty description"],
+    ["<p>Optional coverage for eligible loss, theft, and damage in transit.</p>", "the retired coverage wording"],
+  ])("replaces %j (%s) with neutral shipping protection wording", async (descriptionHtml) => {
+    const admin = productAdmin(liveProduct(descriptionHtml));
+
+    await repairProduct(admin, liveProduct(descriptionHtml), "gid://shopify/ProductVariant/1");
+
+    const { descriptionHtml: written } = productUpdates(admin)[0];
+    expect(written).toContain("shipping protection");
+    expect(written).not.toMatch(/coverage|insur|loss|theft|damage/i);
+  });
+});
 
 const disabledConfiguration = { schemaVersion: 2, enabled: false };
 
@@ -60,6 +121,15 @@ describe("Cart Transform failure behavior", () => {
 
     expect(admin.operations.map(({ name }) => name)).not.toContain("DeleteShippingProtectionTransform");
     expect(admin.operations.map(({ name }) => name)).not.toContain("CreateShippingProtectionTransform");
+  });
+
+  test("leaves a live transform's configuration alone when asked not to overwrite it", async () => {
+    const admin = fakeAdmin();
+
+    await ensureTransform(admin, core({ id: "gid://shopify/CartTransform/kept", blockOnFailure: false }),
+      { schemaVersion: 2, enabled: true }, { overwrite: false });
+
+    expect(admin.operations).toEqual([]);
   });
 
   test.each([

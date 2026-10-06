@@ -1,6 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import process from "node:process";
-import { processNextDelivery, workerConcurrency } from "./webhook-worker.server.js";
+import {
+  MAX_DELIVERY_ATTEMPTS, processNextDelivery, retryDelayMs, workerConcurrency,
+} from "./webhook-worker.server.js";
 
 const money = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
 const order = {
@@ -12,35 +14,109 @@ const order = {
     product: null, variant: null, customAttributes: [] }], pageInfo: { hasNextPage: false, endCursor: null } },
 };
 
-function worker({ transactionError }) {
+function worker({
+  transactionError,
+  installationState = "INSTALLED",
+  adminForShop,
+  shopifyOrder = order,
+  graphqlError,
+}) {
   const updates = [];
   const database = {
-    shop: { findUnique: async () => ({ id: "shop-1", shopDomain: "one.myshopify.com", installationState: "INSTALLED" }) },
+    shop: { findUnique: async () => ({ id: "shop-1", shopDomain: "one.myshopify.com", installationState }) },
     $transaction: async () => { throw transactionError; },
     webhookDelivery: { updateMany: async (args) => { updates.push(args); return { count: 1 }; } },
   };
   const admin = { graphql: async (query) => {
     if (!query.replace(/#[^\n]*/g, "").trim()) throw new Error("syntax error, unexpected end of file");
-    return { json: async () => ({ data: { order } }) };
+    if (graphqlError) throw graphqlError;
+    return { json: async () => ({ data: { order: shopifyOrder } }) };
   } };
   const batch = { shopId: "shop-1", shopifyOrderId: order.id, leaseToken: "lease-1",
-    deliveries: [{ id: "d-1", topic: "ORDERS_PAID", attempts: 8 }, { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2 }] };
-  const run = () => processNextDelivery({
-    database, claim: async () => batch, adminForShop: async () => ({ admin }),
-  });
+    deliveries: [
+      { id: "d-1", topic: "ORDERS_PAID", attempts: MAX_DELIVERY_ATTEMPTS },
+      { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2 },
+    ] };
+  const run = async () => {
+    const stderr = [];
+    const stdout = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation((line) => { stderr.push(JSON.parse(line)); return true; });
+    const outSpy = vi.spyOn(process.stdout, "write").mockImplementation((line) => { stdout.push(JSON.parse(line)); return true; });
+    try {
+      await processNextDelivery({
+        database, claim: async () => batch, adminForShop: adminForShop ?? (async () => ({ admin })),
+      });
+    } finally {
+      errSpy.mockRestore();
+      outSpy.mockRestore();
+    }
+    return { stderr, stdout };
+  };
   return { run, updates };
 }
 
+const statuses = (updates) => updates.map(({ where, data }) => [where.id, data.status]);
+
+describe("worker failure handling", () => {
+  test.each([
+    ["the shop is marked uninstalled", { installationState: "UNINSTALLED" }],
+    ["the shop has no offline session", {
+      adminForShop: async () => { throw new (class SessionNotFoundError extends Error {})("no session"); },
+    }],
+    ["Shopify rejects the access token", {
+      graphqlError: Object.assign(new Error("Unauthorized"), { response: { code: 401 } }),
+    }],
+  ])("retries quietly, for a reinstall, when %s", async (_label, options) => {
+    const { run, updates } = worker(options);
+    const { stderr, stdout } = await run();
+
+    // Only the delivery out of attempts fails; the other waits for a reinstall.
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "PENDING"]]);
+    expect(updates.map(({ data }) => data.errorMessage)).toEqual(["SHOP_UNINSTALLED", "SHOP_UNINSTALLED"]);
+    expect(stderr.filter(({ event }) => event?.startsWith("webhook_"))).toEqual([]);
+    expect(stdout.filter(({ event }) => event === "webhook_skipped_uninstalled")).toHaveLength(2);
+  });
+
+  test("fails quietly when Shopify won't return the order, such as one past 60 days", async () => {
+    const { run, updates } = worker({ shopifyOrder: null });
+    const { stderr, stdout } = await run();
+
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "FAILED"]]);
+    expect(updates.map(({ data }) => data.errorMessage)).toEqual(["ORDER_UNAVAILABLE", "ORDER_UNAVAILABLE"]);
+    expect(stderr.filter(({ event }) => event?.startsWith("webhook_"))).toEqual([]);
+    expect(stdout.filter(({ event }) => event === "webhook_order_unavailable")).toHaveLength(2);
+  });
+
+  test("fails at once, with an alert, for an order too large to snapshot", async () => {
+    const { run, updates } = worker({ shopifyOrder: { ...order, transactionsCount: { count: 251 } } });
+    const { stderr } = await run();
+
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "FAILED"]]);
+    expect(stderr.filter(({ event }) => event === "webhook_terminal")).toHaveLength(2);
+  });
+
+  test("fails at once when the order data can't be normalized", async () => {
+    const { run, updates } = worker({ shopifyOrder: { ...order, currencyCode: null } });
+    await run();
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "FAILED"]]);
+  });
+
+  test("keeps retrying a temporary error for hours", async () => {
+    const { run, updates } = worker({ graphqlError: new Error("fetch failed") });
+    await run();
+
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "PENDING"]]);
+    let budgetMs = 0;
+    for (let attempts = 1; attempts < MAX_DELIVERY_ATTEMPTS; attempts += 1) budgetMs += retryDelayMs(attempts);
+    expect(budgetMs).toBeGreaterThan(4 * 60 * 60_000);
+  });
+});
+
 describe("worker conflict handling", () => {
   test("requeues a batch that kept losing serialization conflicts without spending attempts", async () => {
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
     const { run, updates } = worker({ transactionError: conflict });
-    try {
-      await run();
-    } finally {
-      stderr.mockRestore();
-    }
+    await run();
 
     expect(updates).toHaveLength(1);
     expect(updates[0].where).toMatchObject({ shopId: "shop-1", leaseToken: "lease-1", status: "PROCESSING" });
@@ -50,15 +126,10 @@ describe("worker conflict handling", () => {
   });
 
   test("still fails a delivery on its last attempt for other errors", async () => {
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const { run, updates } = worker({ transactionError: new Error("lease lost") });
-    try {
-      await run();
-    } finally {
-      stderr.mockRestore();
-    }
+    await run();
 
-    expect(updates.map(({ where, data }) => [where.id, data.status])).toEqual([["d-1", "FAILED"], ["d-2", "PENDING"]]);
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "PENDING"]]);
   });
 });
 

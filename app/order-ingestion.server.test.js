@@ -92,6 +92,7 @@ function transaction(rules = [rule]) {
       deleteMany: vi.fn(),
       createMany,
     },
+    webhookDelivery: { upsert: vi.fn() },
     protectionPurchase: {
       upsert: purchaseUpsert,
       deleteMany: purchaseDeleteMany,
@@ -253,6 +254,22 @@ describe("normalized order persistence", () => {
     expect(tx.storedPurchase()).toBeNull();
   });
 
+  test("refetches once when a copy from the same second differs", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, normalizedOrder());
+    await persistNormalizedOrder(tx, shop, normalizedOrder());
+    expect(tx.webhookDelivery.upsert).not.toHaveBeenCalled();
+
+    const changed = normalizedOrder();
+    changed.financialStatus = "REFUNDED";
+    await persistNormalizedOrder(tx, shop, changed);
+
+    expect(tx.webhookDelivery.upsert).toHaveBeenCalledOnce();
+    expect(tx.webhookDelivery.upsert.mock.calls[0][0].where.shopId_webhookId).toEqual({
+      shopId: "shop-1", webhookId: "same-second:gid://shopify/Order/1:2026-09-23T00:01:00.000Z",
+    });
+  });
+
   test("ignores an older order snapshot delivered after a newer one", async () => {
     const tx = transaction();
     const newer = normalizedOrder();
@@ -301,6 +318,25 @@ describe("live price check", () => {
     expect(tx.storedPurchase().pricingCheck).toBe("UNMATCHED");
   });
 
+  test("matches the total charged across protection lines", async () => {
+    const tx = transaction();
+    const order = normalizedOrder(attributed);
+    order.lines.push({
+      ...order.lines[1], shopifyLineItemId: "gid://shopify/LineItem/3",
+      originalUnitAmount: "0.0000", preDiscountAmount: "0.0000", finalAmount: "0.0000",
+    });
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
+  });
+
+  test("marks a fee charged per unit as unmatched", async () => {
+    const tx = transaction();
+    const order = normalizedOrder(attributed);
+    Object.assign(order.lines[1], { quantity: 2, preDiscountAmount: "0.5000", finalAmount: "0.5000" });
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedPurchase().pricingCheck).toBe("UNMATCHED");
+  });
+
   test("checks the price in the currency the customer paid in", async () => {
     const tx = transaction();
     // Converted to shop money the fee no longer equals 0.25% of the shop subtotal.
@@ -326,11 +362,15 @@ describe("live price check", () => {
       const tx = transaction();
       const paid = chargedProtection(normalizedOrder(attributed), "5.0000");
       paid.paidAt = new Date("2026-09-23T00:02:00Z");
-      await persistNormalizedOrder(tx, shop, paid);
+      const afterCommit = [];
+      await persistNormalizedOrder(tx, shop, paid, afterCommit);
+      // The transaction could still roll back, so nothing is sent yet.
+      expect(events.named("protection_price_unmatched")).toEqual([]);
       const later = chargedProtection(normalizedOrder(attributed), "5.0000");
       later.paidAt = paid.paidAt;
       later.shopifyUpdatedAt = new Date("2026-09-24T00:00:00Z");
-      await persistNormalizedOrder(tx, shop, later);
+      await persistNormalizedOrder(tx, shop, later, afterCommit);
+      for (const report of afterCommit) report();
 
       expect(events.named("protection_price_unmatched")).toEqual([expect.objectContaining({
         shopId: "shop-1", shopifyOrderId: "gid://shopify/Order/1",
@@ -341,30 +381,34 @@ describe("live price check", () => {
     }
   });
 
-  test("treats a $0.00 protection fee on a subscription order as expected, not a failure", async () => {
+  test("does not count a subscription order as protected or alert on its $0.00 fee", async () => {
     const events = stderrEvents();
     try {
       const tx = transaction();
       const paid = chargedProtection(normalizedOrder(attributed), "0.0000");
       paid.lines[0].hasSellingPlan = true;
       paid.paidAt = new Date("2026-09-23T00:02:00Z");
-      await persistNormalizedOrder(tx, shop, paid);
+      const afterCommit = [];
+      await persistNormalizedOrder(tx, shop, paid, afterCommit);
+      for (const report of afterCommit) report();
 
-      expect(tx.storedPurchase().pricingCheck).toBe("SUBSCRIPTION");
-      expect(tx.storedPurchase().purchasedAt).toEqual(paid.paidAt);
+      expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+      expect(tx.storedPurchase()).toBeNull();
+      expect(tx.storedOrder()).toMatchObject({ paidProtected: false, paidProtectionFee: "0.0000" });
       expect(events.named("protection_price_unmatched")).toEqual([]);
     } finally {
       events.restore();
     }
   });
 
-  test("still marks a subscription order matched when the live price was charged", async () => {
+  test("does not count a subscription order as protected even when a fee was charged", async () => {
     const tx = transaction();
     const order = normalizedOrder(attributed);
     order.lines[0].hasSellingPlan = true;
-    order.lines[1].originalUnitAmount = order.lines[1].finalAmount = order.lines[1].preDiscountAmount = "0.2500";
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
     await persistNormalizedOrder(tx, shop, order);
-    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedOrder().paidProtected).toBe(false);
   });
 
   test("does not alert for a paid order charged the live price", async () => {
