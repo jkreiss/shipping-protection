@@ -8,14 +8,15 @@ const SHOP_CONFIG_KEY = "shipping_protection_config";
 const FUNCTION_CONFIG_KEY = "function-configuration";
 const CONFIG_NAMESPACE = "$app";
 const API_VERSION = "2026-07";
-// Customer-visible. It names no benefit, because which benefits are sold is
-// still a legal decision (docs/agents/legal-product.md).
+// Customer-visible, and must match the checkout copy. Before changing it, follow
+// "Changing customer-facing copy" in docs/agents/legal-product.md.
 const PRODUCT_DESCRIPTION =
-  "Optional shipping protection offered by this store. The fee is based on the items being shipped.";
+  "Optional shipping protection offered by this store. Covers packages stolen after delivery.";
 // Descriptions earlier versions wrote. Setup replaces these, but keeps a
 // description the merchant wrote themselves.
 const RETIRED_DESCRIPTIONS = new Set([
   "Optional coverage for eligible loss, theft, and damage in transit.",
+  "Optional shipping protection offered by this store. The fee is based on the items being shipped.",
 ]);
 
 const PRODUCT_FIELDS = `#graphql

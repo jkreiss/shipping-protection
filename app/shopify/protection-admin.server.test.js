@@ -51,14 +51,17 @@ describe("repairing the protection product", () => {
   test.each([
     ["", "an empty description"],
     ["<p>Optional coverage for eligible loss, theft, and damage in transit.</p>", "the retired coverage wording"],
-  ])("replaces %j (%s) with neutral shipping protection wording", async (descriptionHtml) => {
+    ["Optional shipping protection offered by this store. The fee is based on the items being shipped.", "the retired neutral wording"],
+  ])("replaces %j (%s) with the current shipping protection wording", async (descriptionHtml) => {
     const admin = productAdmin(liveProduct(descriptionHtml));
 
     await repairProduct(admin, liveProduct(descriptionHtml), "gid://shopify/ProductVariant/1");
 
     const { descriptionHtml: written } = productUpdates(admin)[0];
     expect(written).toContain("shipping protection");
-    expect(written).not.toMatch(/coverage|insur|loss|theft|damage/i);
+    expect(written).toContain("stolen after delivery");
+    // Loss and damage in transit are consumer-law obligations, never sold as protection.
+    expect(written).not.toMatch(/coverage|insur|\b(loss|lost)\b|damage/i);
   });
 });
 
