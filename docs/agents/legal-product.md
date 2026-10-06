@@ -28,7 +28,7 @@ Australian Consumer Law rights must not be represented as being removed or repla
 
 Product rules that follow from this (legal review still required):
 
-- Only sell benefits customers do not already have. Theft after delivery and free change-of-mind returns qualify. Damage in transit, faulty goods, and not-as-described items are the merchant's existing obligation and must not be sold as protection. Lost in transit is pending legal review.
+- Only sell benefits customers do not already have. Theft after delivery and free change-of-mind returns qualify. Loss and damage in transit, faulty goods, and not-as-described items are the merchant's existing obligation and must not be sold as protection (loss in transit confirmed 2026-10-06). Setup enables only theft.
 - Customers without protection who have a consumer-law problem must be treated exactly like protected customers. Never gate those remedies behind protection, and never tell an unprotected customer they are not covered for them.
 - Protection fees are the merchant's revenue, and the merchant may spend them on anything, including consumer-law remedies. Merchant-only reporting may show those costs next to protection revenue. Customer-facing wording must never suggest the fee is what funds those remedies.
 

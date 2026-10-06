@@ -381,30 +381,34 @@ describe("live price check", () => {
     }
   });
 
-  test("treats a $0.00 protection fee on a subscription order as expected, not a failure", async () => {
+  test("does not count a subscription order as protected or alert on its $0.00 fee", async () => {
     const events = stderrEvents();
     try {
       const tx = transaction();
       const paid = chargedProtection(normalizedOrder(attributed), "0.0000");
       paid.lines[0].hasSellingPlan = true;
       paid.paidAt = new Date("2026-09-23T00:02:00Z");
-      await persistNormalizedOrder(tx, shop, paid);
+      const afterCommit = [];
+      await persistNormalizedOrder(tx, shop, paid, afterCommit);
+      for (const report of afterCommit) report();
 
-      expect(tx.storedPurchase().pricingCheck).toBe("SUBSCRIPTION");
-      expect(tx.storedPurchase().purchasedAt).toEqual(paid.paidAt);
+      expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+      expect(tx.storedPurchase()).toBeNull();
+      expect(tx.storedOrder()).toMatchObject({ paidProtected: false, paidProtectionFee: "0.0000" });
       expect(events.named("protection_price_unmatched")).toEqual([]);
     } finally {
       events.restore();
     }
   });
 
-  test("still marks a subscription order matched when the live price was charged", async () => {
+  test("does not count a subscription order as protected even when a fee was charged", async () => {
     const tx = transaction();
     const order = normalizedOrder(attributed);
     order.lines[0].hasSellingPlan = true;
-    order.lines[1].originalUnitAmount = order.lines[1].finalAmount = order.lines[1].preDiscountAmount = "0.2500";
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
     await persistNormalizedOrder(tx, shop, order);
-    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedOrder().paidProtected).toBe(false);
   });
 
   test("does not alert for a paid order charged the live price", async () => {

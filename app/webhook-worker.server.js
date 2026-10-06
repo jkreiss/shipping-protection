@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import prisma from "./db.server.js";
-import { fetchShopifyOrder, PermanentOrderError } from "./order-shopify.server.js";
+import { fetchShopifyOrder, OrderUnavailableError, PermanentOrderError } from "./order-shopify.server.js";
 import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
 import { failureCode, logEvent, reportFailure } from "./observability.server.js";
@@ -154,6 +154,7 @@ export async function processNextDelivery({
     // Without access, keep retrying quietly so a reinstall still processes the
     // queue; after the retry budget the deliveries fail, still without an alert.
     const uninstalled = isUninstalled(error);
+    const unavailable = error instanceof OrderUnavailableError;
     const permanent = error instanceof PermanentOrderError;
     // Each delivery keeps its own attempt count, so reschedule them one by one.
     for (const delivery of batch.deliveries) {
@@ -165,13 +166,17 @@ export async function processNextDelivery({
           nextAttemptAt: new Date(Date.now() + retryDelayMs(delivery.attempts)),
           failedAt: terminal ? new Date() : null,
           leaseToken: null, leaseUntil: null,
-          errorMessage: uninstalled ? "SHOP_UNINSTALLED" : failureCode(error),
+          errorMessage: uninstalled ? "SHOP_UNINSTALLED" : unavailable ? "ORDER_UNAVAILABLE" : failureCode(error),
         },
       });
       if (uninstalled) {
         logEvent("webhook_skipped_uninstalled", {
           deliveryId: delivery.id, shopId, topic: delivery.topic, attempts: delivery.attempts, terminal,
         });
+        continue;
+      }
+      if (unavailable) {
+        logEvent("webhook_order_unavailable", { deliveryId: delivery.id, shopId, topic: delivery.topic });
         continue;
       }
       reportFailure(terminal ? "webhook_terminal" : "webhook_retry", error, {
