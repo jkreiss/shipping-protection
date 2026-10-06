@@ -39,3 +39,13 @@ export async function enableShopProtection(shopDomain, database = prisma) {
     },
   });
 }
+
+export async function disableShopProtection(shopDomain, database = prisma) {
+  const shop = await database.shop.findUnique({ where: { shopDomain }, select: { id: true } });
+  if (!shop) throw new Error("Installed shop is unavailable.");
+  return database.shopConfiguration.upsert({
+    where: { shopId: shop.id },
+    create: { shopId: shop.id, protectionEnabled: false },
+    update: { protectionEnabled: false },
+  });
+}

@@ -31,6 +31,16 @@ not checkout block placement. Do not show a product editor or Requirements
 sidebar. Rate editing is operator-controlled per store; restricted stores see
 the current rate as text with no rate form. Enforce the restriction server-side.
 
+Existing checkout protection setups have a "Turn off shipping protection"
+button. Confirmed disabled checkout and pricing configurations show "Off" and
+"Turn on shipping protection"; expected disabled flags are not setup failures.
+Keep genuine setup failures visible. Turning it back on uses the existing setup
+checks and saved rate. Turning it off preserves the checkout block, product,
+historical pricing rules, and existing purchases. Disable Settings actions while
+a change is saving.
+The Overview also shows "Off" with a link to manage protection in Settings;
+reserve "Finish setup" for stores whose setup actually needs attention.
+
 Copy:
 
 - plain language merchants understand, with no basis points or internal jargon

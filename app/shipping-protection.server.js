@@ -11,7 +11,7 @@ import {
 } from "./pricing-rule.server";
 import { ensureInstalledShop, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
-import { enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
+import { disableShopProtection, enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
 import {
   loadCore, loadProduct, findProduct, buildChecks, writeJsonMetafield,
@@ -64,8 +64,10 @@ export async function readShippingProtectionState(admin, shopDomain) {
   await ensureInstalledShop(domain, core.shop.id);
   if (
     core.shopConfig?.schemaVersion === 2 &&
-    sameContract(core.shopConfig, core.transformConfig, true)
+    sameContract(core.shopConfig, core.transformConfig, core.shopConfig.enabled)
   ) {
+    // Turning off an offer preserves its published rule. Finish an interrupted
+    // rate save even while off, so restoring protection keeps that same rate.
     await reconcilePublishedPricingRule(domain, core.shopConfig);
   }
   const seed = core.shopConfig ?? core.transformConfig;
@@ -75,6 +77,14 @@ export async function readShippingProtectionState(admin, shopDomain) {
   const healthReady = checks.every(({ ok }) => ok);
   const settings = await getShopConfiguration(domain);
   const capabilities = observedShopifyCapabilities(core.shop);
+  // Published flags show the actual checkout state even if the local write
+  // failed after Shopify accepted a turn-off. An incomplete first setup still
+  // needs setup; it isn't a merchant deliberately switching protection off.
+  const protectionOff = Boolean(
+    settings.attachmentStrategy === "CHECKOUT_UI_CART_TRANSFORM" &&
+    core.shopConfig?.enabled === false &&
+    (!core.transform || core.transformConfig?.enabled === false),
+  );
   const configuration = resolveConfiguration(
     settings,
     capabilities,
@@ -84,6 +94,7 @@ export async function readShippingProtectionState(admin, shopDomain) {
   return {
     shopName: core.shop.name,
     ready: healthReady,
+    protectionOff,
     configuration,
     capabilities,
     configuredStrategy: settings.attachmentStrategy,
@@ -115,14 +126,41 @@ export async function readShippingProtectionState(admin, shopDomain) {
   };
 }
 
-// Setup and rate changes each publish pricing to Shopify and then record it,
-// so they run one at a time per shop.
+// Setup, rate changes, and turning off protection each publish to Shopify
+// and then record it locally, so they run one at a time per shop.
 export function activatePricingRule(admin, shopDomain, rateBasisPoints) {
   return withShopSettingsLock(shopDomain, () => publishRate(admin, shopDomain, rateBasisPoints));
 }
 
 export function setupShippingProtection(admin, shopDomain) {
   return withShopSettingsLock(shopDomain, () => runSetup(admin, shopDomain));
+}
+
+export function disableShippingProtection(admin, shopDomain) {
+  return withShopSettingsLock(shopDomain, async () => {
+    const core = await loadCore(admin);
+    if (shopDomain !== core.shop.myshopifyDomain) {
+      throw new Error("Shopify shop identity does not match the session.");
+    }
+    let contract = core.transformConfig ?? core.shopConfig;
+    if (!contract) {
+      const rule = await getActivePricingRule(shopDomain);
+      if (rule) contract = pricingContractForRule(rule, rule.productId, rule.variantId, false);
+    }
+    if (!contract) {
+      throw new UserFacingError("Protection configuration is unavailable. Update protection setup, then try turning it off again.");
+    }
+
+    // Keep the product, saved rate, and historical rules. Both published
+    // configurations are switched off together before changing local settings.
+    await disableKnownConfiguration(admin, core, contract);
+    await disableShopProtection(shopDomain);
+    const state = await readShippingProtectionState(admin, shopDomain);
+    if (!state.protectionOff) {
+      throw new UserFacingError("Couldn't confirm protection is off. Refresh to check its status, then try again.");
+    }
+    return state;
+  });
 }
 
 async function publishRate(

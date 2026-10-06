@@ -67,7 +67,7 @@ export async function recordGrantedScopes({ shopDomain, sessionId, scopes, datab
 
 const SETTINGS_LOCK_MS = 5 * 60_000;
 
-// Runs one protection setup or rate change at a time per shop. Both publish
+// Runs one protection setup, rate change, or turn-off at a time per shop. These publish
 // pricing to Shopify and then record it locally; interleaved, the rate Shopify
 // charges and the rate Settings shows can disagree. The lease expires on its
 // own if the process dies mid-change.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildChecks, ensureTransform, repairProduct } from "./protection-admin.server";
+import { buildChecks, disableKnownConfiguration, ensureTransform, repairProduct } from "./protection-admin.server";
 
 function productAdmin(product) {
   const operations = [];
@@ -91,6 +91,43 @@ function fakeAdmin() {
 function core(transform) {
   return { shopifyFunction: { apiVersion: "2026-07" }, transform };
 }
+
+describe("turning off the published protection configuration", () => {
+  const contract = { schemaVersion: 2, enabled: true, productId: "gid://shopify/Product/1",
+    variantId: "gid://shopify/ProductVariant/1", ruleId: "rule-1", ruleVersion: 3,
+    rateBasisPoints: 40, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: "2026-09-01T00:00:00.000Z" };
+  const configured = {
+    shop: { id: "gid://shopify/Shop/1", configuration: { compareDigest: "shop-digest" } },
+    transform: { id: "gid://shopify/CartTransform/1", configuration: { compareDigest: "function-digest" } },
+  };
+
+  test("updates checkout and pricing together while preserving the historical rule", async () => {
+    const admin = fakeAdmin();
+    await disableKnownConfiguration(admin, configured, contract);
+
+    expect(admin.operations).toHaveLength(1);
+    const fields = admin.operations[0].variables.metafields;
+    expect(fields.map(({ ownerId, key, compareDigest }) => ({ ownerId, key, compareDigest }))).toEqual([
+      { ownerId: "gid://shopify/Shop/1", key: "shipping_protection_config", compareDigest: "shop-digest" },
+      { ownerId: "gid://shopify/CartTransform/1", key: "function-configuration", compareDigest: "function-digest" },
+    ]);
+    for (const field of fields) expect(JSON.parse(field.value)).toEqual({ ...contract, enabled: false });
+  });
+
+  test("turns off the checkout offer even if the pricing function is missing", async () => {
+    const admin = fakeAdmin();
+    await disableKnownConfiguration(admin, { ...configured, transform: null }, contract);
+    expect(admin.operations[0].variables.metafields).toHaveLength(1);
+    expect(JSON.parse(admin.operations[0].variables.metafields[0].value).enabled).toBe(false);
+  });
+
+  test("surfaces Shopify conflicts instead of reporting a successful disable", async () => {
+    const admin = { graphql: async () => ({ json: async () => ({ data: {
+      metafieldsSet: { userErrors: [{ field: ["metafields"], message: "Configuration changed", code: "INVALID_COMPARE_DIGEST" }] },
+    } }) }) };
+    await expect(disableKnownConfiguration(admin, configured, contract)).rejects.toThrow("Configuration changed");
+  });
+});
 
 describe("Cart Transform failure behavior", () => {
   test("creates a transform that never blocks checkout", async () => {

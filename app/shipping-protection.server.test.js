@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   buildChecks: vi.fn(),
   ensureInstalledShop: vi.fn(),
   getActivePricingRule: vi.fn(),
+  reconcilePublishedPricingRule: vi.fn(),
   getShopConfiguration: vi.fn(),
   repairProduct: vi.fn(),
   loadProduct: vi.fn(),
@@ -13,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   publishSnapshot: vi.fn(),
   createAndPublishPricingRule: vi.fn(),
   enableShopProtection: vi.fn(),
+  disableShopProtection: vi.fn(),
+  withShopSettingsLock: vi.fn((_shopDomain, run) => run()),
   writeJsonMetafield: vi.fn(),
   disableKnownConfiguration: vi.fn(),
   activateProduct: vi.fn(),
@@ -43,22 +46,27 @@ vi.mock("./shopify/protection-admin.server", () => ({
 }));
 vi.mock("./shop.server", () => ({
   ensureInstalledShop: mocks.ensureInstalledShop,
-  withShopSettingsLock: (_shopDomain, run) => run(),
+  withShopSettingsLock: mocks.withShopSettingsLock,
 }));
 vi.mock("./pricing-rule.server", () => ({
   getActivePricingRule: mocks.getActivePricingRule,
   createAndPublishPricingRule: mocks.createAndPublishPricingRule,
-  reconcilePublishedPricingRule: vi.fn(),
+  reconcilePublishedPricingRule: mocks.reconcilePublishedPricingRule,
 }));
 vi.mock("./merchant/configuration.server", () => ({
   getShopConfiguration: mocks.getShopConfiguration,
   enableShopProtection: mocks.enableShopProtection,
+  disableShopProtection: mocks.disableShopProtection,
 }));
 
-import { activatePricingRule, readShippingProtectionState, setupShippingProtection } from "./shipping-protection.server";
+import { activatePricingRule, disableShippingProtection, readShippingProtectionState, setupShippingProtection } from "./shipping-protection.server";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.disableKnownConfiguration.mockReset();
+  mocks.disableShopProtection.mockReset();
+  mocks.publishSnapshot.mockReset();
+  mocks.reconcilePublishedPricingRule.mockReset();
   mocks.loadCore.mockResolvedValue({
     shop: {
       id: "gid://shopify/Shop/1", name: "One", myshopifyDomain: "one.myshopify.com",
@@ -81,6 +89,142 @@ beforeEach(() => {
 const ruleFor = (productId, variantId) => ({
   id: "pricing-1", shopId: "shop-1", ruleId: "rule-1", version: 3, productId, variantId,
   rateBasisPoints: 40, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: new Date("2026-09-01T00:00:00Z"),
+});
+
+describe("turning shipping protection off", () => {
+  const contract = { schemaVersion: 2, enabled: true, productId: "gid://shopify/Product/1",
+    variantId: "gid://shopify/ProductVariant/1", ruleId: "rule-1", ruleVersion: 3,
+    rateBasisPoints: 40, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: "2026-09-01T00:00:00.000Z" };
+  let core;
+
+  beforeEach(async () => {
+    core = { ...(await mocks.loadCore()), shopConfig: { ...contract }, transformConfig: { ...contract },
+      transform: { id: "transform-1", blockOnFailure: false }, onlineStore: { id: "publication-1" } };
+    mocks.loadCore.mockResolvedValue(core);
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor(contract.productId, contract.variantId));
+    mocks.disableKnownConfiguration.mockImplementation(async (_admin, target, current) => {
+      target.shopConfig = { ...current, enabled: false };
+      target.transformConfig = { ...current, enabled: false };
+    });
+    mocks.disableShopProtection.mockImplementation(async () => {
+      const settings = { ...(await mocks.getShopConfiguration()), protectionEnabled: false };
+      mocks.getShopConfiguration.mockResolvedValue(settings);
+      return settings;
+    });
+  });
+
+  test("switches off checkout and pricing under the same merchant settings lock", async () => {
+    const state = await disableShippingProtection({}, "one.myshopify.com");
+
+    expect(state.protectionOff).toBe(true);
+    expect(state.configuration.protectionEnabled).toBe(false);
+    expect(state.pricing).toMatchObject({ ruleId: "rule-1", rateBasisPoints: 40 });
+    expect(mocks.withShopSettingsLock).toHaveBeenCalledWith("one.myshopify.com", expect.any(Function));
+    expect(mocks.disableKnownConfiguration).toHaveBeenCalledWith({}, core, contract);
+    expect(mocks.disableShopProtection).toHaveBeenCalledWith("one.myshopify.com");
+    expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+    expect(mocks.repairProduct).not.toHaveBeenCalled();
+  });
+
+  test("rejects a shop mismatch before changing Shopify or merchant settings", async () => {
+    await expect(disableShippingProtection({}, "two.myshopify.com"))
+      .rejects.toThrow("Shopify shop identity does not match the session");
+    expect(mocks.disableKnownConfiguration).not.toHaveBeenCalled();
+    expect(mocks.disableShopProtection).not.toHaveBeenCalled();
+  });
+
+  test("leaves merchant settings enabled if Shopify rejects the change", async () => {
+    mocks.disableKnownConfiguration.mockRejectedValueOnce(new Error("Shopify conflict"));
+
+    await expect(disableShippingProtection({}, "one.myshopify.com")).rejects.toThrow("Shopify conflict");
+
+    expect(mocks.disableShopProtection).not.toHaveBeenCalled();
+    expect(core.shopConfig.enabled).toBe(true);
+    expect(core.transformConfig.enabled).toBe(true);
+  });
+
+  test("allows turning off an existing setup after the store loses checkout eligibility", async () => {
+    core.shop.plan.shopifyPlus = false;
+    core.shop.features.cartTransform.eligibleOperations.updateOperation = false;
+    expect((await disableShippingProtection({}, "one.myshopify.com")).protectionOff).toBe(true);
+  });
+
+  test("uses the pricing function's contract when the published copies differ", async () => {
+    core.shopConfig = { ...contract, rateBasisPoints: 25 };
+    await disableShippingProtection({}, "one.myshopify.com");
+    expect(mocks.disableKnownConfiguration).toHaveBeenCalledWith({}, core, contract);
+  });
+
+  test("recovers a missing configuration from the merchant's existing pricing rule", async () => {
+    core.shopConfig = null;
+    core.transformConfig = null;
+    await disableShippingProtection({}, "one.myshopify.com");
+    expect(core.shopConfig).toEqual({ ...contract, enabled: false });
+  });
+
+  test("does not claim success without any configuration or saved pricing rule", async () => {
+    core.shopConfig = null;
+    core.transformConfig = null;
+    mocks.getActivePricingRule.mockResolvedValue(null);
+    await expect(disableShippingProtection({}, "one.myshopify.com")).rejects.toThrow("configuration");
+    expect(mocks.disableShopProtection).not.toHaveBeenCalled();
+  });
+
+  test("retries safely without creating resources or changing the rate", async () => {
+    await disableShippingProtection({}, "one.myshopify.com");
+    const state = await disableShippingProtection({}, "one.myshopify.com");
+    expect(state.protectionOff).toBe(true);
+    expect(state.pricing.rateBasisPoints).toBe(40);
+    expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+    expect(mocks.ensureTransform).not.toHaveBeenCalled();
+  });
+
+  test("shows published protection as off if its local settings write failed", async () => {
+    mocks.disableShopProtection.mockRejectedValueOnce(new Error("Database unavailable"));
+    mocks.buildChecks.mockReturnValue([
+      { id: "checkoutConfig", ok: false }, { id: "transformConfig", ok: false },
+    ]);
+    await expect(disableShippingProtection({}, "one.myshopify.com")).rejects.toThrow("Database unavailable");
+    const state = await readShippingProtectionState({}, "one.myshopify.com");
+    expect(state.protectionOff).toBe(true);
+    expect(state.configuration.protectionEnabled).toBe(false);
+  });
+
+  test("keeps the latest published rate when a previous save needs database recovery", async () => {
+    mocks.getActivePricingRule.mockResolvedValue({
+      ...ruleFor(contract.productId, contract.variantId), ruleId: "old-rule", version: 2, rateBasisPoints: 25,
+    });
+    mocks.reconcilePublishedPricingRule.mockImplementation(async () => {
+      mocks.getActivePricingRule.mockResolvedValue(ruleFor(contract.productId, contract.variantId));
+    });
+
+    const state = await disableShippingProtection({}, "one.myshopify.com");
+
+    expect(state.pricing).toMatchObject({ ruleId: "rule-1", ruleVersion: 3, rateBasisPoints: 40 });
+  });
+
+  test("restores protection at its saved rate through setup", async () => {
+    await disableShippingProtection({}, "one.myshopify.com");
+    mocks.repairProduct.mockResolvedValue({ product: { id: contract.productId }, variantId: contract.variantId });
+    mocks.ensureTransform.mockResolvedValue({ id: "transform-1" });
+    mocks.loadProduct.mockResolvedValue({ status: "UNLISTED", variantsCount: { count: 1 }, variants: { nodes: [{}] } });
+    mocks.publishSnapshot.mockImplementation(async (_admin, snapshot) => {
+      core.shopConfig = snapshot;
+      core.transformConfig = snapshot;
+    });
+    mocks.enableShopProtection.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+
+    const state = await setupShippingProtection({}, "one.myshopify.com");
+
+    expect(state.protectionOff).toBe(false);
+    expect(state.configuration.protectionEnabled).toBe(true);
+    expect(state.configuration.protectionRateEditable).toBe(false);
+    expect(state.pricing.rateBasisPoints).toBe(40);
+    expect(core.shopConfig).toEqual(contract);
+    expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+  });
 });
 
 describe("merchant rate editing", () => {

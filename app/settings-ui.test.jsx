@@ -2,14 +2,14 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const mocks = vi.hoisted(() => ({ state: null }));
+const mocks = vi.hoisted(() => ({ state: null, saving: false }));
 vi.mock("preact/jsx-runtime", async () => ({
   ...(await vi.importActual("react/jsx-runtime")),
   ...(await vi.importActual("react/jsx-dev-runtime")),
 }));
 vi.mock("react-router", () => ({
   useLoaderData: () => mocks.state,
-  useFetcher: () => ({ state: "idle", Form: "form" }),
+  useFetcher: () => ({ state: mocks.saving ? "submitting" : "idle", formMethod: "POST", Form: "form" }),
 }));
 vi.mock("@shopify/app-bridge-react", () => ({
   useAppBridge: () => ({ toast: { show: vi.fn() } }),
@@ -17,6 +17,7 @@ vi.mock("@shopify/app-bridge-react", () => ({
 vi.mock("./shopify.server", () => ({ authenticate: { admin: vi.fn() } }));
 vi.mock("./shipping-protection.server", () => ({
   activatePricingRule: vi.fn(),
+  disableShippingProtection: vi.fn(),
   readShippingProtectionState: vi.fn(),
   setupShippingProtection: vi.fn(),
 }));
@@ -30,7 +31,9 @@ function render() {
 }
 
 beforeEach(() => {
+  mocks.saving = false;
   mocks.state = {
+    protectionOff: false,
     configuration: {
       protectionEnabled: true,
       protectionRateEditable: true,
@@ -64,9 +67,11 @@ describe("settings controls", () => {
   });
 
   test("hides setup updates when ready and offers them when a check fails", () => {
-    expect(
-      render().querySelector('s-section[heading="Protection status"] s-button'),
-    ).toBeNull();
+    const status = render().querySelector('s-section[heading="Protection status"]');
+    expect(status.textContent).not.toContain("Update protection setup");
+    expect(status.textContent).not.toContain("Set up protection");
+    expect(status.querySelector('input[value="disable"]')).not.toBeNull();
+    expect(status.querySelector('s-button[type="submit"]').textContent).toBe("Turn off shipping protection");
     mocks.state.configuration.protectionEnabled = false;
     mocks.state.checks = [
       { id: "setup", ok: false, label: "Setup needs attention" },
@@ -80,5 +85,37 @@ describe("settings controls", () => {
     mocks.state.product = null;
     mocks.state.pricing = null;
     expect(render().textContent).toContain("Set up protection");
+    expect(render().querySelector('input[value="disable"]')).toBeNull();
+  });
+
+  test("shows Off and a restore button without treating disabled settings as broken", () => {
+    mocks.state.protectionOff = true;
+    mocks.state.configuration.protectionEnabled = false;
+    mocks.state.checks = [
+      { id: "checkoutConfig", ok: false, label: "Checkout configuration is enabled" },
+      { id: "transformConfig", ok: false, label: "Cart Transform pricing configuration is enabled" },
+    ];
+    const page = render();
+    const status = page.querySelector('s-section[heading="Protection status"]');
+
+    expect(status.querySelector("s-badge").textContent).toBe("Off");
+    expect(status.textContent).not.toContain("Needs attention");
+    expect(status.textContent).not.toContain("Update protection setup");
+    expect(status.querySelector('input[value="enable"]')).not.toBeNull();
+    expect(status.querySelector('s-button[type="submit"]').textContent).toBe("Turn on shipping protection");
+    expect(page.querySelector('s-number-field[name="ratePercent"]').getAttribute("value")).toBe("0.4");
+    expect(page.querySelector('input[value="update-rate"]').closest("form").querySelector("s-button").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("keeps real setup failures visible while protection is off", () => {
+    mocks.state.protectionOff = true;
+    mocks.state.configuration.protectionEnabled = false;
+    mocks.state.checks = [{ id: "product", ok: false, label: "Shipping Protection product exists" }];
+    expect(render().textContent).toContain("Needs attention");
+  });
+
+  test("disables all settings actions while a change is saving", () => {
+    mocks.saving = true;
+    expect([...render().querySelectorAll("s-button")].every((button) => button.hasAttribute("disabled"))).toBe(true);
   });
 });

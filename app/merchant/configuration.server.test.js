@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { enableShopProtection, getShopConfiguration } from "./configuration.server";
+import { disableShopProtection, enableShopProtection, getShopConfiguration } from "./configuration.server";
 
 function database(shop) {
   return {
@@ -55,6 +55,23 @@ describe("shop configuration persistence", () => {
     const config = await enableShopProtection("one.myshopify.com", db);
     expect(config.protectionEnabled).toBe(true);
     expect(config.protectionRateEditable).toBe(false);
+  });
+
+  test("turning off protection changes only this merchant's enabled setting", async () => {
+    const existing = { shopId: "one", protectionEnabled: true,
+      protectionRateEditable: false, stolenCoverageEnabled: true,
+      attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" };
+    const db = database({ id: "one", configuration: existing });
+    db.shopConfiguration.upsert.mockImplementation(async ({ update }) => ({ ...existing, ...update }));
+
+    const config = await disableShopProtection("one.myshopify.com", db);
+
+    expect(config).toEqual({ ...existing, protectionEnabled: false });
+    expect(db.shopConfiguration.upsert).toHaveBeenCalledWith({
+      where: { shopId: "one" },
+      create: { shopId: "one", protectionEnabled: false },
+      update: { protectionEnabled: false },
+    });
   });
 
   test("enables only theft after delivery, never consumer-law remedies", async () => {
