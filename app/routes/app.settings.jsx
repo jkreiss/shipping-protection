@@ -9,6 +9,7 @@ import {
 } from "../pricing-contract";
 import {
   activatePricingRule,
+  disableShippingProtection,
   readShippingProtectionState,
   setupShippingProtection,
 } from "../shipping-protection.server";
@@ -25,7 +26,7 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (intent !== "setup" && intent !== "update-rate") {
+  if (!["setup", "update-rate", "enable", "disable"].includes(String(intent))) {
     return {
       state: await readShippingProtectionState(admin, session.shop),
       error: "Unknown settings action.",
@@ -33,6 +34,12 @@ export const action = async ({ request }) => {
   }
 
   try {
+    if (intent === "disable") {
+      return {
+        state: await disableShippingProtection(admin, session.shop),
+        success: "Shipping protection is turned off.",
+      };
+    }
     if (intent === "update-rate") {
       const rateBasisPoints = percentToBasisPoints(formData.get("ratePercent"));
       const result = await activatePricingRule(
@@ -48,7 +55,9 @@ export const action = async ({ request }) => {
 
     return {
       state: await setupShippingProtection(admin, session.shop),
-      success: "Shipping protection is set up.",
+      success: intent === "enable"
+        ? "Shipping protection is turned on."
+        : "Shipping protection is set up.",
     };
   } catch (error) {
     const userFacing = error instanceof UserFacingError;
@@ -68,7 +77,9 @@ export const action = async ({ request }) => {
       state,
       error: userFacing
         ? error.message
-        : "Something went wrong and your settings weren't saved. Try again in a few minutes.",
+        : intent === "disable"
+          ? "Couldn't finish turning off shipping protection. Refresh to check its status, then try again."
+          : "Something went wrong and your settings weren't saved. Try again in a few minutes.",
     };
   }
 };
@@ -81,23 +92,30 @@ export default function Settings() {
   const isSaving =
     fetcher.state !== "idle" && fetcher.formMethod?.toUpperCase() === "POST";
   const active = state.configuration.protectionEnabled;
+  const off = state.protectionOff === true;
   const supported =
     state.capabilities.checkoutUiSupported &&
     state.capabilities.cartTransformUpdateSupported;
-  const failingChecks = state.checks.filter((check) => !check.ok);
+  const failingChecks = state.checks.filter((check) =>
+    !check.ok && (!off || !["checkoutConfig", "transformConfig"].includes(check.id)),
+  );
   const hasExistingSetup = Boolean(
     state.product ||
     state.pricing?.ruleId ||
     (state.configuredStrategy && state.configuredStrategy !== "NONE"),
   );
-  const needsSetup = !active || failingChecks.length > 0;
+  const needsSetup = !off && (!active || failingChecks.length > 0);
+  const canTurnOff = !off && (active || state.configuredStrategy === "CHECKOUT_UI_CART_TRANSFORM");
   const rateEditable = state.configuration.protectionRateEditable === true;
   const currentPercent = state.pricing
     ? basisPointsToPercent(state.pricing.rateBasisPoints)
     : "0.25";
 
   let statusMessage;
-  if (active) {
+  if (off) {
+    statusMessage =
+      "Shipping protection is off. Customers won't see the checkout offer.";
+  } else if (active) {
     statusMessage =
       "Protection setup is ready. Add its block to checkout to show the offer.";
   } else if (hasExistingSetup) {
@@ -128,7 +146,9 @@ export default function Settings() {
       <s-section heading="Protection status">
         <s-stack direction="block" gap="base">
           <s-stack direction="inline" gap="small-200" alignItems="center">
-            {active ? (
+            {off ? (
+              <s-badge>Off</s-badge>
+            ) : active ? (
               <s-badge tone="success" icon="check-circle">
                 Ready
               </s-badge>
@@ -158,7 +178,7 @@ export default function Settings() {
                 ))}
               </s-unordered-list>
             </s-stack>
-          ) : (
+          ) : !off && (
             <s-text color="subdued">
               The protection product and checkout pricing are ready.
             </s-text>
@@ -169,7 +189,7 @@ export default function Settings() {
               <s-button
                 variant="primary"
                 onClick={runSetup}
-                disabled={!supported}
+                disabled={!supported || isSaving}
                 {...(isSaving ? { loading: true } : {})}
               >
                 {hasExistingSetup
@@ -177,6 +197,28 @@ export default function Settings() {
                   : "Set up protection"}
               </s-button>
             </s-stack>
+          )}
+
+          {(off || canTurnOff) && (
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value={off ? "enable" : "disable"} />
+              <s-stack direction="block" gap="base">
+                <s-paragraph color="subdued">
+                  Existing orders keep their purchased protection. Your saved rate
+                  and checkout block stay in place when protection is turned off.
+                </s-paragraph>
+                <s-stack direction="inline" gap="base">
+                  <s-button
+                    variant={off ? "primary" : "secondary"}
+                    type="submit"
+                    disabled={isSaving || (off && !supported)}
+                    {...(isSaving ? { loading: true } : {})}
+                  >
+                    {off ? "Turn on shipping protection" : "Turn off shipping protection"}
+                  </s-button>
+                </s-stack>
+              </s-stack>
+            </fetcher.Form>
           )}
         </s-stack>
       </s-section>
@@ -206,7 +248,7 @@ export default function Settings() {
                 <s-button
                   variant="primary"
                   type="submit"
-                  disabled={!active}
+                  disabled={!active || isSaving}
                   {...(isSaving ? { loading: true } : {})}
                 >
                   Save rate

@@ -16,6 +16,7 @@ export const loader = async ({ request }) => {
   return {
     protection: {
       active: protection.configuration.protectionEnabled,
+      off: protection.protectionOff,
       rate: protection.pricing?.percentage ?? null,
     },
     metrics,
@@ -196,14 +197,18 @@ export default function Overview() {
           <s-stack direction="block" gap="small-200">
             <s-stack direction="inline" gap="small-200" alignItems="center">
               <s-heading>Shipping protection</s-heading>
-              {protection.active
-                ? <s-badge tone="success" icon="check-circle">Active</s-badge>
-                : <s-badge tone="warning" icon="alert-triangle">Not active</s-badge>}
+              {protection.off
+                ? <s-badge>Off</s-badge>
+                : protection.active
+                  ? <s-badge tone="success" icon="check-circle">Active</s-badge>
+                  : <s-badge tone="warning" icon="alert-triangle">Not active</s-badge>}
             </s-stack>
             <s-text color="subdued">
-              {protection.active
-                ? `Customers are offered protection at ${protection.rate} of eligible merchandise.`
-                : "Finish setup in Settings to start offering protection at checkout."}
+              {protection.off
+                ? "Shipping protection is turned off. Turn it back on in Settings."
+                : protection.active
+                  ? `Customers are offered protection at ${protection.rate} of eligible merchandise.`
+                  : "Finish setup in Settings to start offering protection at checkout."}
             </s-text>
             {protection.active && metrics.recentActivity.length === 0 && (
               <s-text color="subdued">
@@ -211,8 +216,8 @@ export default function Overview() {
               </s-text>
             )}
           </s-stack>
-          <s-button href="/app/settings" variant={protection.active ? "secondary" : "primary"}>
-            {protection.active ? "Manage" : "Finish setup"}
+          <s-button href="/app/settings" variant={protection.active || protection.off ? "secondary" : "primary"}>
+            {protection.active || protection.off ? "Manage" : "Finish setup"}
           </s-button>
         </s-grid>
       </s-section>

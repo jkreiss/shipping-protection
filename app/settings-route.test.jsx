@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   activatePricingRule: vi.fn(),
+  disableShippingProtection: vi.fn(),
   readShippingProtectionState: vi.fn(),
   setupShippingProtection: vi.fn(),
   reportFailure: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("./shopify.server", () => ({
 }));
 vi.mock("./shipping-protection.server", () => ({
   activatePricingRule: mocks.activatePricingRule,
+  disableShippingProtection: mocks.disableShippingProtection,
   readShippingProtectionState: mocks.readShippingProtectionState,
   setupShippingProtection: mocks.setupShippingProtection,
 }));
@@ -54,5 +56,41 @@ describe("settings errors", () => {
     expect(mocks.reportFailure).toHaveBeenCalledWith("settings_action_failed", internal, {
       shop: "one.myshopify.com", intent: "setup",
     });
+  });
+});
+
+describe("protection on/off settings", () => {
+  test("turns protection off for the authenticated shop, ignoring a submitted shop", async () => {
+    const state = { protectionOff: true };
+    mocks.disableShippingProtection.mockResolvedValue(state);
+
+    const result = await submit({ intent: "disable", shop: "two.myshopify.com" });
+
+    expect(result).toMatchObject({ state, success: expect.stringContaining("turned off") });
+    expect(mocks.disableShippingProtection).toHaveBeenCalledWith({}, "one.myshopify.com");
+    expect(mocks.setupShippingProtection).not.toHaveBeenCalled();
+    expect(mocks.activatePricingRule).not.toHaveBeenCalled();
+  });
+
+  test("turns protection back on through the existing checked setup flow", async () => {
+    const state = { protectionOff: false };
+    mocks.setupShippingProtection.mockResolvedValue(state);
+
+    const result = await submit({ intent: "enable" });
+
+    expect(result).toMatchObject({ state, success: expect.stringContaining("turned on") });
+    expect(mocks.setupShippingProtection).toHaveBeenCalledWith({}, "one.myshopify.com");
+    expect(mocks.activatePricingRule).not.toHaveBeenCalled();
+  });
+
+  test("reports a failed turn-off without claiming success", async () => {
+    mocks.disableShippingProtection.mockRejectedValue(new Error("Shopify unavailable"));
+    mocks.readShippingProtectionState.mockResolvedValue({ protectionOff: false });
+
+    const result = await submit({ intent: "disable" });
+
+    expect(result.success).toBeUndefined();
+    expect(result.error).toContain("turning off");
+    expect(result.state.protectionOff).toBe(false);
   });
 });
