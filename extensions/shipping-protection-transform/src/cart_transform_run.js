@@ -88,18 +88,22 @@ function parseConfiguration(value) {
 }
 
 /**
- * @param {{ id: string }[]} lines
+ * The fee is charged once per cart: on the first single-unit protection line,
+ * with every other protection line at zero. Without a single-unit line no line
+ * is charged, because a per-unit price can't reliably add up to the fee.
+ * @param {{ id: string, quantity: number }[]} lines
  * @param {string} amount
  * @returns {CartTransformRunResult}
  */
 function priceLines(lines, amount) {
+  const charged = lines.find((line) => line.quantity === 1);
   return {
     operations: lines.map((line) => ({
       lineUpdate: {
         cartLineId: line.id,
         price: {
           adjustment: {
-            fixedPricePerUnit: { amount },
+            fixedPricePerUnit: { amount: line === charged ? amount : "0" },
           },
         },
       },

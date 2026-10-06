@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import process from "node:process";
-import { adminGraphql } from "./admin-graphql.server";
+import { adminGraphql, isAccessLost } from "./admin-graphql.server";
 
 const QUERY = `#graphql
   query ShopName { shop { name } }
@@ -88,6 +88,18 @@ describe("adminGraphql throttling", () => {
 
     await expect(adminGraphql(admin, QUERY, {}, { sleep: async () => {} })).rejects.toThrow("Throttled");
     expect(admin.calls).toHaveLength(4);
+  });
+
+  test("logs a lost-access 401 without reporting a failure", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const unauthorized = Object.assign(new Error("Unauthorized"), { response: { code: 401 } });
+    const admin = fakeAdmin([unauthorized]);
+
+    await expect(adminGraphql(admin, QUERY, {}, { shop: "gone.myshopify.com" })).rejects.toBe(unauthorized);
+    expect(isAccessLost(unauthorized)).toBe(true);
+    expect(stderr).not.toHaveBeenCalled();
+    expect(stdout.mock.calls.map(([line]) => JSON.parse(line).event)).toContain("shopify_access_lost");
   });
 
   test("does not retry other GraphQL errors", async () => {

@@ -16,7 +16,7 @@ import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/re
 import {
   loadCore, loadProduct, findProduct, buildChecks, writeJsonMetafield,
   disableKnownConfiguration, repairProduct, ensureTransform, activateProduct,
-  publishSnapshot, productIsPublished, variantIsReady, protectionAdminConstants,
+  assertFunctionDeployed, publishSnapshot, productIsPublished, variantIsReady, protectionAdminConstants,
 } from "./shopify/protection-admin.server";
 
 const {
@@ -176,15 +176,25 @@ async function runSetup(admin, shopDomain) {
   if (!capabilities.checkoutUiSupported || !capabilities.cartTransformUpdateSupported) {
     throw new UserFacingError("This store's Shopify plan doesn't support the checkout protection offer.");
   }
+  // Check what can stop setup before changing anything in Shopify.
+  if (!core.onlineStore) {
+    throw new UserFacingError("The Online Store sales channel is needed to offer protection. Add it in Shopify, then run setup again.");
+  }
+  assertFunctionDeployed(core);
   await ensureInstalledShop(domain, core.shop.id);
   const existingContract = core.shopConfig ?? core.transformConfig;
-  let disabledContract = existingContract
+  // A store already offering protection keeps its live configuration until
+  // setup publishes the repaired one, so a failed repair never switches it off.
+  // The transform's copy comes first because it is what checkout charges.
+  const liveContract =
+    [core.transformConfig, core.shopConfig].find((contract) => contract?.enabled) ?? null;
+  let disabledContract = !liveContract && existingContract
     ? { ...existingContract, enabled: false }
     : null;
   let transformId = core.transform?.id ?? null;
 
   try {
-    await disableKnownConfiguration(admin, core, existingContract);
+    if (!liveContract) await disableKnownConfiguration(admin, core, existingContract);
 
     const existingProduct = await findProduct(
       admin,
@@ -195,27 +205,30 @@ async function runSetup(admin, shopDomain) {
       existingProduct,
       existingContract?.variantId,
     );
-    disabledContract = existingContract
-      ? {
-          ...existingContract,
-          enabled: false,
-          productId: repaired.product.id,
-          variantId: repaired.variantId,
-        }
-      : legacyContractFor(repaired.product.id, repaired.variantId, false);
+    if (!liveContract) {
+      disabledContract = existingContract
+        ? {
+            ...existingContract,
+            enabled: false,
+            productId: repaired.product.id,
+            variantId: repaired.variantId,
+          }
+        : legacyContractFor(repaired.product.id, repaired.variantId, false);
 
-    await writeJsonMetafield(
-      admin,
-      core.shop.id,
-      SHOP_CONFIG_KEY,
-      disabledContract,
-    );
-
-    if (!core.onlineStore) {
-      throw new UserFacingError("The Online Store sales channel is needed to offer protection. Add it in Shopify, then run setup again.");
+      await writeJsonMetafield(
+        admin,
+        core.shop.id,
+        SHOP_CONFIG_KEY,
+        disabledContract,
+      );
     }
 
-    const transform = await ensureTransform(admin, core, disabledContract);
+    const transform = await ensureTransform(
+      admin,
+      core,
+      liveContract ?? disabledContract,
+      { overwrite: !liveContract },
+    );
     transformId = transform.id;
     await activateProduct(admin, repaired.product.id, core.onlineStore.id);
 
@@ -264,6 +277,8 @@ async function runSetup(admin, shopDomain) {
       configuration: resolveConfiguration(settings, capabilities, state.ready),
     };
   } catch (error) {
+    // Only a store that wasn't live gets its partial setup disabled; a live
+    // store keeps the configuration it was already charging.
     if (disabledContract) {
       const attempts = [
         writeJsonMetafield(

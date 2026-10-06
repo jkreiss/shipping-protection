@@ -156,6 +156,42 @@ describe("pricing rule publication", () => {
     expect(state.shop.activePricingRuleId).toBe(reconciled.id);
   });
 
+  test("recovers a rule marked failed when Shopify applied it anyway", async () => {
+    const { database, state } = inMemoryDatabase();
+    let publishedSnapshot;
+    await expect(
+      createAndPublishPricingRule(
+        activationOptions(database, async (_admin, snapshot) => {
+          publishedSnapshot = snapshot;
+          throw new Error("request timed out");
+        }),
+      ),
+    ).rejects.toThrow("request timed out");
+    expect(state.rules[0].state).toBe("FAILED");
+
+    const reconciled = await reconcilePublishedPricingRule(
+      shopDomain,
+      publishedSnapshot,
+      database,
+    );
+    expect(reconciled).toMatchObject({ state: "ACTIVE", failedAt: null, failureReason: null });
+    expect(state.shop.activePricingRuleId).toBe(reconciled.id);
+  });
+
+  test("does not reactivate a superseded rule", async () => {
+    const { database, state } = inMemoryDatabase();
+    let publishedSnapshot;
+    await createAndPublishPricingRule(
+      activationOptions(database, async (_admin, snapshot) => {
+        publishedSnapshot = snapshot;
+      }),
+    );
+    state.rules[0].state = "SUPERSEDED";
+    expect(
+      await reconcilePublishedPricingRule(shopDomain, publishedSnapshot, database),
+    ).toBeNull();
+  });
+
   test("does not reconcile a snapshot into a different shop", async () => {
     const { database } = inMemoryDatabase();
     expect(

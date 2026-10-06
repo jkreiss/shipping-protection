@@ -1,5 +1,5 @@
 {
   "checkboxLabel": "Add shipping protection for {{fee}}",
-  "supportingText": "Covers eligible loss, theft, and damage in transit. The fee is calculated from eligible shipped items.",
+  "supportingText": "Optional add-on from this store. The fee is based on the items being shipped.",
   "mutationError": "Shipping protection could not be updated. Please try again."
 }

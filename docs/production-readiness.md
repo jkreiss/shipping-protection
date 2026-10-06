@@ -42,11 +42,11 @@ the offer takes real customer money.
 | Runtime | [Dockerfile](../Dockerfile) supports the web service and private worker from the same source. Migration/start/health settings are documented in README rather than a checked-in Railway deployment file. | Needs live verification on both Railway services. |
 | Checkout failure behavior | [Protection setup](../app/shopify/protection-admin.server.js) creates transforms with `blockOnFailure: false`, requires that value for health, and replaces an existing blocking transform during setup. | Confirmed in repository. Deploying code alone does not replace a store's existing transform; verify the installed resource after setup. |
 | Pricing failure detection | [Order ingestion](../app/order-ingestion.server.js) records `pricingCheck` and emits `protection_price_unmatched` for a detected mismatch on a newly confirmed payment. | Confirmed in repository. Verify delivery of the alert. A missing or null check is not proof of correct pricing. |
-| Webhook processing | [Worker](../app/webhook-worker.server.js) coalesces up to 100 queued deliveries for one order, has 4 loops by default, 15-minute leases, and at most 8 attempts. | Confirmed in repository. Measure real throughput and restart recovery in staging. |
+| Webhook processing | [Worker](../app/webhook-worker.server.js) coalesces up to 100 queued deliveries for one order, has 4 loops by default, 15-minute leases, and at most 16 attempts (about 6.4 hours of backoff) for temporary errors. An order Shopify won't return or that can't be normalized fails at once; an uninstalled shop's deliveries fail as `SHOP_UNINSTALLED` without an alert. | Confirmed in repository. Measure real throughput and restart recovery in staging. |
 | Reconciliation | [Reconciliation](../app/order-reconciliation.server.js) backfills a 60-day window, lists up to 250 orders per page, fetches missing/newer orders, and overlaps successive windows by 10 minutes. | Confirmed in repository. Measure page cost and backfill completion. A 60-second turn is checked between pages; a slow page can take longer. |
 | Dashboard | [Overview reads](../app/analytics.server.js) use stored orders and refunds; they still make a bounded Shopify shop currency/timezone query. `overview_loaded` records duration and row counts. | Confirmed in repository. Measure latency with pilot-sized data. |
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress (the worker has its own Sentry Cron heartbeat), correct schema, webhook subscriptions, or working checkout. |
-| Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables theft, loss, and damage flags. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) copy advertise loss, theft, and damage in transit. | **Launch blocker.** Align configuration and all customer copy with the benefits approved for the pilot and the product/legal boundary in [AGENTS.md](../AGENTS.md). |
+| Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) still enables theft, loss, and damage flags. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) checkout copy and the product description now use neutral placeholder wording that names no benefits; it has no legal sign-off. | **Launch blocker.** Align configuration and all customer copy with the benefits approved for the pilot and the product/legal boundary in [AGENTS.md](../AGENTS.md). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
 | Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`). The remaining production advisories are in the Prisma CLI's config loader only; README records the assessment. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
@@ -440,8 +440,9 @@ instance count, valid concurrency, database connections, Shopify installation
 access, and retry logs. Restart a crashed worker after fixing the cause. Processing
 batches can remain leased for up to 15 minutes after a hard stop.
 
-`PENDING` rows retry automatically. `FAILED` rows exhausted their attempts and do
-not automatically return to the queue. There is no Settings replay operation.
+`PENDING` rows retry automatically. `FAILED` rows exhausted their attempts, hit
+an error a retry can't fix, or belong to an uninstalled shop (`SHOP_UNINSTALLED`),
+and do not automatically return to the queue. There is no Settings replay operation.
 Do not bulk reset statuses/attempts or delete inbox rows during diagnosis.
 
 Fix the cause, then verify that worker reconciliation fetches and stores each

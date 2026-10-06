@@ -245,7 +245,7 @@ describe("cart transform", () => {
     ).toEqual({ operations: [] });
   });
 
-  test("emits deterministic updates for duplicate protection lines", () => {
+  test("charges the fee once across duplicate protection lines", () => {
     const later = protectionLine("z-protection");
     const earlier = protectionLine("a-protection");
     const result = cartTransformRun(
@@ -254,7 +254,29 @@ describe("cart transform", () => {
 
     expect(result.operations).toEqual([
       expectedUpdate(earlier.id, "0.25"),
-      expectedUpdate(later.id, "0.25"),
+      expectedUpdate(later.id, "0"),
     ]);
+  });
+
+  test("charges the fee on a single-unit line, not per unit", () => {
+    const multiple = protectionLine("a-protection", 2);
+    const single = protectionLine("z-protection");
+    const result = cartTransformRun(
+      input([line({ id: "physical", amount: "100.00" }), multiple, single]),
+    );
+
+    expect(result.operations).toEqual([
+      expectedUpdate(multiple.id, "0"),
+      expectedUpdate(single.id, "0.25"),
+    ]);
+  });
+
+  test("prices protection at zero when no line has a single unit", () => {
+    const protection = protectionLine("protection", 3);
+    const result = cartTransformRun(
+      input([line({ id: "physical", amount: "100.00" }), protection]),
+    );
+
+    expect(result.operations).toEqual([expectedUpdate(protection.id, "0")]);
   });
 });

@@ -106,7 +106,7 @@ export default function Settings() {
               : <s-badge tone="warning" icon="alert-triangle">Not active</s-badge>}
             <s-text>
               {active
-                ? "Protection is set up and offered in checkout."
+                ? "Protection is set up. Customers see the offer once the block is placed in the checkout editor."
                 : "Run setup to create the protection product and turn on checkout pricing."}
             </s-text>
           </s-stack>

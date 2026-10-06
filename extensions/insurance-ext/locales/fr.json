@@ -1,5 +1,5 @@
 {
   "checkboxLabel": "Ajouter une protection d’expédition pour {{fee}}",
-  "supportingText": "Couvre les pertes, vols et dommages admissibles pendant le transport. Les frais sont calculés sur les articles expédiés admissibles.",
+  "supportingText": "Option facultative proposée par cette boutique. Les frais sont calculés selon les articles expédiés.",
   "mutationError": "La protection d’expédition n’a pas pu être mise à jour. Veuillez réessayer."
 }

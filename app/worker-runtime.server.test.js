@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { expectWorkerLoops, reportCondition, reportFailure, workerHeartbeat } from "./observability.server.js";
+import { expectWorkerLoops, logEvent, reportCondition, reportFailure, workerHeartbeat } from "./observability.server.js";
 import { createWorkerRuntime } from "./worker-runtime.server.js";
 
 vi.mock("./observability.server.js", () => ({
@@ -56,6 +56,20 @@ describe("worker runtime", () => {
     expect(reportFailure).toHaveBeenCalledWith("reconciliation_failed", expect.any(Error), expect.objectContaining({ shopId: "bad" }));
     // Progress inside a long reconciliation turn keeps the heartbeat alive.
     expect(vi.mocked(workerHeartbeat).mock.calls.filter(([loop]) => loop === "reconciliation").length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("backs off quietly from a shop the app has lost access to", async () => {
+    const database = databaseWith([{ id: "gone", shopDomain: "gone.myshopify.com" }]);
+    const SessionNotFoundError = class SessionNotFoundError extends Error {};
+    const adminForShop = vi.fn(async () => { throw new SessionNotFoundError("no session"); });
+    const runtime = createWorkerRuntime({ database, adminForShop, reconcile: vi.fn(), concurrency: 1 });
+
+    await runtime.reconciliationPass();
+    await runtime.reconciliationPass();
+
+    expect(adminForShop).toHaveBeenCalledTimes(1);
+    expect(reportFailure).not.toHaveBeenCalled();
+    expect(logEvent).toHaveBeenCalledWith("reconciliation_skipped_access_lost", { shopId: "gone" });
   });
 
   test("reports a shop whose sync has fallen behind, once per reporting interval", async () => {
