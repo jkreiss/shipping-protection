@@ -1,5 +1,5 @@
 import { moneyToScaled, scaledToMoney } from "../order-normalization.js";
-import { currencyMinorUnits } from "../pricing-contract.js";
+import { currencyMinorUnits, formatBasisPoints } from "../pricing-contract.js";
 
 // Revenue-share ledger rules. Money is scaled bigint (four decimals), the same
 // representation order ingestion uses. Only paid protection purchases and
@@ -63,4 +63,12 @@ export function planCharge(amounts, agreement) {
   const charge = (base * BigInt(agreement.rateBasisPoints) / 10_000n) / unit * unit;
   if (charge <= 0n) return null;
   return { baseAmount: scaledToMoney(base), chargeAmount: scaledToMoney(charge) };
+}
+
+// Merchant-facing terms: neutral and factual, shown on Shopify's approval page,
+// in Settings and on each usage charge.
+export function describeRevenueShare(agreement) {
+  if (agreement.mode === "FREE") return "No charge";
+  const share = `${formatBasisPoints(agreement.rateBasisPoints)} of protection revenue`;
+  return agreement.mode === "NET_SHARE" ? `${share}, net of protection refunds` : share;
 }

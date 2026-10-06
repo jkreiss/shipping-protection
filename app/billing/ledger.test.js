@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { planCharge, planEntries, purchaseTarget, refundTarget } from "./ledger.js";
+import { describeRevenueShare, planCharge, planEntries, purchaseTarget, refundTarget } from "./ledger.js";
 
 const activatedAt = new Date("2026-10-01T00:00:00Z");
 const net = { mode: "NET_SHARE", status: "ACTIVE", rateBasisPoints: 1_000, currencyCode: "AUD", activatedAt };
@@ -110,5 +110,13 @@ describe("planning a charge", () => {
   test("accepts Prisma decimals", () => {
     const decimal = { toFixed: (digits) => (2.5).toFixed(digits) };
     expect(planCharge([decimal], net)).toEqual({ baseAmount: "2.5000", chargeAmount: "0.2500" });
+  });
+});
+
+describe("describing the terms", () => {
+  test("states the rate and whether refunds are netted, in neutral words", () => {
+    expect(describeRevenueShare(net)).toBe("10% of protection revenue, net of protection refunds");
+    expect(describeRevenueShare({ ...gross, rateBasisPoints: 125 })).toBe("1.25% of protection revenue");
+    expect(describeRevenueShare(free)).toBe("No charge");
   });
 });
