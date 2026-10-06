@@ -81,7 +81,8 @@ The repository currently looks like:
 │   ├── pricing-*.js            # pricing contract (basis points) and versioned pricing rules
 │   ├── protection-refunds.js
 │   ├── shipping-protection.server.js   # setup/repair and protection state
-│   └── webhook-*.server.js     # webhook inbox and worker processing
+│   ├── webhook-*.server.js     # webhook inbox and worker processing
+│   └── worker-runtime.server.js        # worker delivery/reconciliation loops and shutdown
 ├── extensions
 │   ├── insurance-ext                   # Checkout UI block (protection offer)
 │   └── shipping-protection-transform   # Cart Transform Function (prices protection)
