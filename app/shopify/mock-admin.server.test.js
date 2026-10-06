@@ -5,6 +5,7 @@ import { adminGraphql } from "./admin-graphql.server.js";
 import { fetchShopifyOrder, ORDERS_QUERY } from "../order-shopify.server.js";
 import { normalizeGraphqlOrder } from "../order-normalization.js";
 import { readOverview } from "../analytics.server.js";
+import { reconcileOrders } from "../order-reconciliation.server.js";
 import { createServer } from "node:http";
 
 let server;
@@ -20,6 +21,7 @@ beforeEach(async () => {
   vi.stubEnv("SHOPIFY_ADMIN_MOCK_TOKEN", options.token);
 });
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });
@@ -44,6 +46,58 @@ test("reconciliation filters its window and advances tenant-bound cursors", asyn
   expect(second.orders.nodes.map(({ id }) => id)).toEqual(["gid://shopify/Order/5", "gid://shopify/Order/6"]);
   expect(second.orders.pageInfo.hasNextPage).toBe(false);
   await expect(adminGraphql(realAdmin, ORDERS_QUERY, { ...variables, after }, { shop: "load-2.myshopify.com" })).rejects.toThrow(/cursor/i);
+});
+
+test("initial backfill resumes its original window across turns and skips stored orders on a new scan", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+  const shopRow = { id: "backfill-shop", shopDomain: shop, orderReconciliationSince: null,
+    orderReconciliationUntil: null, orderReconciliationCursor: null, orderHistoryStartAt: null };
+  const stored = new Map();
+  const database = {
+    shop: {
+      findUnique: async () => ({ ...shopRow }),
+      update: async ({ data }) => Object.assign(shopRow, data),
+    },
+    order: { findMany: async ({ where }) => [...stored.values()].filter(({ shopifyOrderId }) =>
+      where.shopId === shopRow.id && where.shopifyOrderId.in.includes(shopifyOrderId)) },
+    protectionRefund: { findMany: async () => [] },
+    $transaction: async (run) => run(database),
+  };
+  const persist = async (_transaction, _shop, order) => {
+    stored.set(order.shopifyOrderId, { shopifyOrderId: order.shopifyOrderId, shopifyUpdatedAt: order.shopifyUpdatedAt });
+  };
+  const reconcile = () => reconcileOrders({ admin: realAdmin, shopDomain: shop, database,
+    persist, pageSize: 4, timeBudgetMs: 0 });
+
+  const first = await reconcile();
+  expect(first).toMatchObject({ complete: false, ordersFetched: 4,
+    windowStart: "2026-08-02T00:00:00.000Z", windowEnd: "2026-10-01T00:00:00.000Z" });
+
+  // Each turn uses a fresh database read, as it would after a worker restart.
+  vi.setSystemTime(new Date("2026-10-01T00:05:00.000Z"));
+  const second = await reconcile();
+  expect(second).toMatchObject({ complete: false, ordersFetched: 4,
+    windowStart: "2026-08-02T00:00:00.000Z", windowEnd: "2026-10-01T00:00:00.000Z" });
+
+  vi.setSystemTime(new Date("2026-10-02T00:00:00.000Z"));
+  const third = await reconcile();
+  expect(third).toMatchObject({ complete: true, ordersFetched: 4,
+    windowStart: "2026-08-02T00:00:00.000Z", windowEnd: "2026-10-01T00:00:00.000Z" });
+  expect([...stored.keys()]).toEqual(Array.from({ length: 12 }, (_, index) => `gid://shopify/Order/${index + 1}`));
+  expect(shopRow).toMatchObject({ orderReconciliationSince: new Date("2026-10-01T00:00:00.000Z"),
+    orderReconciliationUntil: null, orderReconciliationCursor: null });
+
+  // The load campaign resets discovery for a second scan, keeping historical metadata.
+  shopRow.orderReconciliationSince = null;
+  const repeated = await reconcile();
+  expect(repeated).toMatchObject({ ordersFetched: 0, ordersSkipped: 4,
+    windowStart: "2026-08-03T00:00:00.000Z", windowEnd: "2026-10-02T00:00:00.000Z" });
+  vi.setSystemTime(new Date("2026-10-02T00:05:00.000Z"));
+  expect(await reconcile()).toMatchObject({ complete: false, ordersFetched: 0, ordersSkipped: 4 });
+  vi.setSystemTime(new Date("2026-10-02T00:10:00.000Z"));
+  expect(await reconcile()).toMatchObject({ complete: true, ordersFetched: 0, ordersSkipped: 4 });
+  expect(stored.size).toBe(12);
 });
 
 test("rejects real tenants and unknown fake tenants", async () => {

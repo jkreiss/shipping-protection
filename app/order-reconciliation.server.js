@@ -88,10 +88,10 @@ export async function reconcileOrders({
   const options = { shop: shopDomain };
 
   // A window in progress keeps its bounds until its last page is stored.
+  const until = shop.orderReconciliationUntil ?? new Date();
   const since = shop.orderReconciliationSince
     ? new Date(shop.orderReconciliationSince.getTime() - RECONCILIATION_OVERLAP_MS)
-    : new Date(Date.now() - BACKFILL_MS);
-  const until = shop.orderReconciliationUntil ?? new Date();
+    : new Date(until.getTime() - BACKFILL_MS);
   let after = shop.orderReconciliationUntil ? shop.orderReconciliationCursor : null;
   const historyStart = shop.orderHistoryStartAt ? {} : { orderHistoryStartAt: since };
   let pages = 0;
