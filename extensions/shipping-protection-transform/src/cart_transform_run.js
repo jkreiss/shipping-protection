@@ -88,22 +88,41 @@ function parseConfiguration(value) {
 }
 
 /**
+ * The amount divided over quantity units, rounded up at the amount's own
+ * precision, so the units together are never charged less than the amount.
+ * @param {string} amount
+ * @param {number} quantity
+ */
+function perUnitRoundedUp(amount, quantity) {
+  const [whole, fraction = ""] = amount.split(".");
+  const units = BigInt(quantity);
+  const minor = (BigInt(whole + fraction) + units - 1n) / units;
+  if (fraction.length === 0) return minor.toString();
+  const digits = minor.toString().padStart(fraction.length + 1, "0");
+  return `${digits.slice(0, -fraction.length)}.${digits.slice(-fraction.length)}`;
+}
+
+/**
  * The fee is charged once per cart: on the first single-unit protection line,
- * with every other protection line at zero. Without a single-unit line no line
- * is charged, because a per-unit price can't reliably add up to the fee.
+ * with every other protection line at zero. Without a single-unit line the
+ * first line is charged the fee per unit rounded up, so raising the quantity
+ * can never make protection free.
  * @param {{ id: string, quantity: number }[]} lines
  * @param {string} amount
  * @returns {CartTransformRunResult}
  */
 function priceLines(lines, amount) {
-  const charged = lines.find((line) => line.quantity === 1);
+  const charged = lines.find((line) => line.quantity === 1) ?? lines[0];
+  const chargedAmount = charged.quantity === 1
+    ? amount
+    : perUnitRoundedUp(amount, charged.quantity);
   return {
     operations: lines.map((line) => ({
       lineUpdate: {
         cartLineId: line.id,
         price: {
           adjustment: {
-            fixedPricePerUnit: { amount: line === charged ? amount : "0" },
+            fixedPricePerUnit: { amount: line === charged ? chargedAmount : "0" },
           },
         },
       },
