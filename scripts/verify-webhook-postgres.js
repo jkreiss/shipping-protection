@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import process from "node:process";
 import prisma from "../app/db.server.js";
 import { receiveOrderWebhook } from "../app/webhook-inbox.server.js";
@@ -135,7 +137,57 @@ async function verifyCoalescing() {
   assert.deepEqual((await statuses(partial.id)).map(({ status, attempts }) => [status, attempts]), [["FAILED", 8], ["PENDING", 1]]);
 }
 
+async function verifyKilledWorker() {
+  // A worker killed mid-transaction stores nothing and keeps its lease until
+  // it expires; the next worker then stores the order exactly once.
+  const crashed = await newShop();
+  for (const [webhookId, topic] of [["k-1", "ORDERS_CREATE"], ["k-2", "ORDERS_PAID"]]) {
+    await receiveOrderWebhook({ shopDomain: crashed.shopDomain, topic, webhookId, payload: { id: 9601 } });
+  }
+  // The child claims whatever is next, so this order must be the only work.
+  assert.equal(await prisma.webhookDelivery.count({ where: { shopId: { not: crashed.id }, status: { in: ["PENDING", "PROCESSING"] } } }), 0,
+    "Run against an empty queue: other deliveries could be claimed by the killed worker.");
+  const order = { ...sampleOrder(), id: "gid://shopify/Order/9601" };
+  const child = spawn(process.execPath, ["scripts/verify-worker-crash-child.js", JSON.stringify(order)], { stdio: ["ignore", "pipe", "inherit"] });
+  // Rejects if the spawn fails; awaited in finally, so mark it handled now.
+  const exited = once(child, "exit");
+  exited.catch(() => {});
+  try {
+    await new Promise((resolve, reject) => {
+      const fail = (error) => { clearTimeout(timer); reject(error); };
+      const timer = setTimeout(() => fail(new Error("Worker never reached its transaction.")), 30_000);
+      // A write can arrive split across chunks, so match the accumulated output.
+      let output = "";
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+        if (output.includes("PERSISTED_NOT_COMMITTED")) { clearTimeout(timer); resolve(); }
+      });
+      child.on("error", fail);
+      child.on("exit", () => fail(new Error("Worker exited before its transaction.")));
+    });
+    assert.equal(await prisma.order.count({ where: { shopId: crashed.id } }), 0);
+  } finally {
+    child.kill("SIGKILL");
+    await exited;
+  }
+
+  assert.deepEqual((await statuses(crashed.id)).map(({ status, attempts }) => [status, attempts]), [["PROCESSING", 1], ["PROCESSING", 1]]);
+  assert.equal(await prisma.order.count({ where: { shopId: crashed.id } }), 0);
+  assert.equal(await prisma.protectionPurchase.count({ where: { shopId: crashed.id } }), 0);
+  const recovery = countingAdmin();
+  assert.equal(await processNextDelivery({ adminForShop: recovery.adminForShop }), false, "A live lease must hold the order.");
+
+  await prisma.webhookDelivery.updateMany({ where: { shopId: crashed.id }, data: { leaseUntil: new Date(Date.now() - 1) } });
+  assert.equal(await processNextDelivery({ adminForShop: recovery.adminForShop }), true);
+  assert.deepEqual((await statuses(crashed.id)).map(({ status, attempts }) => [status, attempts]), [["PROCESSED", 2], ["PROCESSED", 2]]);
+  assert.equal(await prisma.order.count({ where: { shopId: crashed.id } }), 1);
+  const purchase = await prisma.protectionPurchase.findFirst({ where: { shopId: crashed.id } });
+  assert.equal(purchase.feeAmount.toFixed(4), "0.2500");
+  assert.equal(await prisma.protectionPurchase.count({ where: { shopId: crashed.id } }), 1);
+}
+
 try {
+  await verifyKilledWorker();
   const shopDomain = `verify-${randomUUID().slice(0, 8)}.myshopify.com`;
   const shop = await prisma.shop.create({ data: { shopDomain } });
   shops.push(shopDomain);
@@ -233,7 +285,7 @@ try {
   assert.equal(await prisma.order.count({ where: { shopId: secondShop.id, shopifyOrderId: orderId } }), 1);
   assert.equal(await prisma.order.count({ where: { shopId: shop.id, shopifyOrderId: orderId } }), 1);
   await verifyCoalescing();
-  console.log("PostgreSQL webhook verification passed: duplicate receipt, crash recovery, paid snapshots, refunds, tenant isolation, and coalesced concurrent processing.");
+  console.log("PostgreSQL webhook verification passed: duplicate receipt, crash recovery, killed worker, paid snapshots, refunds, tenant isolation, and coalesced concurrent processing.");
 } finally {
   for (const shopDomain of shops) {
     await prisma.$transaction((tx) => redactShopData(tx, shopDomain));
