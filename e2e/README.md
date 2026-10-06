@@ -91,7 +91,11 @@ read orders, and refund test orders. Refresh an expired sign-in with
 Sign-in uses ordinary Google Chrome with a dedicated profile inside
 `e2e/.auth/browser-profile/`, separate from your personal browser profile.
 Playwright connects only after Shopify Admin opens. The temporary debugging
-endpoint listens only on your computer.
+endpoint listens only on your computer, but it has no authentication: while
+auth or a suite runs, any local process (including another OS user's) can
+attach and read the signed-in Shopify session. This is an accepted risk for a
+single-user developer machine. Use a Shopify staff account limited to the
+staging store, and avoid running these commands on shared hosts.
 The suite uses ordinary visible Chrome for merchant and buyer steps because
 Shopify verification challenged the automated browser during live setup.
 Every buyer starts in a fresh anonymous context with no merchant cookies;
