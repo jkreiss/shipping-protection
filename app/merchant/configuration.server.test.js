@@ -48,6 +48,15 @@ describe("shop configuration persistence", () => {
     }));
   });
 
+  test("setup preserves the operator's rate restriction", async () => {
+    const existing = { shopId: "one", protectionEnabled: false, protectionRateEditable: false };
+    const db = database({ id: "one", configuration: existing });
+    db.shopConfiguration.upsert.mockImplementation(async ({ update }) => ({ ...existing, ...update }));
+    const config = await enableShopProtection("one.myshopify.com", db);
+    expect(config.protectionEnabled).toBe(true);
+    expect(config.protectionRateEditable).toBe(false);
+  });
+
   test("enables only theft after delivery, never consumer-law remedies", async () => {
     const db = database({ id: "one" });
     await enableShopProtection("one.myshopify.com", db);

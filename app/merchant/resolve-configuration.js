@@ -23,7 +23,7 @@ export function resolveConfiguration(
       if (!implemented.checkoutUiCartTransform) reasons.push("Checkout attachment is not implemented.");
       if (!capabilities.checkoutUiSupported) reasons.push("Checkout UI blocks require Shopify Plus.");
       if (!capabilities.cartTransformUpdateSupported) reasons.push("Cart Transform price updates are unavailable for this shop.");
-      if (!healthReady) reasons.push("Protection setup needs repair.");
+      if (!healthReady) reasons.push("Protection setup needs to be updated.");
       if (reasons.length === 0) strategy = "CHECKOUT_UI_CART_TRANSFORM";
     } else if (settings.attachmentStrategy === "THEME_CART") {
       reasons.push("Theme cart attachment is not implemented.");
@@ -35,6 +35,7 @@ export function resolveConfiguration(
   return {
     strategy,
     protectionEnabled: strategy !== "NONE",
+    protectionRateEditable: settings?.protectionRateEditable === true,
     reasons,
     merchantActivationRequired: strategy === "CHECKOUT_UI_CART_TRANSFORM",
     coverage: {

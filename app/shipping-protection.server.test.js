@@ -55,7 +55,7 @@ vi.mock("./merchant/configuration.server", () => ({
   enableShopProtection: mocks.enableShopProtection,
 }));
 
-import { readShippingProtectionState, setupShippingProtection } from "./shipping-protection.server";
+import { activatePricingRule, readShippingProtectionState, setupShippingProtection } from "./shipping-protection.server";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -74,13 +74,58 @@ beforeEach(() => {
   mocks.buildChecks.mockReturnValue([{ id: "setup", ok: true }]);
   mocks.getActivePricingRule.mockResolvedValue(null);
   mocks.getShopConfiguration.mockResolvedValue({
-    protectionEnabled: true, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    protectionEnabled: true, protectionRateEditable: true, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
   });
 });
 
 const ruleFor = (productId, variantId) => ({
   id: "pricing-1", shopId: "shop-1", ruleId: "rule-1", version: 3, productId, variantId,
   rateBasisPoints: 40, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: new Date("2026-09-01T00:00:00Z"),
+});
+
+describe("merchant rate editing", () => {
+  beforeEach(async () => {
+    const core = await mocks.loadCore();
+    mocks.loadCore.mockResolvedValue({ ...core, transform: { id: "transform-1" } });
+    mocks.findProduct.mockResolvedValue({
+      id: "gid://shopify/Product/1", title: "Shipping Protection",
+      variants: { nodes: [{ id: "gid://shopify/ProductVariant/1" }] },
+    });
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    mocks.createAndPublishPricingRule.mockResolvedValue({ ruleId: "new-rule" });
+    mocks.loadCore.mockClear();
+  });
+
+  test("rejects a locked store before publishing any pricing changes", async () => {
+    mocks.getShopConfiguration.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    await expect(activatePricingRule({}, "one.myshopify.com", 75))
+      .rejects.toThrow("managed by the app operator");
+    expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+    expect(mocks.loadCore).not.toHaveBeenCalled();
+    const state = await readShippingProtectionState({}, "one.myshopify.com");
+    expect(state.pricing.rateBasisPoints).toBe(40);
+    expect(state.configuration.protectionEnabled).toBe(true);
+    expect(state.configuration.protectionRateEditable).toBe(false);
+  });
+
+  test("allows an editable store to publish a new rate", async () => {
+    const result = await activatePricingRule({}, "one.myshopify.com", 75);
+    expect(result.ruleId).toBe("new-rule");
+    expect(mocks.createAndPublishPricingRule).toHaveBeenCalledWith(expect.objectContaining({
+      shopDomain: "one.myshopify.com", rateBasisPoints: 75,
+    }));
+  });
+
+  test("denies rate changes when the permission is missing", async () => {
+    mocks.getShopConfiguration.mockResolvedValue({
+      protectionEnabled: true, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    await expect(activatePricingRule({}, "one.myshopify.com", 75))
+      .rejects.toThrow("managed by the app operator");
+    expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+  });
 });
 
 describe("shipping protection shop isolation", () => {
@@ -160,6 +205,56 @@ describe("setup republishing", () => {
       ruleId: "rule-1", variantId: "gid://shopify/ProductVariant/1", rateBasisPoints: 40,
     }));
     expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+  });
+
+  test("can update setup for a locked store without changing its existing rate", async () => {
+    mocks.getShopConfiguration.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.enableShopProtection.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.repairProduct.mockResolvedValue({ product: { id: "gid://shopify/Product/1" }, variantId: "gid://shopify/ProductVariant/1" });
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    const state = await setupShippingProtection({}, "one.myshopify.com");
+    expect(state.configuration.protectionRateEditable).toBe(false);
+    expect(state.pricing.rateBasisPoints).toBe(40);
+    expect(mocks.publishSnapshot).toHaveBeenCalledWith({}, expect.objectContaining({ rateBasisPoints: 40 }));
+    expect(mocks.createAndPublishPricingRule).not.toHaveBeenCalled();
+  });
+
+  test("preserves a locked store's published rate when its database rule needs recovery", async () => {
+    mocks.getShopConfiguration.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.enableShopProtection.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.repairProduct.mockResolvedValue({ product: { id: "gid://shopify/Product/1" }, variantId: "gid://shopify/ProductVariant/1" });
+    mocks.getActivePricingRule.mockResolvedValueOnce(null)
+      .mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    const state = await setupShippingProtection({}, "one.myshopify.com");
+    expect(mocks.createAndPublishPricingRule).toHaveBeenCalledWith(expect.objectContaining({ rateBasisPoints: 40 }));
+    expect(state.configuration.protectionRateEditable).toBe(false);
+  });
+
+  test("recovers the rate checkout charges when the published copies differ and no active rule exists", async () => {
+    const core = await mocks.loadCore();
+    mocks.loadCore.mockResolvedValue({
+      ...core,
+      transformConfig: { ...core.shopConfig, rateBasisPoints: 80 },
+    });
+    mocks.getShopConfiguration.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.enableShopProtection.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+    mocks.repairProduct.mockResolvedValue({ product: { id: "gid://shopify/Product/1" }, variantId: "gid://shopify/ProductVariant/1" });
+    mocks.getActivePricingRule.mockResolvedValueOnce(null)
+      .mockResolvedValue({ ...ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"), rateBasisPoints: 80 });
+    await setupShippingProtection({}, "one.myshopify.com");
+    expect(mocks.createAndPublishPricingRule).toHaveBeenCalledWith(expect.objectContaining({ rateBasisPoints: 80 }));
   });
 
   test("publishes a new rule at the same rate when repair replaced the variant", async () => {

@@ -23,7 +23,13 @@ Overview:
 - shows status and rate, five metric tiles, a 30-day revenue chart, recent activity, and a short data-quality warning only when there are issues
 - do not add date-range pickers, breakdowns, exports, or a separate Analytics page until deeper reporting is actually needed
 
-Settings: setup/repair, pricing rate, protection product, and checkout activation steps. Show only failing setup checks; when all pass, say so in one line.
+Settings: protection readiness, pricing, and "Can't see protection at checkout?"
+placement instructions. Hide setup actions when ready; show "Set up protection"
+for a first installation and "Update protection setup" when an existing setup
+needs attention. Show only failing checks. Readiness confirms the backend setup,
+not checkout block placement. Do not show a product editor or Requirements
+sidebar. Rate editing is operator-controlled per store; restricted stores see
+the current rate as text with no rate form. Enforce the restriction server-side.
 
 Copy:
 

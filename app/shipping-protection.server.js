@@ -47,7 +47,7 @@ function sameContract(left, right, enabled) {
 
 // Orders are recognised as protected by the active rule's variant, so the rule
 // must describe the product checkout actually sells. A legacy setup without a
-// rule, or a rule left on a replaced product, needs Repair to publish a new one.
+// rule, or a rule left on a replaced product, needs a setup update to publish one.
 function pricingRuleCheck(seed, activeRule) {
   return {
     id: "pricing-rule",
@@ -130,6 +130,10 @@ async function publishRate(
   shopDomain,
   rateBasisPoints,
 ) {
+  const settings = await getShopConfiguration(shopDomain);
+  if (settings.protectionRateEditable !== true) {
+    throw new UserFacingError("This store's protection rate is managed by the app operator.");
+  }
   const core = await loadCore(admin);
   if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
   const capabilities = observedShopifyCapabilities(core.shop);
@@ -161,7 +165,7 @@ async function publishRate(
     publishSnapshot,
   });
   const verified = await readShippingProtectionState(admin, shopDomain);
-  if (!verified.ready) throw new UserFacingError("The new rate is live, but setup needs attention. Run Repair setup.");
+  if (!verified.ready) throw new UserFacingError("The new rate is live, but setup needs attention. Select Update protection setup.");
   return {
     ...result,
     state: verified,
@@ -260,7 +264,13 @@ async function runSetup(admin, shopDomain) {
         shopDomain: domain,
         productId: repaired.product.id,
         variantId: repaired.variantId,
-        rateBasisPoints: activeRule?.rateBasisPoints ?? DEFAULT_RATE_BASIS_POINTS,
+        // loadCore validates the published contract. Preserve its rate when
+        // recovering a missing database rule instead of resetting to the default.
+        rateBasisPoints:
+          activeRule?.rateBasisPoints ??
+          liveContract?.rateBasisPoints ??
+          existingContract?.rateBasisPoints ??
+          DEFAULT_RATE_BASIS_POINTS,
         publishSnapshot,
       });
     }

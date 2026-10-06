@@ -68,7 +68,30 @@ Existing shops with an active pricing rule are backfilled during migration.
 Orders are recognised as protected only by the variant on one of the shop's
 pricing rules, so a legacy Shopify metafield without a database rule, or a rule
 left on a replaced product, fails the "Pricing is linked to the current
-protection product" check until **Repair setup** publishes a rule for it.
+protection product" check until **Update protection setup** publishes a rule for it.
+
+Rate-editing access is controlled by the app operator per store. The
+`ShopConfiguration.protectionRateEditable` permission defaults to true to
+preserve existing access. Restricted stores see their current rate without a
+rate form, and the server rejects rate changes for them. Setup updates preserve
+the restriction and the current rate. You can edit this field directly in the
+store's `ShopConfiguration` row: `false` locks rate editing, and `true` allows
+it. Refresh Settings after changing it.
+
+The optional operator command provides the same change using the settings lock.
+After applying the migration with `npm run setup`, run these commands from a
+trusted operator shell with that environment's `DATABASE_URL` configured (`.env`
+is loaded if present):
+
+```shell
+npm run merchant:rate-editing -- store.myshopify.com locked
+npm run merchant:rate-editing -- store.myshopify.com editable
+```
+
+The command changes editing access only; it does not change the protection
+rate or historical pricing. It refuses unknown/uninstalled stores and cannot
+run while another settings change holds the store's lock. To set a managed
+rate, enable editing, save the rate through Settings, then lock editing.
 
 The app checks the shop's Shopify Plus plan and Cart Transform `updateOperation`
 eligibility before setup. The only implemented strategy is
