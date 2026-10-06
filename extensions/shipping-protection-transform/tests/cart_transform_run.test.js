@@ -245,7 +245,7 @@ describe("cart transform", () => {
     ).toEqual({ operations: [] });
   });
 
-  test("emits deterministic updates for duplicate protection lines", () => {
+  test("charges the fee once across duplicate protection lines", () => {
     const later = protectionLine("z-protection");
     const earlier = protectionLine("a-protection");
     const result = cartTransformRun(
@@ -254,7 +254,48 @@ describe("cart transform", () => {
 
     expect(result.operations).toEqual([
       expectedUpdate(earlier.id, "0.25"),
-      expectedUpdate(later.id, "0.25"),
+      expectedUpdate(later.id, "0"),
     ]);
+  });
+
+  test("charges the fee on a single-unit line, not per unit", () => {
+    const multiple = protectionLine("a-protection", 2);
+    const single = protectionLine("z-protection");
+    const result = cartTransformRun(
+      input([line({ id: "physical", amount: "100.00" }), multiple, single]),
+    );
+
+    expect(result.operations).toEqual([
+      expectedUpdate(multiple.id, "0"),
+      expectedUpdate(single.id, "0.25"),
+    ]);
+  });
+
+  test("never prices protection below the fee when no line has a single unit", () => {
+    // Raising the quantity must not make protection free: 0.25 over 3 units
+    // rounds up to 0.09 each.
+    const protection = protectionLine("a-protection", 3);
+    const other = protectionLine("z-protection", 2);
+    const result = cartTransformRun(
+      input([line({ id: "physical", amount: "100.00" }), protection, other]),
+    );
+
+    expect(result.operations).toEqual([
+      expectedUpdate(protection.id, "0.09"),
+      expectedUpdate(other.id, "0"),
+    ]);
+  });
+
+  test("rounds the per-unit fee up in zero-decimal currencies", () => {
+    const protection = protectionLine("protection", 2);
+    const result = cartTransformRun(
+      input([
+        line({ id: "physical", amount: "1000", currencyCode: "JPY" }),
+        protection,
+      ]),
+    );
+
+    // 0.25% of 1000 JPY is 3 JPY (rounded); over 2 units, 2 JPY each.
+    expect(result.operations).toEqual([expectedUpdate(protection.id, "2")]);
   });
 });

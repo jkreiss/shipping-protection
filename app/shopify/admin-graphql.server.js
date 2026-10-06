@@ -52,6 +52,12 @@ async function waitForShop(shop, sleep) {
   if (readyAt && readyAt > Date.now()) await sleep(readyAt - Date.now());
 }
 
+// The app no longer has access to the shop: no offline session, or Shopify
+// rejected the token. The uninstall webhook follows, so this is not a failure.
+export function isAccessLost(error) {
+  return error?.constructor?.name === "SessionNotFoundError" || error?.response?.code === 401;
+}
+
 export async function adminGraphql(admin, query, variables = {}, { shop, sleep = defaultSleep } = {}) {
   const operation = query.match(/\b(?:query|mutation)\s+([A-Za-z_][A-Za-z_0-9]*)/)?.[1] ?? "anonymous";
   try {
@@ -91,7 +97,8 @@ export async function adminGraphql(admin, query, variables = {}, { shop, sleep =
       return payload.data;
     }
   } catch (error) {
-    reportFailure("shopify_graphql_failed", error, { operation });
+    if (isAccessLost(error)) logEvent("shopify_access_lost", { operation, shop });
+    else reportFailure("shopify_graphql_failed", error, { operation });
     throw error;
   }
 }

@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import prisma from "./db.server.js";
-import { fetchShopifyOrder } from "./order-shopify.server.js";
+import { fetchShopifyOrder, PermanentOrderError } from "./order-shopify.server.js";
 import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
 import { failureCode, logEvent, reportFailure } from "./observability.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
+import { isAccessLost } from "./shopify/admin-graphql.server.js";
 
-export const MAX_DELIVERY_ATTEMPTS = 8;
+// With retryDelayMs, a temporary error (network, Shopify outage, database) is
+// retried for about 6.4 hours before the delivery fails.
+export const MAX_DELIVERY_ATTEMPTS = 16;
 
 export const DEFAULT_WORKER_CONCURRENCY = 4;
 const MAX_WORKER_CONCURRENCY = 16;
@@ -27,6 +30,13 @@ export function retryDelayMs(attempts) {
 }
 
 const MAX_BATCH_DELIVERIES = 100;
+
+class ShopUninstalledError extends Error {}
+
+// The app no longer has access to the shop: there is nothing to retry or alert.
+function isUninstalled(error) {
+  return error instanceof ShopUninstalledError || isAccessLost(error);
+}
 
 // Claims every queued delivery for one order under a single lease, so one
 // Shopify fetch covers them all. Orders that already have a live lease are
@@ -98,25 +108,33 @@ export async function processNextDelivery({
   try {
     const shop = await database.shop.findUnique({ where: { id: shopId }, select: { id: true, shopDomain: true, installationState: true } });
     if (!shop || shop.installationState !== "INSTALLED") {
-      throw new Error("Shop is not installed.");
+      throw new ShopUninstalledError("Shop is not installed.");
     }
     const { admin } = await adminForShop(shop.shopDomain);
     const order = await fetchShopifyOrder(admin, batch.shopifyOrderId, { shop: shop.shopDomain });
-    const normalized = normalizeGraphqlOrder(order);
+    let normalized;
+    try {
+      normalized = normalizeGraphqlOrder(order);
+    } catch (error) {
+      throw new PermanentOrderError("Shopify order could not be normalized.", { cause: error });
+    }
     // Look rows up by primary key so the Serializable check locks only this batch.
     const ids = context.deliveryIds;
+    let afterCommit = [];
     await retrySerializationFailures(() => database.$transaction(async (transaction) => {
+      afterCommit = [];
       const leased = await transaction.webhookDelivery.count({
         where: { id: { in: ids }, shopId: shop.id, leaseToken, status: "PROCESSING", leaseUntil: { gt: new Date() } },
       });
       if (leased !== batch.deliveries.length) throw new Error("Webhook lease expired.");
-      await persistNormalizedOrder(transaction, shop, normalized);
+      await persistNormalizedOrder(transaction, shop, normalized, afterCommit);
       const completion = await transaction.webhookDelivery.updateMany({
         where: { id: { in: ids }, shopId: shop.id, leaseToken, status: "PROCESSING", leaseUntil: { gt: new Date() } },
         data: { status: "PROCESSED", processedAt: new Date(), leaseToken: null, leaseUntil: null, errorMessage: null },
       });
       if (completion.count !== batch.deliveries.length) throw new Error("Webhook lease was lost before completion.");
     }, { isolationLevel: "Serializable", timeout: 30_000 }));
+    for (const report of afterCommit) report();
     logEvent("webhook_processed", { ...context, durationMs: Date.now() - started });
   } catch (error) {
     if (error?.code === "P2034") {
@@ -133,9 +151,13 @@ export async function processNextDelivery({
       logEvent("webhook_conflict_requeued", { ...context, durationMs: Date.now() - started });
       return true;
     }
+    // Without access, keep retrying quietly so a reinstall still processes the
+    // queue; after the retry budget the deliveries fail, still without an alert.
+    const uninstalled = isUninstalled(error);
+    const permanent = error instanceof PermanentOrderError;
     // Each delivery keeps its own attempt count, so reschedule them one by one.
     for (const delivery of batch.deliveries) {
-      const terminal = delivery.attempts >= MAX_DELIVERY_ATTEMPTS;
+      const terminal = permanent || delivery.attempts >= MAX_DELIVERY_ATTEMPTS;
       await database.webhookDelivery.updateMany({
         where: { id: delivery.id, shopId, leaseToken, status: "PROCESSING" },
         data: {
@@ -143,9 +165,15 @@ export async function processNextDelivery({
           nextAttemptAt: new Date(Date.now() + retryDelayMs(delivery.attempts)),
           failedAt: terminal ? new Date() : null,
           leaseToken: null, leaseUntil: null,
-          errorMessage: failureCode(error),
+          errorMessage: uninstalled ? "SHOP_UNINSTALLED" : failureCode(error),
         },
       });
+      if (uninstalled) {
+        logEvent("webhook_skipped_uninstalled", {
+          deliveryId: delivery.id, shopId, topic: delivery.topic, attempts: delivery.attempts, terminal,
+        });
+        continue;
+      }
       reportFailure(terminal ? "webhook_terminal" : "webhook_retry", error, {
         deliveryId: delivery.id, shopId, topic: delivery.topic,
         attempts: delivery.attempts, durationMs: Date.now() - started,

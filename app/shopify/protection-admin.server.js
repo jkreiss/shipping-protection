@@ -8,6 +8,15 @@ const SHOP_CONFIG_KEY = "shipping_protection_config";
 const FUNCTION_CONFIG_KEY = "function-configuration";
 const CONFIG_NAMESPACE = "$app";
 const API_VERSION = "2026-07";
+// Customer-visible. It names no benefit, because which benefits are sold is
+// still a legal decision (docs/agents/legal-product.md).
+const PRODUCT_DESCRIPTION =
+  "Optional shipping protection offered by this store. The fee is based on the items being shipped.";
+// Descriptions earlier versions wrote. Setup replaces these, but keeps a
+// description the merchant wrote themselves.
+const RETIRED_DESCRIPTIONS = new Set([
+  "Optional coverage for eligible loss, theft, and damage in transit.",
+]);
 
 const PRODUCT_FIELDS = `#graphql
   fragment ShippingProtectionProduct on Product {
@@ -15,6 +24,7 @@ const PRODUCT_FIELDS = `#graphql
     title
     handle
     status
+    descriptionHtml
     variantsCount {
       count
     }
@@ -392,8 +402,7 @@ async function createProduct(admin) {
       product: {
         title: PRODUCT_TITLE,
         handle: PRODUCT_HANDLE,
-        descriptionHtml:
-          "Optional coverage for eligible loss, theft, and damage in transit.",
+        descriptionHtml: PRODUCT_DESCRIPTION,
         productType: "Shipping Protection",
         requiresSellingPlan: false,
         status: "DRAFT",
@@ -409,7 +418,27 @@ async function createProduct(admin) {
   return loadProduct(admin, { id: data.productCreate.product.id });
 }
 
-async function setProductStatus(admin, productId, status) {
+function descriptionNeedsReplacing(descriptionHtml) {
+  const text = (descriptionHtml ?? "").replace(/<[^>]*>/g, "").trim();
+  return text === "" || RETIRED_DESCRIPTIONS.has(text);
+}
+
+// Restores the fields setup relies on without touching the product's status,
+// so repairing a live product never takes it off sale.
+function normalizeProduct(admin, product) {
+  return updateProduct(admin, {
+    id: product.id,
+    title: PRODUCT_TITLE,
+    handle: PRODUCT_HANDLE,
+    ...(descriptionNeedsReplacing(product.descriptionHtml)
+      ? { descriptionHtml: PRODUCT_DESCRIPTION }
+      : {}),
+    productType: "Shipping Protection",
+    requiresSellingPlan: false,
+  });
+}
+
+async function updateProduct(admin, product) {
   const data = await graphql(
     admin,
     `
@@ -427,18 +456,7 @@ async function setProductStatus(admin, productId, status) {
         }
       }
     `,
-    {
-      product: {
-        id: productId,
-        title: PRODUCT_TITLE,
-        handle: PRODUCT_HANDLE,
-        descriptionHtml:
-          "Optional coverage for eligible loss, theft, and damage in transit.",
-        productType: "Shipping Protection",
-        requiresSellingPlan: false,
-        status,
-      },
-    },
+    { product },
   );
 
   assertUserErrors(data.productUpdate, "productUpdate");
@@ -519,7 +537,7 @@ export async function repairProduct(admin, existingProduct, preferredVariantId) 
   const product = existingProduct ?? (await createProduct(admin));
   if (!product) throw new Error("Could not create Shipping Protection.");
 
-  await setProductStatus(admin, product.id, "DRAFT");
+  await normalizeProduct(admin, product);
 
   let current = await loadProduct(admin, { id: product.id });
   const chosen =
@@ -621,12 +639,23 @@ async function createTransform(admin, configuration) {
   return data.cartTransformCreate.cartTransform;
 }
 
-export async function ensureTransform(admin, core, disabledConfiguration) {
+export function assertFunctionDeployed(core) {
   if (core.shopifyFunction?.apiVersion !== API_VERSION) {
     throw new Error(
       `Deploy the ${FUNCTION_HANDLE} Function on API ${API_VERSION} before running setup.`,
     );
   }
+}
+
+// An existing transform keeps its configuration unless `overwrite` is set,
+// so a live store keeps charging its current price while setup repairs it.
+export async function ensureTransform(
+  admin,
+  core,
+  configuration,
+  { overwrite = true } = {},
+) {
+  assertFunctionDeployed(core);
 
   let transform = core.transform;
   // Shopify can't update blockOnFailure in place, so replace a blocking one.
@@ -636,13 +665,13 @@ export async function ensureTransform(admin, core, disabledConfiguration) {
   }
 
   if (!transform) {
-    transform = await createTransform(admin, disabledConfiguration);
-  } else {
+    transform = await createTransform(admin, configuration);
+  } else if (overwrite) {
     await writeJsonMetafield(
       admin,
       transform.id,
       FUNCTION_CONFIG_KEY,
-      disabledConfiguration,
+      configuration,
     );
   }
 
@@ -650,7 +679,7 @@ export async function ensureTransform(admin, core, disabledConfiguration) {
 }
 
 export async function activateProduct(admin, productId, publicationId) {
-  await setProductStatus(admin, productId, "UNLISTED");
+  await updateProduct(admin, { id: productId, status: "UNLISTED" });
 
   const data = await graphql(
     admin,

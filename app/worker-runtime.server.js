@@ -2,6 +2,7 @@ import process from "node:process";
 import { processNextDelivery, workerConcurrency } from "./webhook-worker.server.js";
 import { reconcileOrders, reconciliationDue, shopsToReportBehind } from "./order-reconciliation.server.js";
 import { expectWorkerLoops, logEvent, reportCondition, reportFailure, workerHeartbeat } from "./observability.server.js";
+import { isAccessLost } from "./shopify/admin-graphql.server.js";
 
 // The worker's delivery and reconciliation loops. scripts/worker.js supplies
 // Prisma and Shopify; tests supply doubles. stop() lets each loop finish its
@@ -40,7 +41,9 @@ export function createWorkerRuntime({
     } catch (error) {
       // Back off so a shop that keeps failing isn't retried in a tight loop.
       reconcileRetryAt.set(shop.id, Date.now() + reconcileFailureBackoffMs);
-      reportFailure("reconciliation_failed", error, { shopId: shop.id, durationMs: Date.now() - started });
+      // Lost access means the shop is uninstalling; its webhook will mark it so.
+      if (isAccessLost(error)) logEvent("reconciliation_skipped_access_lost", { shopId: shop.id });
+      else reportFailure("reconciliation_failed", error, { shopId: shop.id, durationMs: Date.now() - started });
     }
   }
 

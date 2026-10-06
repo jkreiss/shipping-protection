@@ -202,6 +202,8 @@ model Order {
   checkoutTokenHash    String?
   shopifyCreatedAt     DateTime
   shopifyUpdatedAt     DateTime
+  // Tells apart two different copies with the same shopifyUpdatedAt second.
+  contentHash          String?
   processedAt          DateTime?
   isTest               Boolean   @default(false)
   cancelledAt          DateTime?
