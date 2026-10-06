@@ -43,3 +43,27 @@ The repository, the dev app, and the checkout extension (`insurance-ext`) use "i
 Agents working on code must not invent legal wording or compliance guarantees.
 
 Use neutral placeholders where product/legal decisions are unresolved.
+
+## Changing customer-facing copy
+
+Current wording (chosen by the product owner 2026-10-07 for the first, theft-only rollout; no legal sign-off): protection covers packages stolen after delivery. It names no other benefit. Add free returns to the copy only once they are built (setting, claim flow, return labels), and only for stores that offer them.
+
+Keep every surface saying the same thing. When the wording changes, update all of these together:
+
+1. Checkout block, English: `extensions/insurance-ext/locales/en.default.json` (`supportingText`; `checkboxLabel` names the product).
+2. Checkout block, French: `extensions/insurance-ext/locales/fr.json`. Translate the new English meaning; don't leave the old benefits in place.
+3. Protection product description: `PRODUCT_DESCRIPTION` in `app/shopify/protection-admin.server.js`. Add the outgoing text, exactly as it was, to `RETIRED_DESCRIPTIONS` so setup repair replaces it on stores that already have the product. Setup never overwrites a description the merchant wrote.
+4. The repair test in `app/shopify/protection-admin.server.test.js`: add the outgoing text to the `test.each` cases and update the assertions about what the description contains.
+5. The "Coverage offer" row in `docs/production-readiness.md`, and the "Current wording" paragraph above.
+
+Wording rules:
+
+- Name only benefits customers don't already have (see Product rules above). Theft is "stolen after delivery", because loss before delivery is the merchant's obligation. Return shipping is "if you change your mind", because return costs for faulty or not-as-described items are already owed under Australian Consumer Law.
+- Never say or imply that loss, damage, faulty goods, or consumer-law remedies need protection, or that customers without it aren't covered.
+- Say "shipping protection", not "insurance" or "coverage" as a noun for the product.
+- Don't remove "Optional add-on from this store": it tells the customer the merchant, not the app, makes the promise.
+- Keep the copy aligned with what the merchant has enabled. The copy is the same for every store, which works while theft is the only benefit. Once stores can choose benefits (theft only, or theft plus free returns), the copy must come from each store's configuration.
+
+Checkout locale changes only reach customers after `shopify app deploy`; the product description changes on each store the next time setup or repair runs.
+
+Run `npm test`, `npm run lint`, and `npm run typecheck` after changing copy.

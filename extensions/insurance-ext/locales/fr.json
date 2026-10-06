@@ -1,5 +1,5 @@
 {
   "checkboxLabel": "Ajouter une protection d’expédition pour {{fee}}",
-  "supportingText": "Option facultative proposée par cette boutique. Les frais sont calculés selon les articles expédiés.",
+  "supportingText": "Couvre les colis volés après la livraison. Option facultative proposée par cette boutique.",
   "mutationError": "La protection d’expédition n’a pas pu être mise à jour. Veuillez réessayer."
 }
