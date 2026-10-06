@@ -11,6 +11,9 @@ node_modules/
 /e2e/.auth/
 /.playwright/
 
+# Local agent worktrees
+/.codex/worktrees/
+
 # Build output and generated files
 /build/
 /app/build/

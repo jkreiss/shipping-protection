@@ -11,6 +11,12 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 - Preserve financial idempotency and historical auditability. Changes must never block checkout.
 - Do not invent legal/compliance guarantees or sell/gate existing Australian Consumer Law remedies as protection. Customer-facing copy uses “shipping protection” unless legal review confirms otherwise.
 
+## Codex workspaces
+
+- Create Codex Git worktrees under `.codex/worktrees/<task-name>` in the repository root. Use this location instead of sibling directories.
+- Reuse the current worktree when already working in one; do not create nested worktrees.
+- After merging, remove Codex-created worktrees only when they are clean and their commits are merged. Preserve other agents' worktrees and unfinished work.
+
 ## Build and type checking
 
 - `npm run build`: builds the React Router app.
