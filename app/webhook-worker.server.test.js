@@ -66,12 +66,13 @@ describe("worker failure handling", () => {
     ["Shopify rejects the access token", {
       graphqlError: Object.assign(new Error("Unauthorized"), { response: { code: 401 } }),
     }],
-  ])("stops quietly when %s", async (_label, options) => {
+  ])("retries quietly, for a reinstall, when %s", async (_label, options) => {
     const { run, updates } = worker(options);
     const { stderr, stdout } = await run();
 
-    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "FAILED"]]);
-    expect(updates[0].data.errorMessage).toBe("SHOP_UNINSTALLED");
+    // Only the delivery out of attempts fails; the other waits for a reinstall.
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"], ["d-2", "PENDING"]]);
+    expect(updates.map(({ data }) => data.errorMessage)).toEqual(["SHOP_UNINSTALLED", "SHOP_UNINSTALLED"]);
     expect(stderr.filter(({ event }) => event?.startsWith("webhook_"))).toEqual([]);
     expect(stdout.filter(({ event }) => event === "webhook_skipped_uninstalled")).toHaveLength(2);
   });

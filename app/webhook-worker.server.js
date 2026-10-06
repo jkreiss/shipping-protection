@@ -151,8 +151,10 @@ export async function processNextDelivery({
       logEvent("webhook_conflict_requeued", { ...context, durationMs: Date.now() - started });
       return true;
     }
+    // Without access, keep retrying quietly so a reinstall still processes the
+    // queue; after the retry budget the deliveries fail, still without an alert.
     const uninstalled = isUninstalled(error);
-    const permanent = uninstalled || error instanceof PermanentOrderError;
+    const permanent = error instanceof PermanentOrderError;
     // Each delivery keeps its own attempt count, so reschedule them one by one.
     for (const delivery of batch.deliveries) {
       const terminal = permanent || delivery.attempts >= MAX_DELIVERY_ATTEMPTS;
@@ -167,7 +169,9 @@ export async function processNextDelivery({
         },
       });
       if (uninstalled) {
-        logEvent("webhook_skipped_uninstalled", { deliveryId: delivery.id, shopId, topic: delivery.topic });
+        logEvent("webhook_skipped_uninstalled", {
+          deliveryId: delivery.id, shopId, topic: delivery.topic, attempts: delivery.attempts, terminal,
+        });
         continue;
       }
       reportFailure(terminal ? "webhook_terminal" : "webhook_retry", error, {
