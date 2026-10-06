@@ -24,7 +24,9 @@ export const loader = async ({ request }) => {
   };
 };
 
-const CHART = { width: 720, height: 200, left: 56, right: 8, top: 12, bottom: 28 };
+const CHART = { width: 720, height: 200, minLeft: 56, right: 8, top: 12, bottom: 28 };
+// Approximate glyph width for the 12px axis labels, used to fit the widest label.
+const AXIS_CHAR_WIDTH = 7.5;
 
 function adminOrderUrl(shopifyOrderId) {
   return `shopify:admin/orders/${String(shopifyOrderId).split("/").pop()}`;
@@ -44,14 +46,16 @@ function RevenueTrend({ days, money }) {
     return <s-paragraph color="subdued">No protection revenue in the last 30 days.</s-paragraph>;
   }
   const max = Math.max(...values);
-  const plotWidth = CHART.width - CHART.left - CHART.right;
+  const maxLabel = money(max);
+  const left = Math.max(CHART.minLeft, Math.ceil(maxLabel.length * AXIS_CHAR_WIDTH) + 16);
+  const plotWidth = CHART.width - left - CHART.right;
   const plotHeight = CHART.height - CHART.top - CHART.bottom;
   const baseline = CHART.top + plotHeight;
   const slot = plotWidth / days.length;
   const barWidth = Math.min(24, slot - 2);
   const bar = (value, index) => {
     const height = (value / max) * plotHeight;
-    const x = CHART.left + index * slot + (slot - barWidth) / 2;
+    const x = left + index * slot + (slot - barWidth) / 2;
     const y = baseline - height;
     const radius = Math.min(4, height, barWidth / 2);
     return `M${x},${baseline} V${y + radius} Q${x},${y} ${x + radius},${y} H${x + barWidth - radius} Q${x + barWidth},${y} ${x + barWidth},${y + radius} V${baseline} Z`;
@@ -71,14 +75,14 @@ function RevenueTrend({ days, money }) {
         style={{ width: "100%", height: "auto", display: "block" }}
         onMouseLeave={() => setActive(null)}
       >
-        <line x1={CHART.left} x2={CHART.width - CHART.right} y1={CHART.top} y2={CHART.top} stroke="#e3e3e3" />
-        <line x1={CHART.left} x2={CHART.width - CHART.right} y1={baseline} y2={baseline} stroke="#8a8a8a" />
-        <text x={CHART.left - 8} y={CHART.top + 4} textAnchor="end" fontSize="12" fill="#616161">{money(max)}</text>
-        <text x={CHART.left - 8} y={baseline + 4} textAnchor="end" fontSize="12" fill="#616161">{money(0)}</text>
+        <line x1={left} x2={CHART.width - CHART.right} y1={CHART.top} y2={CHART.top} stroke="#e3e3e3" />
+        <line x1={left} x2={CHART.width - CHART.right} y1={baseline} y2={baseline} stroke="#8a8a8a" />
+        <text x={left - 8} y={CHART.top + 4} textAnchor="end" fontSize="12" fill="#616161">{maxLabel}</text>
+        <text x={left - 8} y={baseline + 4} textAnchor="end" fontSize="12" fill="#616161">{money(0)}</text>
         {labelIndexes.map((index) => (
           <text
             key={days[index].date}
-            x={CHART.left + index * slot + slot / 2}
+            x={left + index * slot + slot / 2}
             y={CHART.height - 8}
             textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"}
             fontSize="12"
@@ -98,7 +102,7 @@ function RevenueTrend({ days, money }) {
         {days.map((day, index) => (
           <rect
             key={day.date}
-            x={CHART.left + index * slot}
+            x={left + index * slot}
             y={CHART.top}
             width={slot}
             height={plotHeight}
