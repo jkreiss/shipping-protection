@@ -196,6 +196,35 @@ describe("normalized order persistence", () => {
     expect(tx.storedPurchase().attributionStatus).toBe("UNATTRIBUTED");
   });
 
+  test("drops provenance numbers that would not fit their INTEGER columns", async () => {
+    // A customer can set these line properties to anything, including values
+    // Postgres would reject, which would fail the order's write on every retry.
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, normalizedOrder({
+      _yasas_protection_rule_id: "rule-1",
+      _yasas_protection_rule_version: "99999999999",
+      _yasas_protection_rate_bps: "20000",
+      _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+      _yasas_protection_contract_version: "99999999999",
+    }));
+    expect(tx.storedPurchase()).toMatchObject({
+      ruleId: "rule-1", ruleVersion: null, rateBasisPoints: null, pricingContractVersion: null,
+      attributionStatus: "UNATTRIBUTED",
+    });
+
+    const negative = transaction();
+    await persistNormalizedOrder(negative, shop, normalizedOrder({
+      _yasas_protection_rule_id: "rule-1",
+      _yasas_protection_rule_version: "-1",
+      _yasas_protection_rate_bps: "0",
+      _yasas_protection_basis: "SHIPPABLE_PRE_DISCOUNT",
+      _yasas_protection_contract_version: "2",
+    }));
+    expect(negative.storedPurchase()).toMatchObject({
+      ruleVersion: null, rateBasisPoints: null, pricingContractVersion: 2, attributionStatus: "UNATTRIBUTED",
+    });
+  });
+
   test("scopes rule detection to the current shop", async () => {
     const tx = transaction([{ ...rule, shopId: "shop-2" }]);
     tx.pricingRule.findMany.mockResolvedValue([]);

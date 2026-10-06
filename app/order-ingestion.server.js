@@ -5,6 +5,14 @@ import { PRICING_SCHEMA_VERSION, calculateFee, currencyMinorUnits } from "./pric
 import { reportFailure } from "./observability.server.js";
 import { queueOrderRefresh } from "./webhook-inbox.server.js";
 
+// These columns are 32-bit INTEGERs. Line properties are customer-editable, so
+// an out-of-range value would fail the order's whole write on every retry.
+const MAX_INTEGER_COLUMN = 2_147_483_647;
+
+function boundedInteger(value, min, max = MAX_INTEGER_COLUMN) {
+  return Number.isInteger(value) && value >= min && value <= max ? value : null;
+}
+
 function protectionAttribution(line, rules) {
   const attributes = line.protectionAttributes;
   const ruleVersion = Number(attributes._yasas_protection_rule_version);
@@ -23,11 +31,10 @@ function protectionAttribution(line, rules) {
   return {
     rule: rule ?? null,
     ruleId: attributes._yasas_protection_rule_id ?? null,
-    ruleVersion: Number.isInteger(ruleVersion) ? ruleVersion : null,
-    rateBasisPoints: Number.isInteger(rateBasisPoints) ? rateBasisPoints : null,
+    ruleVersion: boundedInteger(ruleVersion, 1),
+    rateBasisPoints: boundedInteger(rateBasisPoints, 1, 10_000),
     basis: attributes._yasas_protection_basis ?? null,
-    pricingContractVersion: Number.isInteger(pricingContractVersion) && pricingContractVersion >= 1
-      ? pricingContractVersion : null,
+    pricingContractVersion: boundedInteger(pricingContractVersion, 1),
     status: rule ? "ATTRIBUTED" : "UNATTRIBUTED",
   };
 }
