@@ -271,9 +271,9 @@ describe("cart transform", () => {
     ]);
   });
 
-  test("never prices protection above the fee when no line has a single unit", () => {
-    // The checkout block resets the quantity to 1; until then the buyer is
-    // never charged more than the fee: 0.25 over 3 units rounds down to 0.08.
+  test("rounds the per-unit fee up when no protection line has a single unit", () => {
+    // The checkout block resets the quantity to 1; until then a 0.25 fee over
+    // 3 units rounds up to 0.09 each, so the total cannot fall below the fee.
     const protection = protectionLine("a-protection", 3);
     const other = protectionLine("z-protection", 2);
     const result = cartTransformRun(
@@ -281,21 +281,36 @@ describe("cart transform", () => {
     );
 
     expect(result.operations).toEqual([
-      expectedUpdate(protection.id, "0.08"),
+      expectedUpdate(protection.id, "0.09"),
       expectedUpdate(other.id, "0"),
     ]);
   });
 
-  test("rounds the per-unit fee down in zero-decimal currencies", () => {
-    const protection = protectionLine("protection", 2);
-    const result = cartTransformRun(
-      input([
-        line({ id: "physical", amount: "1000", currencyCode: "JPY" }),
-        protection,
-      ]),
-    );
+  test.each([
+    ["USD", "100.00", 2, "0.13"],
+    ["USD", "100.00", 5, "0.05"],
+    ["USD", "100.00", 25, "0.01"],
+    ["USD", "100.00", 100, "0.01"],
+    ["USD", "4.00", 3, "0.01"],
+    ["USD", "1.99", 3, "0.00"],
+    ["JPY", "1000", 2, "2"],
+    ["JPY", "800", 2, "1"],
+    ["JPY", "0", 3, "0"],
+    ["KWD", "100.00", 3, "0.084"],
+    ["KWD", "1.20", 2, "0.002"],
+    ["CLF", "100.00", 3, "0.0834"],
+  ])(
+    "rounds up at %s precision for subtotal %s and quantity %s",
+    (currencyCode, amount, quantity, perUnit) => {
+      const protection = protectionLine("protection", quantity);
+      const result = cartTransformRun(
+        input([
+          line({ id: "physical", amount, currencyCode }),
+          protection,
+        ]),
+      );
 
-    // 0.25% of 1000 JPY is 3 JPY (rounded); over 2 units, 1 JPY each.
-    expect(result.operations).toEqual([expectedUpdate(protection.id, "1")]);
-  });
+      expect(result.operations).toEqual([expectedUpdate(protection.id, perUnit)]);
+    },
+  );
 });
