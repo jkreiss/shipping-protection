@@ -11,6 +11,7 @@ worker="${prefix}-worker"
 cleanup() {
   result=$?
   if (( result != 0 )); then
+    docker logs "$postgres" 2>/dev/null || true
     docker logs "$web" 2>/dev/null || true
     docker logs "$worker" 2>/dev/null || true
   fi
@@ -25,11 +26,12 @@ docker network create "$network" >/dev/null
 docker run -d --name "$postgres" --network "$network" --network-alias postgres \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=insurance_test \
   postgres:17 >/dev/null
+# The initialization server listens only on a socket; require the final TCP server.
 for attempt in {1..60}; do
-  if docker exec "$postgres" pg_isready -U postgres -d insurance_test >/dev/null 2>&1; then break; fi
+  if docker exec "$postgres" pg_isready -h 127.0.0.1 -U postgres -d insurance_test >/dev/null 2>&1; then break; fi
   sleep 1
 done
-docker exec "$postgres" pg_isready -U postgres -d insurance_test >/dev/null
+docker exec "$postgres" pg_isready -h 127.0.0.1 -U postgres -d insurance_test >/dev/null
 
 environment=(--network "$network"
   -e 'DATABASE_URL=postgresql://postgres:postgres@postgres:5432/insurance_test?schema=public&sslmode=disable&connection_limit=6'

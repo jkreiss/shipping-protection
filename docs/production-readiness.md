@@ -765,3 +765,15 @@ The installed CLI `3.90.0` lacks `app config validate`. Production configuration
 passed local validation (`valid: true`, no issues) using a temporary CLI `4.8.5`
 without changing the project dependency. The CLI 4 major removes Node 20 support
 and deprecated flags; the dependency upgrade remains separate.
+
+Final local checks: 459 tests passed across 39 files, including real PostgreSQL 17
+integration. Lint, typecheck, build, schema comparison, and E2E discovery (12 tests)
+passed. The final Alpine image passed Node version, generated Prisma/schema, both
+PostgreSQL verifiers, web `/healthz`, worker startup, and graceful shutdown checks.
+The container readiness probe requires TCP so it cannot mistake PostgreSQL's
+temporary initialization server for the final server.
+
+Temporary CLI validation for local and staging-template placeholders could not
+complete: Shopify returned “Cannot find a valid organization.” Production
+configuration validated successfully. Actual staging deployment, metafield
+confirmation, and checkout acceptance remain pending release actions.
