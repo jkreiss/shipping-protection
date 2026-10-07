@@ -237,6 +237,7 @@ model Order {
   @@unique([id, shopId])
   @@index([shopId, shopifyUpdatedAt, shopifyOrderId])
   @@index([shopId, firstPaidAt])
+  @@index([shopifyCreatedAt])
 }
 
 model ProtectionRefund {

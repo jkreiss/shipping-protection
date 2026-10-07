@@ -109,6 +109,13 @@ Reconciliation runs only in the worker: a 60-day backfill on install, then a
 check about every 10 minutes for orders missing locally or newer in Shopify.
 Watch the `reconciliation_completed` and `shopify_graphql_cost` logs.
 
+The worker also deletes order records placed more than 24 months ago, with
+their purchases, refunds, claims, and webhook deliveries: on start, then daily.
+This is the privacy policy's retention ceiling, and ingestion never stores an
+order already past it. Watch `retention_purge_completed`. A backlog runs in
+one-minute turns between reconciliation passes (`retention_purge_paused`);
+`retention_purge_failed` retries after an hour.
+
 ## Merchant analytics
 
 The Overview shows the last 30 merchant-local days from stored data; **Refresh**

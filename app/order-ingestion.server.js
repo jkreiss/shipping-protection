@@ -4,6 +4,7 @@ import { classifyProtectionRefund } from "./protection-refunds.js";
 import { PRICING_SCHEMA_VERSION, calculateFee, currencyMinorUnits } from "./pricing-contract.js";
 import { reportFailure } from "./observability.server.js";
 import { queueOrderRefresh } from "./webhook-inbox.server.js";
+import { isPastRetention } from "./order-retention.js";
 
 // These columns are 32-bit INTEGERs. Line properties are customer-editable, so
 // an out-of-range value would fail the order's whole write on every retry.
@@ -74,7 +75,12 @@ export async function persistNormalizedOrder(
   shop,
   normalized,
   afterCommit = [],
+  { now = new Date() } = {},
 ) {
+  // An order past the retention ceiling is never stored again; a late update
+  // would otherwise recreate a record the purge removed. Callers still complete
+  // its deliveries.
+  if (isPastRetention(normalized.shopifyCreatedAt, now)) return null;
   const rules = await transaction.pricingRule.findMany({
     where: { shopId: shop.id },
   });

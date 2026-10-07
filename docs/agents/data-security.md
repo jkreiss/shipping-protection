@@ -81,6 +81,8 @@ The app uses Level 1 protected customer data only: order records keyed by order 
 - `shop/redact` deletes all of the shop's data.
 - `customers/data_request` is acknowledged; stored order records hold no customer details to return.
 
+Order records are kept for at most 24 months from when the order was placed (`retentionCutoff` in `app/order-retention.js`; 29 February maps to 28 February), the ceiling the privacy policy states. `persistNormalizedOrder` skips any order already past it, so a late webhook or reconciliation can't recreate a purged record; its deliveries still complete. The worker's reconciliation loop runs the purge (`app/order-retention.server.js`) on start and then daily, through the same deletion path as `customers/redact`. Each transaction deletes up to 500 orders from one shop; each turn stops after a minute or on shutdown and continues on the next pass. A completed run also removes finished webhook deliveries received before the cutoff. Any new table holding order-derived data must be added to `deleteOrderRecords` in `app/shop.server.js`.
+
 If evidence uploads are implemented:
 
 - use private storage
