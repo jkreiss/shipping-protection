@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { describeRevenueShare, planCharge, planEntries, purchaseTarget, refundTarget } from "./ledger.js";
+import { describeRevenueShare, formatAmount, planCharge, planEntries, purchaseTarget, refundTarget } from "./ledger.js";
 
 const activatedAt = new Date("2026-10-01T00:00:00Z");
 const net = { mode: "NET_SHARE", status: "ACTIVE", rateBasisPoints: 1_000, currencyCode: "AUD", activatedAt };
@@ -118,5 +118,13 @@ describe("describing the terms", () => {
     expect(describeRevenueShare(net)).toBe("10% of protection revenue, net of protection refunds");
     expect(describeRevenueShare({ ...gross, rateBasisPoints: 125 })).toBe("1.25% of protection revenue");
     expect(describeRevenueShare(free)).toBe("No charge");
+  });
+});
+
+describe("showing amounts", () => {
+  test("shows an amount in the currency's minor units", () => {
+    expect(formatAmount("4.5000", "AUD")).toBe("4.50");
+    expect(formatAmount({ toFixed: () => "100.0000" }, "JPY")).toBe("100");
+    expect(formatAmount("1.2340", "KWD")).toBe("1.234");
   });
 });

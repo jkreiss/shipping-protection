@@ -1,7 +1,8 @@
 import prisma from "../db.server.js";
 import { logEvent, reportCondition, reportFailure } from "../observability.server.js";
 import { moneyToScaled } from "../order-normalization.js";
-import { currencyMinorUnits, formatBasisPoints } from "../pricing-contract.js";
+import { formatBasisPoints } from "../pricing-contract.js";
+import { formatAmount } from "./ledger.js";
 import { createUsageRecord, readSubscription as readShopifySubscription } from "../shopify/billing-admin.server.js";
 
 // About a day and a half of retries before a charge needs the operator.
@@ -15,15 +16,9 @@ export function chargeRetryDelayMs(attempts) {
 
 const money = (value) => (typeof value === "object" && value !== null ? value.toFixed(4) : String(value));
 
-function displayAmount(amount, currencyCode) {
-  const [whole, fraction = ""] = amount.split(".");
-  const digits = currencyMinorUnits(currencyCode);
-  return digits ? `${whole}.${fraction.padEnd(digits, "0").slice(0, digits)}` : whole;
-}
-
 // Shown on the merchant's Shopify invoice.
 function usageDescription(charge, agreement) {
-  const base = `${charge.currencyCode} ${displayAmount(money(charge.baseAmount), charge.currencyCode)}`;
+  const base = `${charge.currencyCode} ${formatAmount(charge.baseAmount, charge.currencyCode)}`;
   const share = `${formatBasisPoints(agreement.rateBasisPoints)} of ${base}`;
   return `Shipping protection revenue share: ${share}${agreement.mode === "NET_SHARE" ? ", net of protection refunds" : ""}`;
 }

@@ -72,3 +72,11 @@ export function describeRevenueShare(agreement) {
   const share = `${formatBasisPoints(agreement.rateBasisPoints)} of protection revenue`;
   return agreement.mode === "NET_SHARE" ? `${share}, net of protection refunds` : share;
 }
+
+// An amount for display, in the currency's minor units (fees and charges are
+// already whole minor units, so nothing is rounded away).
+export function formatAmount(value, currencyCode) {
+  const [whole, fraction = ""] = (typeof value === "object" && value !== null ? value.toFixed(4) : String(value)).split(".");
+  const digits = currencyMinorUnits(currencyCode);
+  return digits ? `${whole}.${fraction.padEnd(digits, "0").slice(0, digits)}` : whole;
+}

@@ -13,6 +13,7 @@
     "start": "react-router-serve ./build/server/index.js",
     "worker": "node scripts/worker.js",
     "merchant:rate-editing": "node --env-file-if-exists=.env scripts/set-rate-editing.js",
+    "merchant:billing": "node --env-file-if-exists=.env scripts/set-billing.js",
     "load:mock": "node scripts/load/mock-shopify.js",
     "load:smoke": "node --env-file-if-exists=.env.load-smoke scripts/load/smoke.js",
     "load:burst": "node --env-file-if-exists=.env.load-smoke scripts/load/campaign.js burst",

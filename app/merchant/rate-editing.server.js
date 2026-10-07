@@ -1,5 +1,5 @@
 import prisma from "../db.server.js";
-import { withShopSettingsLock } from "../shop.server.js";
+import { isShopDomain, withShopSettingsLock } from "../shop.server.js";
 import { UserFacingError } from "../user-facing-error.js";
 
 // Operator-only: do not expose this setter through merchant settings actions.
@@ -8,13 +8,7 @@ export async function setProtectionRateEditing(
   editable,
   { database = prisma } = {},
 ) {
-  if (
-    typeof shopDomain !== "string" ||
-    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(
-      shopDomain,
-    ) ||
-    typeof editable !== "boolean"
-  ) {
+  if (!isShopDomain(shopDomain) || typeof editable !== "boolean") {
     throw new UserFacingError(
       "Use a myshopify.com store domain and a boolean editing permission.",
     );

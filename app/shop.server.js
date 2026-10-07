@@ -1,6 +1,13 @@
 import prisma from "./db.server.js";
 import { UserFacingError } from "./user-facing-error.js";
 
+const SHOP_DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/;
+
+// A store's permanent myshopify.com domain, as operator commands take it.
+export function isShopDomain(value) {
+  return typeof value === "string" && SHOP_DOMAIN.test(value);
+}
+
 export async function ensureInstalledShop(shopDomain, shopGid = undefined) {
   return prisma.shop.upsert({
     where: { shopDomain },
