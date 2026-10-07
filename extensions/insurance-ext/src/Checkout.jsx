@@ -234,7 +234,6 @@ export function ShippingProtection() {
       />
       <s-text color="subdued" type="small">
         {offer.supportingText ?? shopify.i18n.translate("supportingText")}{" "}
-        {shopify.i18n.translate("merchantDisclosure")}
       </s-text>
     </s-stack>
   );

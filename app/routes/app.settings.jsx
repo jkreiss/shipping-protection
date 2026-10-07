@@ -19,7 +19,6 @@ import { updateCheckoutOffer } from "../merchant/checkout-offer.server";
 import {
   DEFAULT_CHECKBOX_LABEL,
   DEFAULT_SUPPORTING_TEXT,
-  MERCHANT_DISCLOSURE,
 } from "../merchant/checkout-offer";
 
 export const loader = async ({ request }) => {
@@ -340,7 +339,7 @@ export default function Settings() {
                     value={offer.checkboxLabel ?? ""}
                     placeholder={DEFAULT_CHECKBOX_LABEL}
                     maxLength={120}
-                    details="The fee is always shown beside the label. Leave blank to use the default wording."
+                    details="The fee is always shown beside the label. i.e. 'custom text' $<protection amount>. Leave blank to use the default wording."
                     {...(isSaving ? { disabled: true } : {})}
                   />
                   <s-text-area
@@ -350,12 +349,9 @@ export default function Settings() {
                     placeholder={DEFAULT_SUPPORTING_TEXT}
                     maxLength={500}
                     rows={3}
-                    details="Leave blank to use the default wording."
+                    details="This text appears below the label in the checkout. Leave blank to use the default wording."
                     {...(isSaving ? { disabled: true } : {})}
                   />
-                  <s-paragraph color="subdued">
-                    {MERCHANT_DISCLOSURE} is always shown.
-                  </s-paragraph>
                   <s-stack direction="inline" gap="base">
                     <s-button
                       variant="primary"
@@ -374,7 +370,6 @@ export default function Settings() {
                 </s-text>
                 <s-paragraph>
                   {offer.supportingText ?? DEFAULT_SUPPORTING_TEXT}{" "}
-                  {MERCHANT_DISCLOSURE}
                 </s-paragraph>
                 <s-paragraph>
                   This store&apos;s checkout copy is managed for you.
