@@ -11,12 +11,13 @@ const API_VERSION = "2026-07";
 // Customer-visible, and must match the checkout copy. Before changing it, follow
 // "Changing customer-facing copy" in docs/agents/legal-product.md.
 const PRODUCT_DESCRIPTION =
-  "Optional shipping protection offered by this store. Covers packages stolen after delivery.";
+  "Optional shipping protection offered by this store. Covers stolen, damaged, and undelivered packages.";
 // Descriptions earlier versions wrote. Setup replaces these, but keeps a
 // description the merchant wrote themselves.
 const RETIRED_DESCRIPTIONS = new Set([
   "Optional coverage for eligible loss, theft, and damage in transit.",
   "Optional shipping protection offered by this store. The fee is based on the items being shipped.",
+  "Optional shipping protection offered by this store. Covers packages stolen after delivery.",
 ]);
 
 const PRODUCT_FIELDS = `#graphql

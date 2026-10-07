@@ -52,6 +52,7 @@ describe("repairing the protection product", () => {
     ["", "an empty description"],
     ["<p>Optional coverage for eligible loss, theft, and damage in transit.</p>", "the retired coverage wording"],
     ["Optional shipping protection offered by this store. The fee is based on the items being shipped.", "the retired neutral wording"],
+    ["Optional shipping protection offered by this store. Covers packages stolen after delivery.", "the retired theft-only wording"],
   ])("replaces %j (%s) with the current shipping protection wording", async (descriptionHtml) => {
     const admin = productAdmin(liveProduct(descriptionHtml));
 
@@ -59,9 +60,9 @@ describe("repairing the protection product", () => {
 
     const { descriptionHtml: written } = productUpdates(admin)[0];
     expect(written).toContain("shipping protection");
-    expect(written).toContain("stolen after delivery");
-    // Loss and damage in transit are consumer-law obligations, never sold as protection.
-    expect(written).not.toMatch(/coverage|insur|\b(loss|lost)\b|damage/i);
+    expect(written).toContain("stolen, damaged, and undelivered packages");
+    // The product is shipping protection, never insurance or coverage.
+    expect(written).not.toMatch(/coverage|insur/i);
   });
 });
 

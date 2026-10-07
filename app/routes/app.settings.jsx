@@ -354,10 +354,6 @@ export default function Settings() {
                     {...(isSaving ? { disabled: true } : {})}
                   />
                   <s-paragraph color="subdued">
-                    Custom text appears in every checkout language;
-                    default wording follows the checkout language.
-                  </s-paragraph>
-                  <s-paragraph color="subdued">
                     {MERCHANT_DISCLOSURE} is always shown.
                   </s-paragraph>
                   <s-stack direction="inline" gap="base">

@@ -61,12 +61,16 @@ current protection product" check until **Update protection setup** is run.
 
 ## Checkout offer settings
 
+The initial release is for US stores. The default checkout copy offers
+protection for stolen, damaged, and undelivered packages. Australian stores
+need their own wording and settings before launch there (see
+[legal and product boundaries](docs/agents/legal-product.md)).
+
 Settings groups pricing and customer-facing text in one **Checkout offer** block.
 Checkout requires customers to choose protection themselves. Blank copy fields
-restore the translated defaults; custom plain text applies to every checkout
-language. Copy editing accepts any wording, punctuation, and line breaks as
-plain text (label up to 120 characters, supporting text up to 500). The fee and
-store disclosure remain visible.
+restore the default wording. Copy editing accepts any wording, punctuation, and
+line breaks as plain text (label up to 120 characters, supporting text up to
+500). The fee and store disclosure remain visible.
 
 Lock or allow each editor separately for an installed store from an operator
 shell with database access:

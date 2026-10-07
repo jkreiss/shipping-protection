@@ -46,7 +46,7 @@ the offer takes real customer money.
 | Reconciliation | [Reconciliation](../app/order-reconciliation.server.js) backfills a 60-day window, lists up to 250 orders per page, fetches missing/newer orders, and overlaps successive windows by 10 minutes. | Confirmed in repository. Measure page cost and backfill completion. A 60-second turn is checked between pages; a slow page can take longer. |
 | Dashboard | [Overview reads](../app/analytics.server.js) use stored orders and refunds; they still make a bounded Shopify shop currency/timezone query. `overview_loaded` records duration and row counts. | Confirmed in repository. Measure latency with pilot-sized data. |
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress (the worker has its own Sentry Cron heartbeat), correct schema, webhook subscriptions, or working checkout. |
-| Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables only theft after delivery; loss and damage in transit are consumer-law obligations and stay off. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) checkout copy and the product description name one benefit for the theft-only first rollout: packages stolen after delivery. It has no legal sign-off. | **Launch blocker.** Customer copy still needs legal sign-off, and a store must be able to honour every benefit the copy names; follow [Changing customer-facing copy](agents/legal-product.md#changing-customer-facing-copy). |
+| Coverage offer | The initial release is for US stores. The [checkout copy](../extensions/insurance-ext/locales/en.default.json) and the product description offer protection for stolen, damaged, and undelivered packages. [Merchant setup](../app/merchant/configuration.server.js) still turns on only theft coverage; the lost and damaged flags don't change anything customers see yet. It has no legal sign-off. Australian stores need their own wording and settings. | **Launch blocker.** Customer copy still needs legal sign-off, and a store must be able to honour every benefit the copy names; follow [Changing customer-facing copy](agents/legal-product.md#changing-customer-facing-copy). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
 | Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`) and 2026-10-07 (`compression`, `source-map-js`). As of 2026-10-07, `npm audit --omit=dev` reports ten high advisories, none in the server runtime: four from `deepmerge-ts` in the Prisma CLI's config loader (`prisma` → `@prisma/config`), which only reads this repository's own config and whose suggested fix is a Prisma downgrade; six from `braces` in extension type tooling (`@shopify/ui-extensions` → `ts-morph`), whose fix is a major `@shopify/ui-extensions` upgrade. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
@@ -57,9 +57,7 @@ operator-controlled editing permissions. Checkout requires manual opt-in.
 The offer payload contains only its schema version, checkbox label, and
 supporting text.
 
-Checkout text defaults retain the same English/French meaning; the store
-disclosure is rendered separately so a custom field cannot remove it. The
-protection product description is unchanged.
+The store disclosure is rendered separately so a custom field cannot remove it.
 
 Local verification: all 391 tests passed, along with `npm run lint`,
 `npm run typecheck`, `npm run build`, Prisma client generation, and

@@ -1,6 +1,0 @@
-{
-  "checkboxLabel": "Ajouter une protection d’expédition pour {{fee}}",
-  "supportingText": "Couvre les colis volés après la livraison.",
-  "mutationError": "La protection d’expédition n’a pas pu être mise à jour. Veuillez réessayer.",
-  "merchantDisclosure": "Option facultative proposée par cette boutique."
-}
