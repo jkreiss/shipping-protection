@@ -37,6 +37,7 @@ Open the linked guidance for the task being performed; follow its links when a t
 | Future email, form, or Admin intake | [Claim intake](docs/agents/claims-intake.md) |
 | Future claim validation, AI, decisions, resolutions | [Claim automation](docs/agents/claim-automation.md) |
 | Dashboard metrics and payout accounting | [Analytics and payouts](docs/agents/analytics-payouts.md) |
+| Revenue-share billing, usage charges, operator billing command | [Billing](docs/agents/billing.md) |
 | Navigation, dashboard, settings, Polaris | [Merchant Admin UI](docs/agents/admin-ui.md) |
 | Authentication, schema, privacy, audit records | [Data and security](docs/agents/data-security.md) |
 | Distribution, deployment, workers, reliability | [Operations](docs/agents/operations.md) |

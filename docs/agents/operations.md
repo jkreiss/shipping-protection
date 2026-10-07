@@ -54,7 +54,7 @@ Shopify / storefront / merchant admin
 Current services:
 
 - **Web** (`npm run start`): Admin UI, OAuth, webhook receipt, health check at `/healthz`. Webhooks are verified and written to the `WebhookDelivery` inbox, then acknowledged.
-- **Worker** (`npm run worker`): runs `WORKER_CONCURRENCY` loops that each claim all queued deliveries for one order, fetch that order from Shopify once, persist it, and retry with backoff. A separate loop runs periodic order reconciliation. No public domain.
+- **Worker** (`npm run worker`): runs `WORKER_CONCURRENCY` loops that each claim all queued deliveries for one order, fetch that order from Shopify once, persist it, and retry with backoff. A separate loop runs periodic order reconciliation, and another runs the hourly [billing](billing.md) pass. No public domain.
 
 Deploys:
 

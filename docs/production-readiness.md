@@ -48,6 +48,7 @@ the offer takes real customer money.
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress (the worker has its own Sentry Cron heartbeat), correct schema, webhook subscriptions, or working checkout. |
 | Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables only theft after delivery; loss and damage in transit are consumer-law obligations and stay off. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) checkout copy and the product description name one benefit for the theft-only first rollout: packages stolen after delivery. It has no legal sign-off. | **Launch blocker.** Customer copy still needs legal sign-off, and a store must be able to honour every benefit the copy names; follow [Changing customer-facing copy](agents/legal-product.md#changing-customer-facing-copy). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
+| Revenue-share billing | [Billing](agents/billing.md): operator-set terms (`npm run merchant:billing`), merchant approval in Settings, an append-only ledger from paid purchases and confirmed refunds, and daily usage charges with the charge ID as Shopify's idempotency key. Protection keeps selling without approval; nothing earned before approval is billed. | Confirmed in repository. Rehearse end to end on a staging development store (test charges) before setting terms for a live merchant. |
 | Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`). The remaining production advisories are in the Prisma CLI's config loader only; README records the assessment. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
 ### Settings that need live verification
@@ -533,7 +534,9 @@ is set; informational performance/cost events are JSON logs.
 | `worker_loop_failed`, `reconciliation_failed`, `shopify_graphql_failed` | Repeated failures over 10 minutes, or immediately if ingestion stops | Sentry/log alerts; inspect access, API costs, and database resources. |
 | Oldest pending/processing delivery | Over 5 minutes normally; over 30 minutes after a peak burst ends | Read-only database polling/manual pilot review. No automatic backlog-age monitor exists in the repo. |
 | Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `order_sync_behind` (Sentry alert): the worker reports each installed shop whose last completed window is over 30 minutes old, at most every 10 minutes per shop, with `shopId` and `minutesBehind`. Also `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns the merchant only when the last completed sync is over 1 hour old. A dead worker sends nothing, so pair this with the worker Cron monitor. |
-| Worker liveness | Sentry Cron monitor misses check-ins (about 10 minutes) | `SENTRY_WORKER_MONITOR` on the worker service. The worker checks in about once a minute, but only while every delivery loop and the reconciliation loop have ticked in the last 3 minutes, so one hung loop is caught. It cannot see a loop that is running but making no progress; for that use queue/cursor progress below. |
+| `billing_cap_exceeded`, `billing_cap_approaching` | Any occurrence | Sentry alert. A charge is held until the cycle resets; raise the cap with `npm run merchant:billing` and ask the merchant to approve it in Settings. |
+| `billing_charge_stuck`, `billing_subscription_inactive`, `billing_ledger_failed`, `billing_sync_failed` | Any occurrence | Sentry alert. A stuck charge stopped retrying after 10 attempts; an inactive subscription voided the charge and ended the terms. Check the shop's `BillingCharge` and `BillingAgreement` rows against the Dev Dashboard. |
+| Worker liveness | Sentry Cron monitor misses check-ins (about 10 minutes) | `SENTRY_WORKER_MONITOR` on the worker service. The worker checks in about once a minute, but only while every delivery loop, the reconciliation loop and the billing loop have ticked in the last 3 minutes, so one hung loop is caught. It cannot see a loop that is running but making no progress; for that use queue/cursor progress below. |
 | Web uptime | `/healthz` fails (503 or no response) | Sentry Uptime Monitoring (or another external pinger) on `https://<web domain>/healthz`. Railway's health check only gates deploys and restarts. |
 | Overview latency | p95 `overview_loaded.durationMs` over 2 seconds at representative volume | Log aggregation or a recorded staging measurement; inspect row counts/database load. |
 | API capacity | Sustained low `currentlyAvailable` with increasing queue age | `shopify_graphql_cost` logs, including requested/actual cost and restore rate; reduce pressure or revise queries. |
@@ -662,6 +665,13 @@ or attribution; investigate rather than assigning current settings retroactively
 - [ ] Restore, shutdown, and compatible version rollback have been rehearsed.
 - [ ] Production web/worker versions, migrations, pool limits, and alerts are
   verified; initial reconciliation progress/completeness is known.
+- [ ] Billing: the App Store listing's pricing disclosure reads "free; usage
+  charge for some merchants by agreement". For a merchant with a revenue share,
+  terms are set with `npm run merchant:billing`, the merchant has approved them
+  in Settings, and Settings shows billing as Active. The staging rehearsal in
+  [Billing](agents/billing.md) has passed: approve, two protected orders, one
+  protection refund, one usage record equal to the rate on the net, no new
+  record on a rerun, and `free` cancels the subscription.
 - [ ] Merchant and release operator are available during a quiet launch window.
 
 Activate one merchant first. Add/save the checkout block and enable Shop Pay

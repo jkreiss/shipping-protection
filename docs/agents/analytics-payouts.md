@@ -4,6 +4,10 @@ Read when changing Overview metrics, financial reporting, or planning payout rec
 
 [Back to root instructions](../../AGENTS.md). Related: [Pricing history](protection.md); [commerce source of truth](orders-webhooks.md); [scale/performance](operations.md).
 
+## Billing uses the same revenue sources
+
+Revenue-share billing reads the same records as the Overview's protection revenue: paid `ProtectionPurchase` fees and `CONFIRMED` `ProtectionRefund` amounts, excluding test orders. Keep the two definitions aligned. Billing applies its own activation date, currency and per-agreement rules on top; see [Billing](billing.md).
+
 ## Payouts
 
 Direction only; likely the first claims-adjacent piece, because pilot pricing depends on real payout costs.

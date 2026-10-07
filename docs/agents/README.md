@@ -21,6 +21,7 @@ docs/
     ├── claims-intake.md            # future email, customer replies, forms and Admin intake
     ├── claim-automation.md         # future validation, decisions, AI and resolution
     ├── analytics-payouts.md         # metric definitions and future payout accounting
+    ├── billing.md                  # revenue-share billing through the Shopify Billing API
     ├── admin-ui.md                 # navigation, Polaris, Overview and merchant review
     ├── data-security.md            # authentication, Prisma, privacy and auditability
     ├── operations.md               # distribution, Railway, workers and scale

@@ -93,6 +93,20 @@ rate or historical pricing. It refuses unknown/uninstalled stores and cannot
 run while another settings change holds the store's lock. To set a managed
 rate, enable editing, save the rate through Settings, then lock editing.
 
+Revenue-share billing is set by the operator only, with the same operator shell
+and the Shopify app credentials for that environment. See
+[Billing](docs/agents/billing.md) for the ledger rules and runbook:
+
+```shell
+npm run merchant:billing -- store.myshopify.com net 10 100   # 10% net of protection refunds, capped at 100 a month
+npm run merchant:billing -- store.myshopify.com gross 5 250  # 5% of gross protection revenue
+npm run merchant:billing -- store.myshopify.com free         # stop billing and cancel the subscription
+```
+
+The merchant approves new terms or a raised cap in Settings, on Shopify's
+approval page. Protection keeps selling until then, and nothing earned before
+approval is billed.
+
 The app checks the shop's Shopify Plus plan and Cart Transform `updateOperation`
 eligibility before setup. The only implemented strategy is
 `CHECKOUT_UI_CART_TRANSFORM`; `THEME_CART` is reserved and resolves as
@@ -134,6 +148,8 @@ through Admin GraphQL, applies it with the delivery completion in one
 transaction, retries with a lease and bounded backoff, and reports terminal
 failures. The inbox stores no raw webhook payload or customer information. Run
 one worker service: its loops share an in-process Admin API budget per shop.
+An hourly billing loop records revenue-share entries, creates at most one usage
+charge per agreement per day, and submits due charges to Shopify.
 
 Reconciliation runs only in the worker. It backfills 60 days on install, then
 rechecks each shop about every 10 minutes, fetching only orders that are
