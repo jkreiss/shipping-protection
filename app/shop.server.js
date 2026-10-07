@@ -23,9 +23,14 @@ export async function ensureInstalledShop(shopDomain, shopGid = undefined) {
   });
 }
 
-export async function markShopUninstalled(shopDomain) {
-  await prisma.$transaction(async (transaction) => {
+export async function markShopUninstalled(shopDomain, { database = prisma } = {}) {
+  await database.$transaction(async (transaction) => {
     await transaction.session.deleteMany({ where: { shop: shopDomain } });
+    // Uninstalling cancels the app's subscriptions; no update webhook follows.
+    await transaction.billingAgreement.updateMany({
+      where: { shop: { shopDomain }, status: { in: ["PENDING_APPROVAL", "ACTIVE"] } },
+      data: { status: "CANCELLED", endedAt: new Date() },
+    });
     await transaction.shop.updateMany({
       where: { shopDomain },
       data: {

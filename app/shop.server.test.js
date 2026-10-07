@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { recordGrantedScopes, withShopSettingsLock } from "./shop.server";
+import { markShopUninstalled, recordGrantedScopes, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
 
 function database() {
@@ -84,5 +84,25 @@ describe("settings lock", () => {
     const db = lockDatabase();
     await expect(withShopSettingsLock(undefined, async () => "x", { database: db })).rejects.toThrow("shop domain");
     expect(db.shop.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("uninstalling", () => {
+  test("ends the shop's open billing terms, since Shopify cancels the subscription", async () => {
+    const calls = [];
+    const transaction = {
+      session: { deleteMany: vi.fn(async (args) => calls.push(["session", args])) },
+      shop: { updateMany: vi.fn(async (args) => calls.push(["shop", args])) },
+      billingAgreement: { updateMany: vi.fn(async (args) => calls.push(["billingAgreement", args])) },
+    };
+    const db = { $transaction: async (run) => run(transaction) };
+
+    await markShopUninstalled("one.myshopify.com", { database: db });
+
+    expect(transaction.billingAgreement.updateMany).toHaveBeenCalledWith({
+      where: { shop: { shopDomain: "one.myshopify.com" }, status: { in: ["PENDING_APPROVAL", "ACTIVE"] } },
+      data: { status: "CANCELLED", endedAt: expect.any(Date) },
+    });
+    expect(transaction.shop.updateMany).toHaveBeenCalled();
   });
 });

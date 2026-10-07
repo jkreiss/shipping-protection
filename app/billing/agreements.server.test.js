@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   applySubscriptionWebhook,
+  noteCapApproaching,
   parseBillingTerms,
   requestBillingApproval,
   requestCapApproval,
@@ -10,6 +11,7 @@ import {
   syncBillingAgreement,
 } from "./agreements.server.js";
 import { UserFacingError } from "../user-facing-error.js";
+import { reportCondition } from "../observability.server.js";
 
 const billingAdmin = vi.hoisted(() => ({
   readBillingPreferences: vi.fn(),
@@ -323,4 +325,24 @@ test("never cancels the subscription named for the open terms, even if another l
   await syncBillingAgreement({ admin, shopDomain: "one.myshopify.com", database, now });
 
   expect(billingAdmin.cancelSubscription).not.toHaveBeenCalled();
+});
+
+describe("approaching the cap", () => {
+  const payload = (shopGid = "gid://shopify/Shop/1") => ({ app_subscription: {
+    admin_graphql_api_id: "gid://shopify/AppSubscription/1", admin_graphql_api_shop_id: shopGid,
+    balance_used: 91, capped_amount: "100.0",
+  } });
+
+  test("alerts the operator for the shop's own agreement", async () => {
+    const database = fakeDatabase({ agreements: [activeNet] });
+    await expect(noteCapApproaching({ shopDomain: "one.myshopify.com", payload: payload(), database })).resolves.toBe(true);
+    expect(reportCondition).toHaveBeenCalledWith("billing_cap_approaching", { shopId: "shop-1", agreementId: "agreement-1" });
+  });
+
+  test("ignores a subscription the shop does not own", async () => {
+    const database = fakeDatabase({ agreements: [{ ...activeNet, subscriptionGid: "gid://shopify/AppSubscription/2" }] });
+    await expect(noteCapApproaching({ shopDomain: "one.myshopify.com", payload: payload(), database })).resolves.toBe(false);
+    await expect(noteCapApproaching({ shopDomain: "one.myshopify.com", payload: payload("gid://shopify/Shop/9"), database })).resolves.toBe(false);
+    expect(reportCondition).not.toHaveBeenCalledWith("billing_cap_approaching", expect.anything());
+  });
 });

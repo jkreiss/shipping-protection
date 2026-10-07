@@ -221,21 +221,28 @@ async function applyTransition(database, agreement, patch, now, extra = {}) {
   return count > 0;
 }
 
-// app_subscriptions/update. The authenticated shop scopes the lookup, so a
-// payload can only change that shop's own agreement.
-export async function applySubscriptionWebhook({ shopDomain, payload, database = prisma, now = new Date() }) {
-  const subscription = payload?.app_subscription;
+// Finds the authenticated shop's agreement for a subscription webhook. The
+// shop scopes the lookup, so a payload can only touch that shop's own terms.
+async function webhookAgreement(database, shopDomain, subscription) {
   const subscriptionGid = subscription?.admin_graphql_api_id;
-  if (typeof subscriptionGid !== "string" || typeof subscription.status !== "string") return "ignored";
+  if (typeof subscriptionGid !== "string") return { result: "ignored" };
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (!shop) return "ignored";
+  if (!shop) return { result: "ignored" };
   const payloadShop = subscription.admin_graphql_api_shop_id;
   if (payloadShop && shop.shopGid && payloadShop !== shop.shopGid) {
     reportCondition("billing_webhook_shop_mismatch", { shopId: shop.id });
-    return "ignored";
+    return { result: "ignored" };
   }
   const agreement = await database.billingAgreement.findFirst({ where: { shopId: shop.id, subscriptionGid } });
-  if (!agreement) return "unmatched";
+  return agreement ? { shop, agreement } : { result: "unmatched" };
+}
+
+// app_subscriptions/update.
+export async function applySubscriptionWebhook({ shopDomain, payload, database = prisma, now = new Date() }) {
+  const subscription = payload?.app_subscription;
+  if (typeof subscription?.status !== "string") return "ignored";
+  const { result, shop, agreement } = await webhookAgreement(database, shopDomain, subscription);
+  if (!agreement) return result;
   const patch = subscriptionTransition(agreement, {
     status: subscription.status.toUpperCase(), cappedAmount: subscription.capped_amount ?? null,
   }, now);
@@ -243,6 +250,14 @@ export async function applySubscriptionWebhook({ shopDomain, payload, database =
   await applyTransition(database, agreement, patch, now);
   logEvent("billing_agreement_updated", { shopId: shop.id, agreementId: agreement.id, status: patch.status ?? agreement.status });
   return "updated";
+}
+
+// app_subscriptions/approaching_capped_amount: usage reached 90% of the cap.
+export async function noteCapApproaching({ shopDomain, payload, database = prisma }) {
+  const { agreement } = await webhookAgreement(database, shopDomain, payload?.app_subscription);
+  if (!agreement) return false;
+  reportCondition("billing_cap_approaching", { shopId: agreement.shopId, agreementId: agreement.id });
+  return true;
 }
 
 function billingView(agreement, subscription = null) {

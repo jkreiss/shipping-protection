@@ -21,6 +21,12 @@ api_version = "2026-07"
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
   [[webhooks.subscriptions]]
+  uri = "/webhooks/app_subscriptions/update"
+  topics = [ "app_subscriptions/update" ]
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app_subscriptions/approaching_capped_amount"
+  topics = [ "app_subscriptions/approaching_capped_amount" ]
+  [[webhooks.subscriptions]]
   uri = "/webhooks/orders/create"
   topics = [ "orders/create" ]
   [[webhooks.subscriptions]]
