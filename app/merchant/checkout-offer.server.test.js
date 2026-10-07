@@ -7,9 +7,7 @@ import {
 function fixture(settings = {}) {
   const configuration = {
     shopId: "one",
-    protectionPreselectionEditable: true,
     protectionCopyEditable: true,
-    protectionPreselected: false,
     protectionCheckboxLabel: null,
     protectionSupportingText: null,
     ...settings,
@@ -84,32 +82,13 @@ function fixture(settings = {}) {
 }
 
 describe("merchant checkout offer", () => {
-  test.each([
-    { preselected: true },
-    { preselected: false },
-    {
-      preselected: true,
-      checkboxLabel: "Choose shipping protection",
-    },
-  ])("rejects preselection changes before publication: %j", async (changes) => {
-    const f = fixture();
-    await expect(
-      updateCheckoutOffer(f.admin, "one.myshopify.com", changes, {
-        database: f.database,
-      }),
-    ).rejects.toThrow();
-    expect(f.writes).toHaveLength(0);
-    expect(f.configuration.protectionPreselected).toBe(false);
-  });
-
-  test("publishes copy without overwriting the shared preselection setting", async () => {
+  test("publishes copy while preserving other published copy and permissions", async () => {
     const f = fixture();
     f.liveShop.checkoutOffer = {
       jsonValue: {
         schemaVersion: 1,
-        preselected: true,
         checkboxLabel: null,
-        supportingText: null,
+        supportingText: "Existing after-delivery theft text.",
       },
       compareDigest: "existing-digest",
     };
@@ -118,18 +97,15 @@ describe("merchant checkout offer", () => {
       "one.myshopify.com",
       {
         checkboxLabel: "Choose shipping protection",
-        supportingText: "After-delivery theft.",
       },
       { database: f.database },
     );
     expect(JSON.parse(f.writes[0].value)).toEqual({
       schemaVersion: 1,
-      preselected: true,
       checkboxLabel: "Choose shipping protection",
-      supportingText: "After-delivery theft.",
+      supportingText: "Existing after-delivery theft text.",
     });
     expect(f.configuration).toMatchObject({
-      protectionPreselected: false,
       protectionCopyEditable: true,
       protectionCheckboxLabel: "Choose shipping protection",
     });
@@ -154,12 +130,10 @@ describe("merchant checkout offer", () => {
         }),
       ).rejects.toThrow("managed");
       expect(f.writes).toHaveLength(0);
-      expect(f.configuration.protectionPreselected).toBe(false);
     },
   );
 
   test.each([
-    { preselected: "true" },
     { protectionCopyEditable: true },
     { checkboxLabel: "x".repeat(121), supportingText: "Text" },
     {
@@ -191,7 +165,6 @@ describe("merchant checkout offer", () => {
         { database: f.database },
       ),
     ).rejects.toThrow("rejected");
-    expect(f.configuration.protectionPreselected).toBe(false);
     expect(f.shop.settingsLockedUntil).toBeNull();
   });
 
@@ -220,7 +193,7 @@ describe("merchant checkout offer", () => {
   });
 
   test("recovers a Shopify publication whose local save failed, then resets copy to defaults", async () => {
-    const f = fixture({ protectionPreselected: true });
+    const f = fixture();
     const save = f.database.shopConfiguration.update;
     f.database.shopConfiguration.update = async () => {
       throw new Error("Local save interrupted");
@@ -236,15 +209,14 @@ describe("merchant checkout offer", () => {
         { database: f.database },
       ),
     ).rejects.toThrow("interrupted");
-    expect(f.configuration.protectionPreselected).toBe(true);
     expect(f.shop.settingsLockedUntil).toBeNull();
     f.database.shopConfiguration.update = save;
     expect(
       checkoutOfferForSettings(
         f.configuration,
         f.liveShop.checkoutOffer.jsonValue,
-      ).preselected,
-    ).toBe(true);
+      ).checkboxLabel,
+    ).toBe("Choose shipping protection");
     await updateCheckoutOffer(
       f.admin,
       "one.myshopify.com",
@@ -252,7 +224,6 @@ describe("merchant checkout offer", () => {
       { database: f.database },
     );
     expect(f.configuration).toMatchObject({
-      protectionPreselected: true,
       protectionCheckboxLabel: null,
       protectionSupportingText: null,
     });

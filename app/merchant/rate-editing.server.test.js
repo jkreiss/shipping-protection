@@ -67,13 +67,8 @@ function database() {
 }
 
 describe("operator rate editing configuration", () => {
-  test("locks copy for one tenant and rejects preselection editing", async () => {
+  test("locks copy for one tenant without changing pricing permissions", async () => {
     const db = database();
-    await expect(
-      setProtectionEditing("one.myshopify.com", "preselection", false, {
-        database: db,
-      }),
-    ).rejects.toThrow();
     await setProtectionEditing("one.myshopify.com", "copy", false, {
       database: db,
     });

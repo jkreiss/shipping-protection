@@ -45,7 +45,6 @@ beforeEach(() => {
     configuration: {
       protectionEnabled: true,
       protectionRateEditable: true,
-      protectionPreselectionEditable: true,
       protectionCopyEditable: true,
       reasons: [],
     },
@@ -61,19 +60,6 @@ beforeEach(() => {
 });
 
 describe("settings controls", () => {
-  test("does not expose preselection even when the shared database setting is enabled", () => {
-    mocks.state.checkoutOffer = {
-      preselected: true,
-      checkboxLabel: null,
-      supportingText: null,
-    };
-    const settings = render();
-    expect(settings.querySelector('s-switch[name="preselected"]')).toBeNull();
-    expect(
-      settings.querySelector('input[value="update-preselection"]'),
-    ).toBeNull();
-    expect(settings.textContent).not.toContain("Default selection");
-  });
   test("shows a rate form only when the store can edit its rate", () => {
     expect(
       render().querySelector('s-number-field[name="ratePercent"]'),

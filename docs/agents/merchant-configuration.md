@@ -112,13 +112,6 @@ grant editing access.
 sets one editing permission using the per-shop settings lock. It preserves all
 saved offer settings and rejects unknown or uninstalled stores.
 
-Both `main` and `rsa/pretick` retain `protectionPreselectionEditable` (default true)
-and `protectionPreselected` (default false) in the same schema and migration. On
-`main`, there is no selection editor, server update action, operator command, or
-automatic checkout selection. Copy publication preserves the version-1 offer's
-preselection flag for branch compatibility, and does not write the database's
-preselection setting. The checkout block ignores that flag.
-
 Offer updates use that same lock and Shopify compare-and-set to publish the
 separate `$app.shipping_protection_offer` Shop JSON metafield, then mirror the
 accepted values locally. A valid published offer is used when reading Settings

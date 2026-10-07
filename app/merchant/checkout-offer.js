@@ -5,7 +5,7 @@ export const DEFAULT_CHECKBOX_LABEL = "Add shipping protection";
 export const DEFAULT_SUPPORTING_TEXT = "Covers packages stolen after delivery.";
 export const MERCHANT_DISCLOSURE = "Optional add-on from this store.";
 
-/** @typedef {{schemaVersion: 1, preselected: boolean, checkboxLabel: string | null, supportingText: string | null}} CheckoutOffer */
+/** @typedef {{schemaVersion: 1, checkboxLabel: string | null, supportingText: string | null}} CheckoutOffer */
 
 function validCopy(value, maxLength) {
   return (
@@ -27,14 +27,12 @@ export function parseCheckoutOffer(value) {
   const offer = /** @type {Record<string, unknown>} */ (value);
   if (
     offer.schemaVersion !== 1 ||
-    typeof offer.preselected !== "boolean" ||
     !validCopy(offer.checkboxLabel, 120) ||
     !validCopy(offer.supportingText, 500)
   )
     return null;
   return /** @type {CheckoutOffer} */ ({
     schemaVersion: 1,
-    preselected: offer.preselected,
     checkboxLabel: offer.checkboxLabel,
     supportingText: offer.supportingText,
   });

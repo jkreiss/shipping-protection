@@ -230,7 +230,7 @@ function requireCheckbox() {
   return checkbox;
 }
 
-/** @param {Partial<import("../src/shipping-protection").CheckoutOffer> & {preselected?: boolean}} offer */
+/** @param {Partial<import("../src/shipping-protection").CheckoutOffer>} offer */
 function setOffer(offer) {
   extension.shopify.appMetafields.value = [
     ...extension.shopify.appMetafields.value,
@@ -241,7 +241,6 @@ function setOffer(offer) {
         key: "shipping_protection_offer",
         value: JSON.stringify({
           schemaVersion: 1,
-          preselected: false,
           checkboxLabel: null,
           supportingText: null,
           ...offer,
@@ -283,10 +282,9 @@ describe("shipping protection quote", () => {
 });
 
 describe("shipping protection checkout UI", () => {
-  test("keeps checkout opt-in even when a published offer has a preselection flag", async () => {
+  test("keeps protection opt-in with custom copy across remounts", async () => {
     setCheckout();
     setOffer({
-      preselected: true,
       checkboxLabel: "Choose shipping protection",
     });
     const apply = vi
@@ -313,19 +311,16 @@ describe("shipping protection checkout UI", () => {
   test.each([
     {
       schemaVersion: 9,
-      preselected: true,
       checkboxLabel: null,
       supportingText: null,
     },
     {
       schemaVersion: 1,
-      preselected: "true",
       checkboxLabel: null,
-      supportingText: null,
+      supportingText: 42,
     },
     {
       schemaVersion: 1,
-      preselected: true,
       checkboxLabel: "<b>Shipping protection</b>",
       supportingText: null,
     },

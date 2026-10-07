@@ -19,7 +19,7 @@ and supporting text through the separate app-owned Shop JSON metafield
 `$app.shipping_protection_offer`. Setup repair, rate changes, and turning
 protection off preserve these settings. The fee and translated store disclosure
 always appear. Blank text uses the translated defaults; custom text appears in
-every language. This branch ignores any published preselection flag.
+every language.
 
 The offer is hidden for digital-only carts, subscriptions, direct store pickup,
 zero-rounded fees, invalid configuration, or checkouts that cannot mutate cart

@@ -12,13 +12,10 @@ import {
   validateCheckoutOfferChanges,
 } from "./checkout-offer.js";
 
-// Preserve the version-1 payload for branch compatibility. Main only edits copy;
-// checkout ignores the preselection flag and requires the buyer to opt in.
 export function checkoutOfferForSettings(settings, published) {
   return (
     parseCheckoutOffer(published) ?? {
       schemaVersion: 1,
-      preselected: settings.protectionPreselected === true,
       checkboxLabel: settings.protectionCheckboxLabel ?? null,
       supportingText: settings.protectionSupportingText ?? null,
     }

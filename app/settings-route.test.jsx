@@ -104,11 +104,9 @@ describe("settings errors", () => {
 });
 
 describe("protection on/off settings", () => {
-  test("rejects preselection requests without publishing checkout changes", async () => {
+  test("rejects unknown requests without publishing checkout changes", async () => {
     const result = await submit({
-      intent: "update-preselection",
-      preselected: "true",
-      protectionPreselectionEditable: "true",
+      intent: "unknown-action",
     });
     expect(result.error).toBe("Unknown settings action.");
     expect(result.success).toBeUndefined();
@@ -124,7 +122,6 @@ describe("protection on/off settings", () => {
       checkboxLabel: "Choose shipping protection",
       supportingText: "After-delivery theft.",
       protectionCopyEditable: "true",
-      preselected: "true",
     });
     expect(result.error).toContain("managed");
     expect(result.success).toBeUndefined();

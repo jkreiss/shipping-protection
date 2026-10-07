@@ -123,9 +123,7 @@ model ShopConfiguration {
   protectionEnabled  Boolean @default(false)
   // Operator-controlled permission; merchants cannot change it in Settings.
   protectionRateEditable Boolean @default(true)
-  protectionPreselectionEditable Boolean @default(true)
   protectionCopyEditable Boolean @default(true)
-  protectionPreselected Boolean @default(false)
   protectionCheckboxLabel String?
   protectionSupportingText String?
   stolenCoverageEnabled Boolean @default(false)
