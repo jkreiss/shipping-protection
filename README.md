@@ -64,8 +64,9 @@ current protection product" check until **Update protection setup** is run.
 Settings groups pricing and customer-facing text in one **Checkout offer** block.
 Checkout requires customers to choose protection themselves. Blank copy fields
 restore the translated defaults; custom plain text applies to every checkout
-language. The fee and store disclosure remain visible. Copy names shipping
-protection and may describe only the current theft-after-delivery benefit.
+language. Copy editing accepts any wording, punctuation, and line breaks as
+plain text (label up to 120 characters, supporting text up to 500). The fee and
+store disclosure remain visible.
 
 Lock or allow each editor separately for an installed store from an operator
 shell with database access:

@@ -134,13 +134,40 @@ describe("merchant checkout offer", () => {
   );
 
   test.each([
+    { checkboxLabel: "Protect my parcel", supportingText: "Your choice." },
+    { checkboxLabel: "Insurance", supportingText: "Lost or damaged packages." },
+    {
+      checkboxLabel: "Add protection < $5",
+      supportingText: "First line.\nSecond line with <b>literal text</b>.",
+    },
+  ])("publishes unrestricted wording as plain text: %j", async (changes) => {
+    const f = fixture();
+    await updateCheckoutOffer(f.admin, "one.myshopify.com", changes, {
+      database: f.database,
+    });
+    expect(JSON.parse(f.writes[0].value)).toEqual({
+      schemaVersion: 1,
+      ...changes,
+    });
+    expect(
+      checkoutOfferForSettings(
+        f.configuration,
+        f.liveShop.checkoutOffer.jsonValue,
+      ),
+    ).toEqual({
+      schemaVersion: 1,
+      ...changes,
+    });
+  });
+
+  test.each([
     { protectionCopyEditable: true },
     { checkboxLabel: "x".repeat(121), supportingText: "Text" },
+    { supportingText: "x".repeat(501) },
     {
       checkboxLabel: "Shipping protection",
-      supportingText: "<script>alert(1)</script>",
+      supportingText: "Text\u0000with a control character",
     },
-    { checkboxLabel: "Insurance", supportingText: "Lost or damaged packages." },
   ])(
     "validates untrusted settings without changing published values: %j",
     async (changes) => {

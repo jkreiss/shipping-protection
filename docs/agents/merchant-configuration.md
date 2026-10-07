@@ -117,8 +117,12 @@ separate `$app.shipping_protection_offer` Shop JSON metafield, then mirror the
 accepted values locally. A valid published offer is used when reading Settings
 and when merging subsequent updates, so an interrupted local save does not
 revert what customers see. Pricing/setup publication does not touch this
-metafield. The fee and translated store disclosure cannot be removed by copy
-editing. Follow [legal copy rules](legal-product.md#changing-customer-facing-copy).
+metafield. Authorized editors can use any wording, punctuation, and line breaks
+as literal plain text (label up to 120 characters, supporting text up to 500).
+There is no required phrase or blocked-word list. Blank fields restore defaults;
+unsupported control characters are rejected. The fee and translated store
+disclosure cannot be removed by copy editing. Follow
+[legal copy rules](legal-product.md#changing-customer-facing-copy).
 
 Potential pricing models for future work:
 

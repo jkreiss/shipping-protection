@@ -235,10 +235,10 @@ export function readCheckoutOffer(appMetafields) {
       (typeof value === "string" &&
         value.length > 0 &&
         value.length <= limit &&
-        !/[<>]/.test(value) &&
         [...value].every(
           (character) =>
-            character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+            /[\t\n\r]/.test(character) ||
+            (character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127),
         ));
     if (
       offer?.schemaVersion !== 1 ||

@@ -340,7 +340,7 @@ export default function Settings() {
                     value={offer.checkboxLabel ?? ""}
                     placeholder={DEFAULT_CHECKBOX_LABEL}
                     maxLength={120}
-                    details="Use shipping protection in the label. The fee is always shown beside it. Leave blank to use the default wording."
+                    details="The fee is always shown beside the label. Leave blank to use the default wording."
                     {...(isSaving ? { disabled: true } : {})}
                   />
                   <s-text-area
@@ -350,13 +350,11 @@ export default function Settings() {
                     placeholder={DEFAULT_SUPPORTING_TEXT}
                     maxLength={500}
                     rows={3}
-                    details="Describe protection for packages stolen after delivery. Leave blank to use the default wording."
+                    details="Leave blank to use the default wording."
                     {...(isSaving ? { disabled: true } : {})}
                   />
                   <s-paragraph color="subdued">
-                    Only describe this store&apos;s theft-after-delivery
-                    benefit. Loss, damage, and returns aren&apos;t benefits of
-                    this offer. Custom text appears in every checkout language;
+                    Custom text appears in every checkout language;
                     default wording follows the checkout language.
                   </s-paragraph>
                   <s-paragraph color="subdued">

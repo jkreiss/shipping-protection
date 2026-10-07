@@ -2,8 +2,8 @@ import { UserFacingError } from "../user-facing-error.js";
 
 export const CHECKOUT_OFFER_KEY = "shipping_protection_offer";
 export const DEFAULT_CHECKBOX_LABEL = "Add shipping protection";
-export const DEFAULT_SUPPORTING_TEXT = "Covers packages stolen after delivery.";
-export const MERCHANT_DISCLOSURE = "Optional add-on from this store.";
+export const DEFAULT_SUPPORTING_TEXT = "Covers stolen, damaged, and undelivered packages.";
+export const MERCHANT_DISCLOSURE = "On eligible shipped items.";
 
 /** @typedef {{schemaVersion: 1, checkboxLabel: string | null, supportingText: string | null}} CheckoutOffer */
 
@@ -13,10 +13,10 @@ function validCopy(value, maxLength) {
     (typeof value === "string" &&
       value.length > 0 &&
       value.length <= maxLength &&
-      !/[<>]/.test(value) &&
       [...value].every(
         (character) =>
-          character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+          /[\t\n\r]/.test(character) ||
+          (character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127),
       ))
   );
 }
@@ -58,17 +58,6 @@ export function validateCheckoutOfferChanges(changes) {
     if (!validCopy(text || null, limit)) {
       throw new UserFacingError(
         `Use plain text of at most ${limit} characters for the ${key === "checkboxLabel" ? "label" : "supporting text"}.`,
-      );
-    }
-    if (
-      text &&
-      (/\b(insurance|coverage|lost|loss|damaged?|faulty|returns?)\b|not[\s-]+as[\s-]+described/i.test(
-        text,
-      ) ||
-        (key === "checkboxLabel" && !/shipping protection/i.test(text)))
-    ) {
-      throw new UserFacingError(
-        "Use shipping protection wording for packages stolen after delivery. Loss, damage, and returns aren't benefits of this offer.",
       );
     }
     validated[key] = text || null;

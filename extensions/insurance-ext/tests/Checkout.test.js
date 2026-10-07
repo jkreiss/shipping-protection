@@ -321,7 +321,7 @@ describe("shipping protection checkout UI", () => {
     },
     {
       schemaVersion: 1,
-      checkboxLabel: "<b>Shipping protection</b>",
+      checkboxLabel: "Invalid\u0000label",
       supportingText: null,
     },
   ])("uses opt-in defaults for malformed offer data: %j", async (offer) => {
@@ -374,6 +374,23 @@ describe("shipping protection checkout UI", () => {
     expect(document.body.textContent).toContain(
       "Optional add-on from this store.",
     );
+  });
+
+  test("renders arbitrary merchant wording and markup as literal text", async () => {
+    setCheckout();
+    const supportingText = "Lost or damaged packages.\n<script>alert(1)</script>";
+    setOffer({
+      checkboxLabel: "Protect my parcel < $5",
+      supportingText,
+    });
+    extension.shopify.i18n.formatCurrency = () => "$0.25";
+    await renderExtension();
+    expect(requireCheckbox().getAttribute("label")).toBe(
+      "Protect my parcel < $5 — $0.25",
+    );
+    expect(document.body.textContent).toContain(supportingText);
+    expect(document.querySelector("script")).toBeNull();
+    expect(document.body.textContent).toContain("merchantDisclosure");
   });
 
   test.each(["no delivery groups", "no selected option", "rates loading"])(
