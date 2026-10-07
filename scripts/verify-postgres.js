@@ -3,9 +3,11 @@ import prisma from "../app/db.server.js";
 import { persistNormalizedOrder } from "../app/order-ingestion.server.js";
 import { normalizeGraphqlOrder } from "../app/order-normalization.js";
 import { reconcileOrders } from "../app/order-reconciliation.server.js";
-import { redactShopData } from "../app/shop.server.js";
+import { deleteShopData, markShopUninstalled, redactShopData } from "../app/shop.server.js";
+import { createBillingCharge, recordBillingEntries } from "../app/billing/ledger.server.js";
 
 const rollback = new Error("POSTGRES_VERIFICATION_ROLLBACK");
+const billingDomain = "postgres-verification-billing.invalid";
 const timestamp = new Date("2026-09-23T00:00:00.000Z");
 const shopMoney = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
 
@@ -333,10 +335,97 @@ try {
     }),
     0,
   );
+}
+
+// Billing runs its own transactions and needs concurrent connections, so it
+// uses committed rows and removes them with shop redaction.
+async function rejectsInSavepoint(run) {
+  await assert.rejects(prisma.$transaction(async (transaction) => run(transaction)));
+}
+
+async function verifyBilling() {
+  await deleteShopData(billingDomain);
+  const shop = await prisma.shop.create({ data: { shopDomain: billingDomain } });
+  const otherShop = await prisma.shop.create({ data: { shopDomain: `other-${billingDomain}` } });
+  try {
+    // Protection lines are recognised by the app's pricing-rule variant.
+    await prisma.pricingRule.create({ data: {
+      shopId: shop.id, ruleId: "postgres-verification-rule", version: 1,
+      productId: "gid://shopify/Product/9", variantId: "gid://shopify/ProductVariant/10",
+      rateBasisPoints: 25, basis: "SHIPPABLE_PRE_DISCOUNT", state: "ACTIVE",
+      effectiveAt: timestamp, publishedAt: timestamp, activatedAt: timestamp,
+    } });
+    const refunded = { ...graphqlOrder("gid://shopify/Order/9101", true), test: false };
+    const kept = { ...graphqlOrder("gid://shopify/Order/9102", true), test: false, refunds: [] };
+    const testOrder = { ...graphqlOrder("gid://shopify/Order/9103", true), refunds: [] };
+    for (const order of [refunded, kept, testOrder]) {
+      await prisma.$transaction((transaction) => persistNormalizedOrder(transaction, shop, normalizeGraphqlOrder(order)));
+    }
+    const agreement = await prisma.billingAgreement.create({ data: {
+      shopId: shop.id, version: 1, mode: "NET_SHARE", rateBasisPoints: 1_000, cappedAmount: "100.0000",
+      currencyCode: "AUD", status: "ACTIVE", activatedAt: new Date("2026-09-01T00:00:00Z"),
+      subscriptionGid: "gid://shopify/AppSubscription/postgres-verification", usageLineItemGid: "li",
+    } });
+
+    // Two paid non-test purchases and one confirmed refund; the test order is excluded.
+    assert.equal(await recordBillingEntries({ database: prisma, agreement }), 3);
+    assert.equal(await recordBillingEntries({ database: prisma, agreement }), 0);
+    const entries = await prisma.billingEntry.findMany({ where: { shopId: shop.id }, orderBy: { amount: "asc" } });
+    assert.deepEqual(entries.map(({ sourceType, amount }) => [sourceType, amount.toFixed(4)]),
+      [["REFUND", "-0.2500"], ["PURCHASE", "0.2500"], ["PURCHASE", "0.2500"]]);
+
+    // Concurrent runs create one charge: 10% of 0.25 floors to 0.02.
+    const now = new Date("2026-10-05T12:00:00Z");
+    const charges = await Promise.all(Array.from({ length: 5 }, () =>
+      createBillingCharge({ database: prisma, agreement, now })));
+    assert.equal(charges.filter(Boolean).length, 1);
+    const [charge] = await prisma.billingCharge.findMany({ where: { shopId: shop.id } });
+    assert.equal(charge.chargeAmount.toFixed(4), "0.0200");
+    assert.equal(await prisma.billingEntry.count({ where: { shopId: shop.id, chargeId: charge.id } }), 3);
+    assert.equal(await createBillingCharge({ database: prisma, agreement, now }), null);
+
+    // A refund that is no longer confirmed gets a reversing delta.
+    await prisma.protectionRefund.updateMany({ where: { shopId: shop.id }, data: { status: "PENDING" } });
+    assert.equal(await recordBillingEntries({ database: prisma, agreement }), 1);
+    const delta = await prisma.billingEntry.findFirst({ where: { shopId: shop.id, revision: 1 } });
+    assert.equal(delta.amount.toFixed(4), "0.2500");
+    assert.equal(delta.chargeId, null);
+
+    await rejectsInSavepoint((transaction) => transaction.billingEntry.create({ data: {
+      shopId: shop.id, agreementId: agreement.id, sourceType: "REFUND", sourceId: delta.sourceId,
+      revision: 1, amount: "1.0000", currencyCode: "AUD",
+    } }));
+    await rejectsInSavepoint((transaction) => transaction.billingEntry.update({ where: { id: delta.id }, data: { amount: "9.0000" } }));
+    await rejectsInSavepoint((transaction) => transaction.billingEntry.delete({ where: { id: delta.id } }));
+    await rejectsInSavepoint((transaction) => transaction.billingEntry.create({ data: {
+      shopId: otherShop.id, agreementId: agreement.id, sourceType: "PURCHASE", sourceId: "cross-shop",
+      revision: 0, amount: "1.0000", currencyCode: "AUD",
+    } }));
+    await rejectsInSavepoint((transaction) => transaction.billingAgreement.create({ data: {
+      shopId: shop.id, version: 2, mode: "GROSS_SHARE", rateBasisPoints: 500, cappedAmount: "10.0000",
+      currencyCode: "AUD", status: "PENDING_APPROVAL",
+    } }));
+    await rejectsInSavepoint((transaction) => transaction.billingAgreement.create({ data: {
+      shopId: otherShop.id, version: 1, mode: "FREE", rateBasisPoints: 100, status: "ACTIVE",
+    } }));
+
+    await markShopUninstalled(billingDomain);
+    assert.equal((await prisma.billingAgreement.findUnique({ where: { id: agreement.id } })).status, "CANCELLED");
+  } finally {
+    await deleteShopData(billingDomain);
+    await deleteShopData(otherShop.shopDomain);
+  }
+  assert.equal(await prisma.billingEntry.count({ where: { shopId: shop.id } }), 0);
+  assert.equal(await prisma.billingCharge.count({ where: { shopId: shop.id } }), 0);
+  assert.equal(await prisma.billingAgreement.count({ where: { shopId: shop.id } }), 0);
+}
+
+try {
+  await verifyBilling();
 } finally {
   await prisma.$disconnect();
 }
 
 console.log(
-  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, and event redaction.",
+  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, event redaction, and billing ledger.",
 );
