@@ -1,7 +1,7 @@
 import { UserFacingError } from "../user-facing-error.js";
 
 export const CHECKOUT_OFFER_KEY = "shipping_protection_offer";
-export const DEFAULT_CHECKBOX_LABEL = "Add shipping protection";
+export const DEFAULT_CHECKBOX_LABEL = "Add shipping protection for ";
 export const DEFAULT_SUPPORTING_TEXT = "Covers stolen, damaged, and undelivered packages.";
 
 /** @typedef {{schemaVersion: 1, checkboxLabel: string | null, supportingText: string | null}} CheckoutOffer */
