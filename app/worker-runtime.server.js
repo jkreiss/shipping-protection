@@ -3,8 +3,9 @@ import { processNextDelivery, workerConcurrency } from "./webhook-worker.server.
 import { reconcileOrders, reconciliationDue, shopsToReportBehind } from "./order-reconciliation.server.js";
 import { expectWorkerLoops, logEvent, reportCondition, reportFailure, workerHeartbeat } from "./observability.server.js";
 import { isAccessLost } from "./shopify/admin-graphql.server.js";
+import { runBillingPass } from "./billing/billing-pass.server.js";
 
-// The worker's delivery and reconciliation loops. scripts/worker.js supplies
+// The worker's delivery, reconciliation and billing loops. scripts/worker.js supplies
 // Prisma and Shopify; tests supply doubles. stop() lets each loop finish its
 // current batch, then run() disconnects and resolves.
 export function createWorkerRuntime({
@@ -13,9 +14,11 @@ export function createWorkerRuntime({
   concurrency = workerConcurrency(process.env.WORKER_CONCURRENCY),
   processDelivery = processNextDelivery,
   reconcile = reconcileOrders,
+  billingPass = runBillingPass,
   pollMs = 2_000,
   reconcileIdleMs = 30_000,
   reconcileFailureBackoffMs = 5 * 60_000,
+  billingIntervalMs = 60 * 60_000,
 }) {
   // In-memory only: a restart simply retries failed shops sooner.
   const reconcileRetryAt = new Map();
@@ -24,8 +27,13 @@ export function createWorkerRuntime({
 
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  async function pauseUnlessStopping(ms) {
-    for (let waited = 0; waited < ms && !stopping; waited += pollMs) await pause(Math.min(pollMs, ms - waited));
+  // A loop that waits longer than the heartbeat's staleness limit names itself
+  // so it keeps reporting in while idle.
+  async function pauseUnlessStopping(ms, heartbeat) {
+    for (let waited = 0; waited < ms && !stopping; waited += pollMs) {
+      if (heartbeat) workerHeartbeat(heartbeat);
+      await pause(Math.min(pollMs, ms - waited));
+    }
   }
 
   async function reconcileShop(shop) {
@@ -95,13 +103,29 @@ export function createWorkerRuntime({
     }
   }
 
+  // Hourly: billing charges at most once a day per agreement, and Shopify
+  // retries are spaced by each charge's own backoff.
+  async function billingLoop() {
+    while (!stopping) {
+      workerHeartbeat("billing");
+      try {
+        const result = await billingPass({ database, adminForShop, onProgress: () => workerHeartbeat("billing") });
+        logEvent("billing_pass_completed", result);
+      } catch (error) {
+        reportFailure("worker_loop_failed", error, { loop: "billing" });
+      }
+      await pauseUnlessStopping(billingIntervalMs, "billing");
+    }
+  }
+
   async function run() {
     logEvent("worker_started", { concurrency });
-    expectWorkerLoops(["reconciliation", ...Array.from({ length: concurrency }, (_, id) => `delivery-${id}`)]);
+    expectWorkerLoops(["reconciliation", "billing", ...Array.from({ length: concurrency }, (_, id) => `delivery-${id}`)]);
     try {
       await Promise.all([
         ...Array.from({ length: concurrency }, (_, id) => deliveryLoop(id)),
         reconciliationLoop(),
+        billingLoop(),
       ]);
     } finally {
       await database.$disconnect();

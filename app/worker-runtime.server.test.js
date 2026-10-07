@@ -20,11 +20,12 @@ describe("worker runtime", () => {
     const inFlight = new Promise((resolve) => { release = resolve; });
     const database = databaseWith([]);
     const processDelivery = vi.fn(async () => { await inFlight; return true; });
-    const runtime = createWorkerRuntime({ database, adminForShop: vi.fn(), processDelivery, concurrency: 2, pollMs: 5 });
+    const billingPass = vi.fn(async () => ({}));
+    const runtime = createWorkerRuntime({ database, adminForShop: vi.fn(), processDelivery, billingPass, concurrency: 2, pollMs: 5 });
 
     const finished = runtime.run();
     await Promise.resolve();
-    expect(expectWorkerLoops).toHaveBeenCalledWith(["reconciliation", "delivery-0", "delivery-1"]);
+    expect(expectWorkerLoops).toHaveBeenCalledWith(["reconciliation", "billing", "delivery-0", "delivery-1"]);
     runtime.stop();
     expect(database.$disconnect).not.toHaveBeenCalled();
     release();
@@ -35,6 +36,29 @@ describe("worker runtime", () => {
     expect(database.$disconnect).toHaveBeenCalledTimes(1);
     expect(workerHeartbeat).toHaveBeenCalledWith("delivery-0");
     expect(workerHeartbeat).toHaveBeenCalledWith("delivery-1");
+    expect(billingPass).toHaveBeenCalledTimes(1);
+  });
+
+  test("runs the billing pass, reports its failures and keeps its heartbeat while it waits", async () => {
+    const database = databaseWith([]);
+    const adminForShop = vi.fn();
+    const billingPass = vi.fn()
+      .mockRejectedValueOnce(new Error("billing down"))
+      .mockResolvedValue({ billed: 1 });
+    const runtime = createWorkerRuntime({
+      database, adminForShop, billingPass, processDelivery: async () => false,
+      concurrency: 1, pollMs: 1, reconcileIdleMs: 1, billingIntervalMs: 20,
+    });
+
+    const finished = runtime.run();
+    await vi.waitFor(() => expect(billingPass).toHaveBeenCalledTimes(2));
+    runtime.stop();
+    await finished;
+
+    expect(billingPass).toHaveBeenCalledWith(expect.objectContaining({ database, adminForShop }));
+    expect(reportFailure).toHaveBeenCalledWith("worker_loop_failed", expect.any(Error), { loop: "billing" });
+    expect(logEvent).toHaveBeenCalledWith("billing_pass_completed", expect.objectContaining({ billed: 1 }));
+    expect(vi.mocked(workerHeartbeat).mock.calls.filter(([loop]) => loop === "billing").length).toBeGreaterThan(4);
   });
 
   test("backs off a failing shop and keeps reconciling the others", async () => {
