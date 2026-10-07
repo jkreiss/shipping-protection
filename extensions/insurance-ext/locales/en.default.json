@@ -1,5 +1,5 @@
 {
   "checkboxLabel": "Add shipping protection for {{fee}}",
   "supportingText": "Covers stolen, damaged, and undelivered packages.",
-  "mutationError": "Shipping protection could not be updated. Please try again.",
+  "mutationError": "Shipping protection could not be updated. Please try again."
 }
