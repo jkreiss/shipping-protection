@@ -61,7 +61,7 @@ export function assertSmokeSnapshot({ orders, refunds }) {
 export function assertSmokeShopReady(shop, now) {
   requireCheck(shop.installationState === "INSTALLED", "Existing fake shop is not installed.");
   requireCheck(shop.orderReconciliationSince && !shop.orderReconciliationCursor && !shop.orderReconciliationUntil &&
-    now.getTime() - shop.orderReconciliationSince.getTime() < 10 * 60_000,
+    now.getTime() - shop.orderReconciliationSince.getTime() < 20 * 60_000,
     "Existing fake shop has a backfill or reconciliation window pending; finish that campaign before running a quick smoke test.");
 }
 

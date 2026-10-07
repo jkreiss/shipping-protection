@@ -42,7 +42,7 @@ export function createWorkerRuntime({
       const result = await reconcile({ admin, shopDomain: shop.shopDomain, database,
         onProgress: () => workerHeartbeat("reconciliation") });
       reconcileRetryAt.delete(shop.id);
-      logEvent("reconciliation_completed", { shopId: shop.id, pages: result.pages,
+      logEvent(result.superseded ? "reconciliation_superseded" : "reconciliation_completed", { shopId: shop.id, pages: result.pages,
         ordersListed: result.ordersListed, ordersFetched: result.ordersFetched, ordersFailed: result.ordersFailed, ordersSkipped: result.ordersSkipped,
         complete: result.complete, windowEnd: result.windowEnd, durationMs: Date.now() - started });
     } catch (error) {
@@ -59,7 +59,7 @@ export function createWorkerRuntime({
   async function reconciliationPass() {
     const shops = await database.shop.findMany({
       where: { installationState: "INSTALLED" }, orderBy: { id: "asc" },
-      select: { id: true, shopDomain: true, orderReconciliationSince: true, orderReconciliationCursor: true },
+      select: { id: true, shopDomain: true, orderReconciliationSince: true, orderReconciliationCursor: true, orderReconciliationUntil: true },
     });
     for (const { shopId, minutesBehind } of shopsToReportBehind(shops, behindReportedAt)) {
       reportCondition("order_sync_behind", { shopId, minutesBehind });

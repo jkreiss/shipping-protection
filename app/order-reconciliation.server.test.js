@@ -37,7 +37,7 @@ function fakeAdmin(pages) {
   return { admin, searches, fetched };
 }
 
-function fakeDatabase({ shop = {}, localOrders = [] } = {}) {
+function fakeDatabase({ shop = {}, localOrders = [], additionalShops = [] } = {}) {
   const shopRow = { id: "shop-1", shopDomain, orderReconciliationSince: null, orderReconciliationCursor: null,
     orderReconciliationUntil: null, orderHistoryStartAt: null, ...shop };
   const shopUpdates = [];
@@ -46,6 +46,16 @@ function fakeDatabase({ shop = {}, localOrders = [] } = {}) {
     shop: {
       findUnique: async () => ({ ...shopRow }),
       update: async ({ data }) => { shopUpdates.push(data); Object.assign(shopRow, data); return shopRow; },
+      updateMany: async ({ where, data }) => {
+        let count = 0;
+        for (const row of [shopRow, ...additionalShops]) {
+          const matches = Object.entries(where).every(([key, value]) =>
+            value instanceof Date ? row[key]?.getTime() === value.getTime() : row[key] === value);
+          if (!matches) continue;
+          shopUpdates.push(data); Object.assign(row, data); count++;
+        }
+        return { count };
+      },
     },
     order: {
       findMany: async ({ where }) => localOrders.filter(({ shopifyOrderId }) =>
@@ -105,9 +115,9 @@ describe("order reconciliation", () => {
 
     await reconcileOrders({ admin, shopDomain, database, persist: async () => {} });
 
-    expect(shopUpdates[0]).toMatchObject({ orderReconciliationCursor: "1" });
-    expect(shopUpdates[1]).toMatchObject({ orderReconciliationCursor: null, orderReconciliationUntil: null });
-    expect(shopRow.orderReconciliationSince).toEqual(shopUpdates[0].orderReconciliationUntil);
+    expect(shopUpdates[1]).toMatchObject({ orderReconciliationCursor: "1" });
+    expect(shopUpdates[2]).toMatchObject({ orderReconciliationCursor: null, orderReconciliationUntil: null });
+    expect(shopRow.orderReconciliationSince).toEqual(shopUpdates[1].orderReconciliationUntil);
   });
 
   test("starts each new window slightly before the last one ended", async () => {
@@ -168,7 +178,8 @@ describe("order reconciliation", () => {
     await expect(reconcileOrders({ admin, shopDomain, database, persist }))
       .rejects.toThrow("shopify down");
     expect(persist).toHaveBeenCalledTimes(MAX_CONSECUTIVE_ORDER_FAILURES);
-    expect(shopUpdates).toEqual([]);
+    expect(shopUpdates).toHaveLength(1);
+    expect(shopUpdates[0]).toMatchObject({ orderReconciliationCursor: null, orderReconciliationUntil: expect.any(Date) });
   });
 
   test("keeps the cursor when a failed order can't be queued", async () => {
@@ -179,7 +190,8 @@ describe("order reconciliation", () => {
 
     await expect(reconcileOrders({ admin, shopDomain, database, persist }))
       .rejects.toThrow("database down");
-    expect(shopUpdates).toEqual([]);
+    expect(shopUpdates).toHaveLength(1);
+    expect(shopUpdates[0]).toMatchObject({ orderReconciliationCursor: null, orderReconciliationUntil: expect.any(Date) });
   });
 
   test("stops after the time budget and resumes from the saved cursor", async () => {
@@ -314,4 +326,90 @@ describe("order sync falling behind", () => {
     const shops = [{ ...syncedAgo(10 * minute), id: "fresh" }, { ...syncedAgo(60 * minute), id: "stale" }];
     expect(shopsToReportBehind(shops, new Map(), now)).toEqual([{ shopId: "stale", minutesBehind: 60 }]);
   });
+});
+
+test.each([false, true])(
+  "reset during an in-flight page cannot restore old progress (first window: %s)",
+  async (firstWindow) => {
+    const { database, shopRow } = fakeDatabase({
+      shop: firstWindow
+        ? {}
+        : {
+            orderReconciliationSince: new Date("2026-09-28T00:00:00Z"),
+            orderReconciliationUntil: new Date("2026-09-29T00:00:00Z"),
+            orderReconciliationCursor: "1",
+          },
+    });
+    const otherTenant = {
+      id: "shop-2",
+      orderReconciliationCursor: "other",
+      orderReconciliationSince: new Date("2026-09-01"),
+    };
+    const before = structuredClone(otherTenant);
+    const admin = {
+      graphql: async () => {
+        Object.assign(shopRow, {
+          orderReconciliationSince: null,
+          orderReconciliationUntil: null,
+          orderReconciliationCursor: null,
+        });
+        return {
+          json: async () => ({
+            data: {
+              orders: {
+                nodes: [],
+                pageInfo: { hasNextPage: true, endCursor: "stale" },
+              },
+            },
+          }),
+        };
+      },
+    };
+    const result = await reconcileOrders({
+      admin,
+      shopDomain,
+      database,
+      maxPages: 1,
+    });
+    expect(result).toMatchObject({ complete: false, superseded: true });
+    expect(shopRow).toMatchObject({
+      orderReconciliationSince: null,
+      orderReconciliationUntil: null,
+      orderReconciliationCursor: null,
+    });
+    expect(otherTenant).toEqual(before);
+  },
+);
+test("another worker claiming the initial window supersedes a turn before its fetch", async () => {
+  const { database, shopRow } = fakeDatabase();
+  const read = database.shop.findUnique;
+  database.shop.findUnique = async () => {
+    const snapshot = await read();
+    shopRow.orderReconciliationUntil = new Date("2026-09-29");
+    return snapshot;
+  };
+  const { admin, searches } = fakeAdmin([[]]);
+  const result = await reconcileOrders({ admin, shopDomain, database });
+  expect(result).toMatchObject({ complete: false, superseded: true });
+  expect(searches).toEqual([]);
+});
+test("an initial window awaiting its first page stays due despite a recent watermark", () => {
+  expect(
+    reconciliationDue({
+      orderReconciliationSince: new Date(),
+      orderReconciliationCursor: null,
+      orderReconciliationUntil: new Date(),
+    }),
+  ).toBe(true);
+});
+
+test("normal progress leaves another tenant with identical reconciliation state unchanged", async () => {
+  const other = { id: "shop-2", shopDomain: "two.myshopify.com", orderReconciliationSince: null,
+    orderReconciliationCursor: null, orderReconciliationUntil: null };
+  const { database, shopRow } = fakeDatabase({ additionalShops: [other] });
+  const { admin } = fakeAdmin([[]]);
+  expect((await reconcileOrders({ admin, shopDomain, database })).complete).toBe(true);
+  expect(shopRow.orderReconciliationSince).toBeInstanceOf(Date);
+  expect(other).toEqual({ id: "shop-2", shopDomain: "two.myshopify.com", orderReconciliationSince: null,
+    orderReconciliationCursor: null, orderReconciliationUntil: null });
 });

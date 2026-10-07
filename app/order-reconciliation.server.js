@@ -28,7 +28,7 @@ function searchWindow(since, until) {
 // A shop needs work while it is backfilling or part way through a window, and
 // otherwise once every interval after its last window ended.
 export function reconciliationDue(shop, now = new Date()) {
-  if (!shop.orderReconciliationSince || shop.orderReconciliationCursor) return true;
+  if (!shop.orderReconciliationSince || shop.orderReconciliationCursor || shop.orderReconciliationUntil) return true;
   return now.getTime() - shop.orderReconciliationSince.getTime() >= RECONCILIATION_INTERVAL_MS;
 }
 
@@ -106,6 +106,53 @@ export async function reconcileOrders({
   let newestUpdatedAt = since;
   let hasNextPage = true;
   let consecutiveFailures = 0;
+  let superseded = false;
+  const expected = {
+    orderReconciliationSince: shop.orderReconciliationSince,
+    orderReconciliationCursor: shop.orderReconciliationCursor,
+    orderReconciliationUntil: shop.orderReconciliationUntil,
+  };
+  async function updateProgress(data) {
+    const updated = await database.shop.updateMany({
+      where: { id: shop.id, shopDomain, ...expected },
+      data,
+    });
+    if (updated.count !== 1) return false;
+    for (const key of Object.keys(expected)) {
+      if (Object.hasOwn(data, key)) expected[key] = data[key];
+    }
+    return true;
+  }
+  function result(pendingRechecked = 0) {
+    return {
+      pages,
+      ordersListed,
+      ordersFetched,
+      ordersFailed,
+      ordersSkipped: ordersListed - ordersFetched - ordersFailed,
+      ordersProcessed: ordersFetched,
+      pendingRechecked,
+      complete: !superseded && !hasNextPage,
+      ...(superseded ? { superseded: true } : {}),
+      resumeCursor: hasNextPage ? after : null,
+      reconciledThrough: newestUpdatedAt.toISOString(),
+      windowStart: since.toISOString(),
+      windowEnd: until.toISOString(),
+      durationMs: Date.now() - started,
+    };
+  }
+  // Claim the first window before any fetch. Even a reset from an initially
+  // empty watermark now invalidates this turn's conditional progress writes.
+  if (
+    !shop.orderReconciliationUntil &&
+    !(await updateProgress({
+      orderReconciliationUntil: until,
+      orderReconciliationCursor: null,
+    }))
+  ) {
+    superseded = true;
+    return result();
+  }
 
   while (hasNextPage && pages < maxPages && (pages === 0 || Date.now() - started < timeBudgetMs)) {
     const data = await adminGraphql(admin, ORDERS_QUERY, {
@@ -144,17 +191,25 @@ export async function reconcileOrders({
       }
     }
     ordersListed += listed.length;
-    await database.shop.update({
-      where: { id: shop.id },
-      data: connection.pageInfo.hasNextPage
-        ? { orderReconciliationCursor: connection.pageInfo.endCursor, orderReconciliationUntil: until, ...historyStart }
-        : {
-            orderReconciliationSince: until,
-            orderReconciliationCursor: null,
-            orderReconciliationUntil: null,
-            ...historyStart,
-          },
-    });
+    if (
+      !(await updateProgress(
+        connection.pageInfo.hasNextPage
+          ? {
+              orderReconciliationCursor: connection.pageInfo.endCursor,
+              orderReconciliationUntil: until,
+              ...historyStart,
+            }
+          : {
+              orderReconciliationSince: until,
+              orderReconciliationCursor: null,
+              orderReconciliationUntil: null,
+              ...historyStart,
+            },
+      ))
+    ) {
+      superseded = true;
+      return result();
+    }
     after = connection.pageInfo.endCursor;
     hasNextPage = connection.pageInfo.hasNextPage;
     pages += 1;
@@ -190,19 +245,5 @@ export async function reconcileOrders({
     }
   }
 
-  return {
-    pages,
-    ordersListed,
-    ordersFetched,
-    ordersFailed,
-    ordersSkipped: ordersListed - ordersFetched - ordersFailed,
-    ordersProcessed: ordersFetched,
-    pendingRechecked: pending.length,
-    complete: !hasNextPage,
-    resumeCursor: hasNextPage ? after : null,
-    reconciledThrough: newestUpdatedAt.toISOString(),
-    windowStart: since.toISOString(),
-    windowEnd: until.toISOString(),
-    durationMs: Date.now() - started,
-  };
+  return result(pending.length);
 }

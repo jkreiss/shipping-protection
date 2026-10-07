@@ -736,3 +736,32 @@ At the end of the week, record measured peaks, backlog drain time, API cost,
 backfill duration, support incidents, and price/benefit findings. Use these to
 revise operational targets and decide whether to continue or expand the pilot.
 Do not infer readiness for unrelated merchants from a single successful order.
+
+## Section 8 operations fixes (2026-10-08)
+
+Production and the staging template now declare both JSON shop metafields,
+`shipping_protection_config` and `shipping_protection_offer`, referenced by the
+checkout extension. No migration is needed. The legacy pricing command and the
+current checkout editing command use the same operator implementation and
+preserve saved settings.
+
+Local verification used disposable PostgreSQL 17. Prisma 6 schema comparison
+returned 0 after migrations and 2 for a temporary unmigrated model. Both database
+verifiers refused nonempty shops before writes and passed from a different
+working directory, leaving no shops or orders. Verifier cleanup preserves the
+primary assertion error, attempts later cleanup, and always disconnects.
+
+CI retains the required `verify` name as an aggregate of `checks` and `docker`.
+Railway's Wait for CI waits for workflows; confirm it on both services in each
+environment. This change does not alter Railway settings or deploy Shopify.
+
+Before release: validate the app configuration, deploy the staging Shopify app
+version, confirm the `shipping_protection_offer` definition exists there, and test
+the checkout block with a paid protection order. Record the actual staging and
+production results only after these external checks. Docker and disposable CI
+verification evidence is recorded below when completed.
+
+The installed CLI `3.90.0` lacks `app config validate`. Production configuration
+passed local validation (`valid: true`, no issues) using a temporary CLI `4.8.5`
+without changing the project dependency. The CLI 4 major removes Node 20 support
+and deprecated flags; the dependency upgrade remains separate.

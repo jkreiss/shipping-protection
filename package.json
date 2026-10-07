@@ -36,7 +36,8 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && CI=true shopify app function typegen --path extensions/shipping-protection-transform --no-color && tsc --noEmit && tsc --noEmit --project extensions/insurance-ext/tsconfig.json && tsc --noEmit --project extensions/shipping-protection-transform/tsconfig.json && npm run typecheck:e2e"
+    "typecheck": "react-router typegen && CI=true shopify app function typegen --path extensions/shipping-protection-transform --no-color && tsc --noEmit && tsc --noEmit --project extensions/insurance-ext/tsconfig.json && tsc --noEmit --project extensions/shipping-protection-transform/tsconfig.json && npm run typecheck:e2e",
+    "verify:schema": "prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code"
   },
   "type": "module",
   "engines": {
@@ -84,7 +85,8 @@
     "supabase": "^2.117.0",
     "typescript": "^5.9.3",
     "vite": "^6.3.6",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "confbox": "^0.2.4"
   },
   "workspaces": [
     "extensions/*"

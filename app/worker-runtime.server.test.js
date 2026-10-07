@@ -140,3 +140,23 @@ describe("worker runtime", () => {
     expect(reportFailure).toHaveBeenCalledWith("retention_purge_failed", expect.any(Error), expect.any(Object));
   });
 });
+
+test("superseded reconciliation turns retry without failure backoff or alerts", async () => {
+  let turns = 0;
+  const runtime = createWorkerRuntime({
+    database: databaseWith([{ id: "shop", shopDomain: "one.myshopify.com" }]),
+    adminForShop: async () => ({ admin: {} }),
+    reconcile: async () => {
+      turns++;
+      return { complete: false, superseded: true };
+    },
+  });
+  await runtime.reconciliationPass();
+  await runtime.reconciliationPass();
+  expect(turns).toBe(2);
+  expect(reportFailure).not.toHaveBeenCalled();
+  expect(logEvent).toHaveBeenCalledWith(
+    "reconciliation_superseded",
+    expect.objectContaining({ shopId: "shop" }),
+  );
+});

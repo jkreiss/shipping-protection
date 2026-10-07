@@ -58,7 +58,10 @@ Current services:
 
 Deploys:
 
-- Railway auto-deploys both services after the GitHub `CI / verify` check passes: staging from `main`, production from the `production` branch. Production releases are fast-forward pushes of a commit already tested on staging ([README → Release to production](../../README.md#release-to-production)). Do not commit to `production` directly.
+- Railway services should have **Wait for CI** enabled; Railway waits for the commit’s GitHub workflows before deploying. GitHub’s required `verify` job aggregates the `checks` and `docker` jobs, failing if either fails, is skipped, or is cancelled. Deployment branches: staging from `main`, production from the `production` branch. Production releases are fast-forward pushes of a commit already tested on staging ([README → Release to production](../../README.md#release-to-production)). Do not commit to `production` directly.
+- CI uses Node `22.18.0` and disposable PostgreSQL 17. Every application run uses `npm ci` with npm's download cache, then generates Prisma, deploys migrations, and runs `verify:schema` to detect an unmigrated datamodel change. The Docker job loads and tests the final Alpine image against its own PostgreSQL 17, including both database verifiers, `/healthz`, and worker startup/shutdown.
+- `verify:postgres` and `verify:webhook-postgres` require `VERIFY_ISOLATED_DB=1` and an empty `Shop` table. They roll back or redact their fixtures, attempt all cleanup, and disconnect even after a failure. They are unsuitable for development databases containing installed shops.
+- Job dependency behavior: [GitHub `needs`](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idneeds). Railway waiting behavior: [Wait for CI](https://docs.railway.com/deployments/github-autodeploys#wait-for-ci). Confirm service settings externally; repository configuration alone does not enable them.
 - The pre-deploy command runs `npx prisma migrate deploy`.
 - Shopify extensions and app configuration deploy separately with `npx shopify app deploy --config production`. Shopify app versions do not deploy the hosted web app, and backend deploys do not update extensions.
 - The [README](../../README.md) has the full Railway and migration procedure.
@@ -156,3 +159,10 @@ Known gaps (2026-09-29), to fix before installing on a live high-volume store:
 3. ~~Worker reconciliation processes 10 orders per 15 minutes (about 960 a day).~~ Fixed: the worker reconciles continuously in 60-second turns per shop, lists 250 orders per page, fetches only orders missing locally or newer in Shopify, stores each order in its own transaction, and starts each window 10 minutes before the last one ended. Caught-up shops are rechecked every 10 minutes; a failing shop backs off for 5 minutes. An order that can't be fetched or stored is logged (`reconciliation_order_failed`), queued in the `WebhookDelivery` inbox as a `RECONCILE` delivery for the worker's retries, and skipped so the window keeps moving; three failures in a row stop the turn and keep the cursor, since that means Shopify or the database is down. After each turn, up to 20 orders with `PENDING` protection refunds are refetched, least recently checked first and at most once per 10 minutes each; `UNATTRIBUTED` refunds are not polled, because they change only when the order does. Page size is still to be confirmed against measured query cost (`shopify_graphql_cost`).
 4. ~~The Overview triggers a 30-order reconciliation on every page load.~~ Fixed: reconciliation runs only in the worker (the Overview sync action and the `/app/reconcile` route are gone). "Refresh" re-reads stored data, and the Overview warns "Order sync is behind" when the last completed sync is over an hour old. Single-order failures are an operator alert (`webhook_terminal`), not a merchant warning.
 5. The Overview aggregates 30 days of orders in memory. That is acceptable at pilot scale; `overview_loaded` logs its duration and row counts, so move it into SQL aggregates if that gets slow.
+
+Reconciliation claims a new window before fetching its first page and writes
+progress only if the tenant's observed watermark, cursor, and window end still
+match. A reset supersedes that turn; it returns `complete: false` and
+`superseded: true`, logs `reconciliation_superseded`, and retries without failure
+backoff or an error alert. Stored authoritative order snapshots remain safe to
+re-read through the normal idempotency rules.
