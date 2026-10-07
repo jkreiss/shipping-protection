@@ -11,6 +11,11 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 - Preserve financial idempotency and historical auditability. Changes must never block checkout.
 - Do not invent legal/compliance guarantees or sell/gate existing Australian Consumer Law remedies as protection. Customer-facing copy uses “shipping protection” unless legal review confirms otherwise.
 
+## Keeping docs current
+
+- When a change alters setup, commands, configuration, deployment, or behavior that `README.md` or `docs/` describes, update that documentation in the same change. Only write what you have verified in code, config, or command output; leave uncertain details out rather than guessing.
+- `README.md` is the owner's concise operator reference. Keep it short and current; put design detail in `docs/agents/` and release evidence, one-off migration notes, and recovery procedures in `docs/production-readiness.md`.
+
 ## Codex workspaces
 
 - Create Codex Git worktrees as sibling directories in the parent `yasas` directory, using `../insurance-<task-name>` relative to this repository root. Keep worktrees outside this repository so Shopify CLI does not discover conflicting app configurations during type checking or releases.

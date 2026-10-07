@@ -48,7 +48,7 @@ the offer takes real customer money.
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress (the worker has its own Sentry Cron heartbeat), correct schema, webhook subscriptions, or working checkout. |
 | Coverage offer | [Merchant setup](../app/merchant/configuration.server.js) enables only theft after delivery; loss and damage in transit are consumer-law obligations and stay off. [English](../extensions/insurance-ext/locales/en.default.json) and [French](../extensions/insurance-ext/locales/fr.json) checkout copy and the product description name one benefit for the theft-only first rollout: packages stolen after delivery. It has no legal sign-off. | **Launch blocker.** Customer copy still needs legal sign-off, and a store must be able to honour every benefit the copy names; follow [Changing customer-facing copy](agents/legal-product.md#changing-customer-facing-copy). |
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
-| Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`). The remaining production advisories are in the Prisma CLI's config loader only; README records the assessment. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
+| Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`) and 2026-10-07 (`compression`, `source-map-js`). As of 2026-10-07, `npm audit --omit=dev` reports ten high advisories, none in the server runtime: four from `deepmerge-ts` in the Prisma CLI's config loader (`prisma` → `@prisma/config`), which only reads this repository's own config and whose suggested fix is a Prisma downgrade; six from `braces` in extension type tooling (`@shopify/ui-extensions` → `ts-morph`), whose fix is a major `@shopify/ui-extensions` upgrade. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
 ### Settings that need live verification
 
@@ -101,8 +101,7 @@ Confirm these values without copying their contents into logs:
 | `SENTRY_DSN` | Correct environment-specific server monitoring configuration. |
 | `WORKER_CONCURRENCY` | Worker only; start at default `4`, then tune from measured API and database capacity. Valid range is 1–16. |
 
-With 4 delivery loops, use at least 6 worker Prisma connections; README suggests
-8. Count web connections, worker connections, deployment overlap, and operator
+With 4 delivery loops, use at least 6 worker Prisma connections. Count web connections, worker connections, deployment overlap, and operator
 sessions against Supabase's available pool. Keep one worker instance initially:
 API pacing is shared inside a process, and reconciliation has no cross-process
 shop lease. Adding replicas is a separate reliability change.
@@ -250,10 +249,15 @@ npx prisma migrate status
 Pending migrations are expected for a release; failed migrations are not. Take a
 verified backup before applying them. A stopped worker and a healthy old web
 service are compatible with ordinary additive migrations only if the release
-review establishes that compatibility. The durable-protection migration has a
-specific maintenance procedure in
-[README](../README.md#coordinated-durable-protection-migration); follow it if
-that migration is still pending.
+review establishes that compatibility.
+
+If the durable-protection migration is still pending, it changes constraints
+and application code together. Back up and verify the database, pause app and
+webhook traffic, then run `npx prisma migrate deploy` from the matching release.
+It stops on cross-shop links, invalid refund states, or inconsistent paid-order
+snapshots; repair those against Shopify and retry rather than reassigning them.
+Deploy the matching backend and checkout extension, resume traffic, and run
+reconciliation before relying on analytics.
 
 For the pilot, pause the production worker and its automatic rollout through the
 rehearsed Railway process before promotion. Let the web receive and persist
@@ -464,11 +468,17 @@ Stop the new worker rollout, preserve logs and a database snapshot, and inspect
 Investigate the failed migration's actual statements; some changes may already
 have applied. Never run `prisma migrate reset` or `db push` as hosted recovery.
 
-For the specific PostgreSQL `55P04` failure on
-`20260930000000_webhook_inbox_paid_metrics`, use the conditional recovery described
-in [README](../README.md#deploy-the-backend-on-railway), only if that migration is
-reported failed and the reviewed split migration is safe to retry. Other failures
-need their own recovery decision. `migrate resolve` records migration state; it
+For the specific PostgreSQL `55P04` failure (`unsafe use of new value
+"PENDING"`) on `20260930000000_webhook_inbox_paid_metrics`: pause Railway
+automatic deployment, back up the database, and confirm `prisma migrate status`
+reports that migration as failed. Only then run, once against that database:
+
+```sh
+npx prisma migrate resolve --rolled-back 20260930000000_webhook_inbox_paid_metrics
+```
+
+Then redeploy a commit containing the split enum migration, which is safe to
+retry after a partial apply. Other failures need their own recovery decision. `migrate resolve` records migration state; it
 does not undo SQL. Do not mark a migration applied unless its complete intended
 schema change has actually been performed.
 [Prisma failed migration recovery](https://www.prisma.io/docs/orm/v6/prisma-migrate/workflows/patching-and-hotfixing).
