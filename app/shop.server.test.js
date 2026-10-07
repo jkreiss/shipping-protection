@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { markShopUninstalled, recordGrantedScopes, withShopSettingsLock } from "./shop.server";
+import { markShopUninstalled, recordGrantedScopes, redactShopData, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
 
 function database() {
@@ -104,5 +104,28 @@ describe("uninstalling", () => {
       data: { status: "CANCELLED", endedAt: expect.any(Date) },
     });
     expect(transaction.shop.updateMany).toHaveBeenCalled();
+  });
+});
+
+describe("shop redaction", () => {
+  test("deletes the shop's billing ledger, charges and agreements before the shop", async () => {
+    const order = [];
+    const table = (name) => ({ deleteMany: vi.fn(async (args) => { order.push([name, args]); return { count: 0 }; }) });
+    const transaction = {
+      $executeRawUnsafe: vi.fn(),
+      shop: { findUnique: vi.fn(async () => ({ id: "shop-1" })), update: vi.fn(), deleteMany: table("shop").deleteMany },
+      ...Object.fromEntries(["claimEvent", "claim", "protectionRefund", "protectionPurchase", "orderLine", "order",
+        "pricingRule", "session", "billingEntry", "billingCharge", "billingAgreement"].map((name) => [name, table(name)])),
+    };
+
+    await redactShopData(transaction, "one.myshopify.com");
+
+    const names = order.map(([name]) => name);
+    expect(names.indexOf("billingEntry")).toBeLessThan(names.indexOf("billingCharge"));
+    expect(names.indexOf("billingCharge")).toBeLessThan(names.indexOf("billingAgreement"));
+    expect(names.indexOf("billingAgreement")).toBeLessThan(names.indexOf("shop"));
+    for (const name of ["billingEntry", "billingCharge", "billingAgreement"]) {
+      expect(order.find(([table]) => table === name)[1]).toEqual({ where: { shopId: "shop-1" } });
+    }
   });
 });

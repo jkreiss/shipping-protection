@@ -48,10 +48,14 @@ export async function deleteShopData(shopDomain) {
 export async function redactShopData(transaction, shopDomain) {
   const shop = await transaction.shop.findUnique({ where: { shopDomain }, select: { id: true } });
   if (!shop) return;
-  // The database rejects ordinary ClaimEvent mutation. This setting is local
-  // to the redaction transaction and permits only event deletion.
+  // The database rejects ordinary ClaimEvent and BillingEntry mutation. This
+  // setting is local to the redaction transaction and permits only deletion.
   await transaction.$executeRawUnsafe("SET LOCAL app.allow_shop_redaction = 'on'");
   await transaction.claimEvent.deleteMany({ where: { shopId: shop.id } });
+  // Billing entries are append-only too; the same setting permits deletion.
+  await transaction.billingEntry.deleteMany({ where: { shopId: shop.id } });
+  await transaction.billingCharge.deleteMany({ where: { shopId: shop.id } });
+  await transaction.billingAgreement.deleteMany({ where: { shopId: shop.id } });
   await transaction.claim.deleteMany({ where: { shopId: shop.id } });
   await transaction.protectionRefund.deleteMany({ where: { shopId: shop.id } });
   await transaction.protectionPurchase.deleteMany({ where: { shopId: shop.id } });
