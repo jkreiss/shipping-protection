@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
   readShippingProtectionState: vi.fn(),
   setupShippingProtection: vi.fn(),
   reportFailure: vi.fn(),
+  requestBillingApproval: vi.fn(),
+  requestCapApproval: vi.fn(),
+  syncBillingAgreement: vi.fn(),
+  readBillingView: vi.fn(),
 }));
 
 vi.mock("./shopify.server", () => ({
@@ -18,8 +22,14 @@ vi.mock("./shipping-protection.server", () => ({
   setupShippingProtection: mocks.setupShippingProtection,
 }));
 vi.mock("./observability.server", () => ({ reportFailure: mocks.reportFailure }));
+vi.mock("./billing/agreements.server", () => ({
+  requestBillingApproval: mocks.requestBillingApproval,
+  requestCapApproval: mocks.requestCapApproval,
+  syncBillingAgreement: mocks.syncBillingAgreement,
+  readBillingView: mocks.readBillingView,
+}));
 
-import { action } from "./routes/app.settings";
+import { action, loader } from "./routes/app.settings";
 import { UserFacingError } from "./user-facing-error";
 
 function submit(fields) {
@@ -92,5 +102,56 @@ describe("protection on/off settings", () => {
     expect(result.success).toBeUndefined();
     expect(result.error).toContain("turning off");
     expect(result.state.protectionOff).toBe(false);
+  });
+});
+
+describe("billing approval", () => {
+  beforeEach(() => vi.stubEnv("SHOPIFY_API_KEY", "client-id"));
+
+  test("sends the merchant to Shopify to approve the authenticated shop's terms", async () => {
+    mocks.requestBillingApproval.mockResolvedValue("https://one.myshopify.com/admin/charges/confirm");
+
+    const result = await submit({ intent: "approve-billing", shop: "two.myshopify.com" });
+
+    expect(result).toEqual({ confirmationUrl: "https://one.myshopify.com/admin/charges/confirm" });
+    expect(mocks.requestBillingApproval).toHaveBeenCalledWith({
+      admin: {}, shopDomain: "one.myshopify.com",
+      returnUrl: "https://admin.shopify.com/store/one/apps/client-id/app/settings",
+    });
+    expect(mocks.setupShippingProtection).not.toHaveBeenCalled();
+  });
+
+  test("sends the merchant to Shopify to approve a raised cap", async () => {
+    mocks.requestCapApproval.mockResolvedValue("https://confirm-cap");
+    await expect(submit({ intent: "approve-cap" })).resolves.toEqual({ confirmationUrl: "https://confirm-cap" });
+    expect(mocks.requestCapApproval).toHaveBeenCalledWith({ admin: {}, shopDomain: "one.myshopify.com" });
+  });
+
+  test("shows merchant-safe billing errors and reports the rest", async () => {
+    mocks.requestBillingApproval.mockRejectedValueOnce(new UserFacingError("There are no billing terms waiting for approval."));
+    await expect(submit({ intent: "approve-billing" })).resolves.toEqual({
+      billingError: "There are no billing terms waiting for approval.",
+    });
+    expect(mocks.reportFailure).not.toHaveBeenCalled();
+
+    const internal = new Error("appSubscriptionCreate: returnUrl is invalid");
+    mocks.requestBillingApproval.mockRejectedValueOnce(internal);
+    const result = await submit({ intent: "approve-billing" });
+    expect(result.billingError).not.toContain("returnUrl");
+    expect(mocks.reportFailure).toHaveBeenCalledWith("settings_action_failed", internal, {
+      shop: "one.myshopify.com", intent: "approve-billing",
+    });
+  });
+
+  test("Settings still loads, from stored terms, when Shopify billing can't be read", async () => {
+    mocks.readShippingProtectionState.mockResolvedValue({ ready: true });
+    mocks.syncBillingAgreement.mockRejectedValue(new Error("Shopify unavailable"));
+    mocks.readBillingView.mockResolvedValue({ mode: "NET_SHARE", status: "ACTIVE" });
+
+    const data = await loader({ request: new Request("https://app.example/app/settings") });
+
+    expect(data).toEqual({ ready: true, billing: { mode: "NET_SHARE", status: "ACTIVE" } });
+    expect(mocks.readBillingView).toHaveBeenCalledWith({ shopDomain: "one.myshopify.com" });
+    expect(mocks.reportFailure).toHaveBeenCalledWith("billing_sync_failed", expect.any(Error), { shop: "one.myshopify.com" });
   });
 });

@@ -22,6 +22,10 @@ vi.mock("./shipping-protection.server", () => ({
   setupShippingProtection: vi.fn(),
 }));
 
+vi.mock("./billing/agreements.server", () => ({
+  requestBillingApproval: vi.fn(), requestCapApproval: vi.fn(), syncBillingAgreement: vi.fn(), readBillingView: vi.fn(),
+}));
+
 import Settings from "./routes/app.settings";
 
 function render() {
@@ -47,6 +51,7 @@ beforeEach(() => {
     checks: [{ id: "setup", ok: true }],
     product: { id: "gid://shopify/Product/1", title: "Shipping Protection" },
     pricing: { ruleId: "rule-1", rateBasisPoints: 40, percentage: "0.4%" },
+    billing: { mode: "FREE", status: "ACTIVE", terms: "No charge" },
   };
 });
 
@@ -117,5 +122,45 @@ describe("settings controls", () => {
   test("disables all settings actions while a change is saving", () => {
     mocks.saving = true;
     expect([...render().querySelectorAll("s-button")].every((button) => button.hasAttribute("disabled"))).toBe(true);
+  });
+});
+
+describe("billing", () => {
+  const billingSection = () => render().querySelector('s-section[heading="Billing"]');
+  const netTerms = {
+    mode: "NET_SHARE", terms: "10% of protection revenue, net of protection refunds",
+    currencyCode: "AUD", cappedAmount: "100.00", pendingCappedAmount: null,
+    billedThisCycle: null, cycleEndsAt: null,
+  };
+
+  test("a free store sees that there is no charge and nothing to approve", () => {
+    const section = billingSection();
+    expect(section.textContent).toContain("No charge");
+    expect(section.querySelector("input[name=intent]")).toBeNull();
+  });
+
+  test("terms awaiting approval offer Shopify's approval and say protection keeps selling", () => {
+    mocks.state.billing = { ...netTerms, status: "PENDING_APPROVAL" };
+    const section = billingSection();
+    expect(section.textContent).toContain("10% of protection revenue, net of protection refunds");
+    expect(section.textContent).toContain("AUD 100.00");
+    expect(section.textContent).toContain("keeps working");
+    expect(section.querySelector('input[name="intent"]').getAttribute("value")).toBe("approve-billing");
+    expect(section.querySelector('s-button[type="submit"]').textContent).toBe("Approve billing");
+  });
+
+  test("active terms show what has been billed this cycle", () => {
+    mocks.state.billing = { ...netTerms, status: "ACTIVE", billedThisCycle: "12.50", cycleEndsAt: "2026-11-01T00:00:00.000Z" };
+    const section = billingSection();
+    expect(section.textContent).toContain("AUD 12.50 of AUD 100.00");
+    expect(section.querySelector("input[name=intent]")).toBeNull();
+  });
+
+  test("a raised cap waits for the merchant's approval", () => {
+    mocks.state.billing = { ...netTerms, status: "ACTIVE", pendingCappedAmount: "250.00" };
+    const section = billingSection();
+    expect(section.textContent).toContain("AUD 250.00");
+    expect(section.querySelector('input[name="intent"]').getAttribute("value")).toBe("approve-cap");
+    expect(section.querySelector('s-button[type="submit"]').textContent).toBe("Approve new cap");
   });
 });

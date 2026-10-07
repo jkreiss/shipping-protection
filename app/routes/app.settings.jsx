@@ -13,18 +13,61 @@ import {
   readShippingProtectionState,
   setupShippingProtection,
 } from "../shipping-protection.server";
+import {
+  readBillingView,
+  requestBillingApproval,
+  requestCapApproval,
+  syncBillingAgreement,
+} from "../billing/agreements.server";
 import { UserFacingError } from "../user-facing-error";
 import { reportFailure } from "../observability.server";
 
+// Billing must never stop Settings from loading: fall back to stored terms.
+async function loadBilling(admin, shop) {
+  try {
+    return await syncBillingAgreement({ admin, shopDomain: shop });
+  } catch (error) {
+    reportFailure("billing_sync_failed", error, { shop });
+    return readBillingView({ shopDomain: shop });
+  }
+}
+
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
-  return readShippingProtectionState(admin, session.shop);
+  const [state, billing] = await Promise.all([
+    readShippingProtectionState(admin, session.shop),
+    loadBilling(admin, session.shop),
+  ]);
+  return { ...state, billing };
 };
+
+// Shopify returns the merchant here, inside the Admin, after the approval page.
+function billingReturnUrl(shop) {
+  const store = shop.replace(/\.myshopify\.com$/, "");
+  return `https://admin.shopify.com/store/${store}/apps/${process.env.SHOPIFY_API_KEY}/app/settings`;
+}
+
+async function billingAction(admin, shop, intent) {
+  try {
+    const confirmationUrl = intent === "approve-billing"
+      ? await requestBillingApproval({ admin, shopDomain: shop, returnUrl: billingReturnUrl(shop) })
+      : await requestCapApproval({ admin, shopDomain: shop });
+    return { confirmationUrl };
+  } catch (error) {
+    if (error instanceof UserFacingError) return { billingError: error.message };
+    reportFailure("settings_action_failed", error, { shop, intent });
+    return { billingError: "Couldn't open Shopify's approval page. Try again in a few minutes." };
+  }
+}
 
 export const action = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
+
+  if (intent === "approve-billing" || intent === "approve-cap") {
+    return billingAction(admin, session.shop, intent);
+  }
 
   if (!["setup", "update-rate", "enable", "disable"].includes(String(intent))) {
     return {
@@ -84,9 +127,81 @@ export const action = async ({ request }) => {
   }
 };
 
+function BillingSection({ billing, fetcher }) {
+  const amount = (value) => `${billing.currencyCode} ${value}`;
+  const approval = billing.status === "PENDING_APPROVAL"
+    ? "approve-billing"
+    : billing.pendingCappedAmount ? "approve-cap" : null;
+  const submitting = fetcher.state !== "idle";
+  const cycleEnds = billing.cycleEndsAt
+    ? new Date(billing.cycleEndsAt).toLocaleDateString("en-AU", { dateStyle: "medium", timeZone: "UTC" })
+    : null;
+
+  return (
+    <s-section heading="Billing">
+      <s-stack direction="block" gap="base">
+        {fetcher.data?.billingError && (
+          <s-banner heading="Couldn't open the approval page" tone="critical">
+            {fetcher.data.billingError}
+          </s-banner>
+        )}
+        {billing.mode === "FREE" ? (
+          <s-paragraph>No charge. This app is free for your store.</s-paragraph>
+        ) : (
+          <>
+            <s-stack direction="inline" gap="small-200" alignItems="center">
+              {billing.status === "ACTIVE" ? (
+                <s-badge tone="success">Active</s-badge>
+              ) : (
+                <s-badge tone="warning">Awaiting approval</s-badge>
+              )}
+              <s-text>
+                {billing.terms}, capped at {amount(billing.cappedAmount)} a month.
+              </s-text>
+            </s-stack>
+            {billing.status === "ACTIVE" && billing.billedThisCycle !== null && (
+              <s-paragraph color="subdued">
+                Billed this cycle: {amount(billing.billedThisCycle)} of {amount(billing.cappedAmount)}
+                {cycleEnds ? `. The cycle ends ${cycleEnds}.` : "."}
+              </s-paragraph>
+            )}
+            {approval === "approve-billing" && (
+              <s-banner heading="Approve billing" tone="warning">
+                Shopify asks you to approve this charge. Shipping protection
+                keeps working until you do, and nothing is billed for orders
+                placed before you approve.
+              </s-banner>
+            )}
+            {approval === "approve-cap" && (
+              <s-banner heading="Approve the new monthly cap" tone="info">
+                The monthly cap is changing to {amount(billing.pendingCappedAmount)}.
+                The current cap applies until you approve.
+              </s-banner>
+            )}
+            {approval && (
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value={approval} />
+                <s-button
+                  variant="primary"
+                  type="submit"
+                  disabled={submitting}
+                  {...(submitting ? { loading: true } : {})}
+                >
+                  {approval === "approve-billing" ? "Approve billing" : "Approve new cap"}
+                </s-button>
+              </fetcher.Form>
+            )}
+          </>
+        )}
+      </s-stack>
+    </s-section>
+  );
+}
+
 export default function Settings() {
   const initialState = useLoaderData();
   const fetcher = useFetcher();
+  const billingFetcher = useFetcher();
   const shopify = useAppBridge();
   const state = fetcher.data?.state ?? initialState;
   const isSaving =
@@ -130,6 +245,12 @@ export default function Settings() {
       shopify.toast.show(fetcher.data.success);
     }
   }, [fetcher.data?.success, shopify]);
+
+  // Shopify's approval page must open at the top level, outside the Admin iframe.
+  const confirmationUrl = billingFetcher.data?.confirmationUrl;
+  useEffect(() => {
+    if (confirmationUrl) window.open(confirmationUrl, "_top");
+  }, [confirmationUrl]);
 
   const runSetup = () => {
     fetcher.submit({ intent: "setup" }, { method: "POST" });
@@ -279,6 +400,8 @@ export default function Settings() {
           </s-stack>
         )}
       </s-section>
+
+      <BillingSection billing={initialState.billing} fetcher={billingFetcher} />
 
       <s-section heading="Can't see protection at checkout?">
         <s-paragraph>
