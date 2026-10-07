@@ -339,7 +339,7 @@ export default function Settings() {
                     value={offer.checkboxLabel ?? ""}
                     placeholder={DEFAULT_CHECKBOX_LABEL}
                     maxLength={120}
-                    details="The fee is always shown beside the label. For example, Add shipping protection would show in checkout as Add shipping protection $X.XX. Leave blank to use the default wording."
+                    details="The fee is always shown beside the label. For example, Add shipping protection would show in checkout as Add shipping protection — $X.XX. Leave blank to use the default wording."
                     {...(isSaving ? { disabled: true } : {})}
                   />
                   <s-text-area

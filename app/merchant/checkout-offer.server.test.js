@@ -82,6 +82,15 @@ function fixture(settings = {}) {
 }
 
 describe("merchant checkout offer", () => {
+  test("validates preserved local copy before publishing a merged update", async () => {
+    const f = fixture({ protectionSupportingText: "Invalid\u202Ecopy" });
+    await expect(updateCheckoutOffer(f.admin, "one.myshopify.com", {
+      checkboxLabel: "Choose shipping protection",
+    }, { database: f.database })).rejects.toThrow("plain text");
+    expect(f.writes).toHaveLength(0);
+    expect(f.configuration.protectionCheckboxLabel).toBeNull();
+    expect(f.shop.settingsLockedUntil).toBeNull();
+  });
   test("publishes copy while preserving other published copy and permissions", async () => {
     const f = fixture();
     f.liveShop.checkoutOffer = {

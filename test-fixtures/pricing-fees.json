@@ -40,5 +40,54 @@
     "rateBasisPoints": 25,
     "minorUnits": 2,
     "expected": "0.25"
+  },
+  {
+    "name": "long decimal subtotal preserves default quarter dollar fee",
+    "amounts": ["100.00000000000001"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.25"
+  },
+  {
+    "name": "long decimal sums are exact",
+    "amounts": ["0.10000000000000001", "99.89999999999999999"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.25"
+  },
+  {
+    "name": "large subtotal with safe final fee",
+    "amounts": ["1000000000000000.00"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "2500000000000.00"
+  },
+  {
+    "name": "just below half cent at long precision",
+    "amounts": ["1.99999999999999999"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.00"
+  },
+  {
+    "name": "just above half cent at long precision",
+    "amounts": ["2.00000000000000001"],
+    "rateBasisPoints": 25,
+    "minorUnits": 2,
+    "expected": "0.01"
+  },
+  {
+    "name": "CLF four decimal half up",
+    "amounts": ["0.02"],
+    "rateBasisPoints": 25,
+    "minorUnits": 4,
+    "expected": "0.0001"
+  },
+  {
+    "name": "UYW four decimal below half",
+    "amounts": ["0.01999999999999999"],
+    "rateBasisPoints": 25,
+    "minorUnits": 4,
+    "expected": "0.0000"
   }
 ]

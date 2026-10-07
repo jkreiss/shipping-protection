@@ -60,6 +60,11 @@ beforeEach(() => {
 });
 
 describe("settings controls", () => {
+  test("shows copy placeholder and example matching checkout's custom label format", () => {
+    const field = render().querySelector('s-text-field[name="checkboxLabel"]');
+    expect(field.getAttribute("placeholder")).toBe("Add shipping protection");
+    expect(field.getAttribute("details")).toContain("Add shipping protection — $X.XX");
+  });
   test("shows a rate form only when the store can edit its rate", () => {
     expect(
       render().querySelector('s-number-field[name="ratePercent"]'),

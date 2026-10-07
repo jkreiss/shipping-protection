@@ -5,6 +5,10 @@ const CONFIG_BASIS = "SHIPPABLE_PRE_DISCOUNT";
 const RATE_BASIS_POINTS = 25;
 const MIN_RATE_BASIS_POINTS = 1;
 const MAX_RATE_BASIS_POINTS = 10_000;
+// Shared acceptance fixtures keep this validator aligned with the server.
+const UNSUPPORTED_COPY_CHARACTERS =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/u;
 export const PROTECTION_ATTRIBUTE_KEYS = [
   "_yasas_protection_rule_id",
   "_yasas_protection_rule_version",
@@ -93,14 +97,14 @@ const FOUR_MINOR_UNIT_CURRENCIES = new Set(["CLF", "UYW"]);
 function validateConfiguration(value) {
   if (!value || typeof value !== "object") return null;
   const candidate = /** @type {Record<string, unknown>} */ (value);
-  const commonValid =
+  const invalidCommonFields =
     typeof candidate.enabled !== "boolean" ||
     typeof candidate.productId !== "string" ||
     !candidate.productId.startsWith("gid://shopify/Product/") ||
     typeof candidate.variantId !== "string" ||
     !candidate.variantId.startsWith("gid://shopify/ProductVariant/") ||
     candidate.basis !== CONFIG_BASIS;
-  if (commonValid) {
+  if (invalidCommonFields) {
     return null;
   }
 
@@ -235,11 +239,7 @@ export function readCheckoutOffer(appMetafields) {
       (typeof value === "string" &&
         value.length > 0 &&
         value.length <= limit &&
-        [...value].every(
-          (character) =>
-            /[\t\n\r]/.test(character) ||
-            (character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127),
-        ));
+        !UNSUPPORTED_COPY_CHARACTERS.test(value));
     if (
       offer?.schemaVersion !== 1 ||
       !validCopy(offer.checkboxLabel, 120) ||
@@ -261,7 +261,16 @@ export function readCheckoutOffer(appMetafields) {
  * @param {number} minorUnits
  */
 export function calculateRoundedFee(amounts, rateBasisPoints, minorUnits) {
-  if (amounts.length === 0) return null;
+  if (
+    amounts.length === 0 ||
+    !Number.isInteger(rateBasisPoints) ||
+    rateBasisPoints < MIN_RATE_BASIS_POINTS ||
+    rateBasisPoints > MAX_RATE_BASIS_POINTS ||
+    !Number.isInteger(minorUnits) ||
+    minorUnits < 0 ||
+    minorUnits > 4
+  )
+    return null;
 
   /** @type {{whole: string, fraction: string}[]} */
   const parsed = [];
@@ -274,23 +283,28 @@ export function calculateRoundedFee(amounts, rateBasisPoints, minorUnits) {
   const scaleDigits = Math.max(
     ...parsed.map(({ fraction }) => fraction.length),
   );
-  const scale = 10 ** scaleDigits;
+  const scale = 10n ** BigInt(scaleDigits);
   const subtotal = parsed.reduce((sum, { whole, fraction }) => {
     const paddedFraction = fraction.padEnd(scaleDigits, "0");
-    return sum + Number(whole) * scale + Number(paddedFraction || "0");
-  }, 0);
-  const numerator = subtotal * rateBasisPoints * 10 ** minorUnits;
-  const denominator = scale * 10_000;
-  if (
-    !Number.isSafeInteger(subtotal) ||
-    !Number.isSafeInteger(numerator) ||
-    !Number.isSafeInteger(denominator)
-  ) {
-    return null;
-  }
-  const roundedMinor = Math.floor((numerator + denominator / 2) / denominator);
+    return sum + BigInt(whole) * scale + BigInt(paddedFraction || "0");
+  }, 0n);
+  const numerator =
+    subtotal * BigInt(rateBasisPoints) * 10n ** BigInt(minorUnits);
+  const denominator = scale * 10_000n;
+  const roundedMinor = (numerator * 2n + denominator) / (denominator * 2n);
+  if (roundedMinor > BigInt(Number.MAX_SAFE_INTEGER)) return null;
 
-  return Number(roundedMinor) / 10 ** minorUnits;
+  // Convert only the rounded fee. Its decimal representation must retain every
+  // minor unit before it can be passed to Shopify's number-based formatter.
+  const amount = Number(roundedMinor) / 10 ** minorUnits;
+  const [whole, fraction = ""] = String(amount).split(".");
+  if (
+    !/^\d+$/.test(whole) ||
+    fraction.length > minorUnits ||
+    BigInt(whole + fraction.padEnd(minorUnits, "0")) !== roundedMinor
+  )
+    return null;
+  return amount;
 }
 
 /**
@@ -400,6 +414,7 @@ export function actualProtectionTotal(lines, variantId) {
  * @returns {"eligible" | "ineligible" | "pending"}
  */
 export function deliveryEligibility(deliveryGroups, eligibleLineIds) {
+  if (eligibleLineIds.size === 0) return "ineligible";
   const relevantGroups = deliveryGroups.filter((group) =>
     group.targetedCartLines.some(({ id }) => eligibleLineIds.has(id)),
   );

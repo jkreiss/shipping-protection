@@ -50,6 +50,55 @@ the offer takes real customer money.
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
 | Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`) and 2026-10-07 (`compression`, `source-map-js`). As of 2026-10-07, `npm audit --omit=dev` reports ten high advisories, none in the server runtime: four from `deepmerge-ts` in the Prisma CLI's config loader (`prisma` → `@prisma/config`), which only reads this repository's own config and whose suggested fix is a Prisma downgrade; six from `braces` in extension type tooling (`@shopify/ui-extensions` → `ts-morph`), whose fix is a major `@shopify/ui-extensions` upgrade. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
+### Checkout cleanup and recovery regressions (2026-10-08)
+
+Review sections 1/1b are addressed locally. Before production changes, regression
+tests reproduced pending-delivery cleanup, hidden pickup-removal failures,
+permission-driven removal, partial buyer removal, synchronous lock failures,
+stale reconciliation contracts, decimal arithmetic failures, invalid merged
+copy publication, and the Settings copy mismatch. Checkout tests now use
+reactive line/configuration/instruction signals and publish successful host
+mutations while failed writes leave the cart unchanged.
+
+The block retains the actual protection fee and removal control until Shopify
+publishes removal. Eligibility and each mutation's capability are separate.
+Unchecking removes all lines sequentially with current IDs. Failed actions try
+immediately, then after 250 ms and 1 second, with localized manual Retry after
+exhaustion. Changed inputs reset the retry budget; obsolete timers are cancelled.
+Acknowledged successes wait for the corresponding protection change to appear
+in the cart, including across rule/capability/buyer changes and unrelated cart
+updates. Six additional regressions reproduced and verified that publication race.
+
+BigInt decimal fixtures cover long fractional inputs, large subtotals, half-up
+boundaries and four-decimal currencies across the server, checkout and Function.
+Checkout only converts the final fee to a number when its minor units survive
+the conversion. Shared copy/configuration fixtures check server/checkout
+acceptance, including v1/v2 contracts, malformed fields, C1/bidi/zero-width/BOM
+and separator rejection, and preservation of Unicode/emoji/plain markup and
+permitted whitespace. Publication validates preserved copy in the merged offer.
+
+Deferred: discount identity still uses type plus code/title. Distinct same-titled
+line and order automatic discounts reproduce a $0.20 quote for a $0.25
+pre-discount fee. `DEFERRED: distinct same-titled line and order discounts preserve
+the pre-discount fee` is an explicitly marked Vitest `test.fails` regression.
+Offer presentation for that collision is unchanged. Other review sections are
+outside this change.
+
+Final local verification: `npm test` passed all 558 tests across 35 files,
+including the one explicitly expected failure above. `npm run lint` passed
+without warnings, `npm run typecheck` passed (including both extensions and E2E
+types), and `npm run build` passed with the existing React Router future-flag
+warnings. Shopify checkout component validation also passed against API 2026-07.
+A fresh read-only code review identified the publication race; its six
+regressions failed before the correction and passed afterward, followed by the
+full green suite. No other required fixes were identified in that review.
+
+Live checkout verification is **pending** deployment of the updated extension
+to staging. These tests do not certify a hosted checkout. Rehearse the eligibility,
+visibility, capability and mutation-recovery rows in section 4 on desktop/mobile
+and Shop Pay where used. No deployment, database migration, or live store change
+was performed for this work.
+
 ### Checkout offer settings (2026-10-07)
 
 Settings groups pricing and public checkout copy, with separate
@@ -188,9 +237,10 @@ CI proves its isolated checks; it does not prove these hosted behaviors.
 
 | Scenario | Evidence required |
 | --- | --- |
-| Before address entry | Protection is visible and selectable as checkout loads, with the expected fee and no address entered. It stays visible while rates reload; a later store pickup choice hides the offer and removes protection. Check desktop and mobile order summaries. |
+| Before address entry | Protection is visible and selectable as checkout loads, with the expected fee and no address entered. It stays visible while rates reload; a later store pickup choice removes protection. Keep its actual fee and removal control visible until removal is confirmed. Check desktop and mobile order summaries. |
 | Opt in / remove / quantity changes | One protection line of quantity 1 when selected; no line after removal; correct recalculation when merchandise changes. Include checkout reload and Shop Pay if used. |
-| Eligibility | Digital-only carts, subscriptions, pickup, zero-rounded fees, and unavailable cart mutation produce the intended offer behavior without checkout errors. |
+| Eligibility | Digital-only/protection-only carts, removal of the last shippable item, disabled configuration, subscriptions, pickup, and zero-rounded fees remove protection even while delivery is pending. Lost add/update permissions preserve eligible selections. Unavailable removal shows a disabled control and explanation. |
+| Checkout mutation recovery | Returned errors, rejected promises and synchronous throws release the busy state. Failures retry three times at most per unchanged action, then manual Retry recovers. Unchecking removes all lines using refreshed IDs, including after partial failure; success waits for cart publication. |
 | Price | Compare final Shopify line amounts with the approved rate and shippable pre-discount basis. Exercise discounts, tax, rounding, and every enabled currency. Old paid purchases retain their pricing snapshot after a rate change. |
 | Payment | An unpaid order is not counted as a completed purchase. A paid protected order has exactly one confirmed purchase. A paid unprotected order contributes to eligible order counts. |
 | Refunds / cancellations | Partial merchandise, full merchandise, protection-fee refunds, and unpaid cancellations affect the correct metrics exactly once. Do not assume a merchandise refund also refunds protection. |

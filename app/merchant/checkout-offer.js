@@ -1,10 +1,14 @@
 import { UserFacingError } from "../user-facing-error.js";
 
 export const CHECKOUT_OFFER_KEY = "shipping_protection_offer";
-export const DEFAULT_CHECKBOX_LABEL = "Add shipping protection for ";
+export const DEFAULT_CHECKBOX_LABEL = "Add shipping protection";
 export const DEFAULT_SUPPORTING_TEXT = "Covers stolen, damaged, and undelivered packages.";
 
 /** @typedef {{schemaVersion: 1, checkboxLabel: string | null, supportingText: string | null}} CheckoutOffer */
+
+// Keep this boundary in sync with checkout through test-fixtures/checkout-copy.json.
+// eslint-disable-next-line no-control-regex
+const UNSUPPORTED_COPY_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u2028-\u202e\u2066-\u2069\ufeff]/u;
 
 function validCopy(value, maxLength) {
   return (
@@ -12,11 +16,7 @@ function validCopy(value, maxLength) {
     (typeof value === "string" &&
       value.length > 0 &&
       value.length <= maxLength &&
-      [...value].every(
-        (character) =>
-          /[\t\n\r]/.test(character) ||
-          (character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127),
-      ))
+      !UNSUPPORTED_COPY_CHARACTERS.test(value))
   );
 }
 
@@ -53,6 +53,8 @@ export function validateCheckoutOfferChanges(changes) {
     if (!(key in changes)) continue;
     if (typeof changes[key] !== "string")
       throw new UserFacingError("Enter plain text for the checkout copy.");
+    if (UNSUPPORTED_COPY_CHARACTERS.test(changes[key]))
+      throw new UserFacingError("Enter plain text without unsupported control characters for the checkout copy.");
     const text = changes[key].trim();
     if (!validCopy(text || null, limit)) {
       throw new UserFacingError(

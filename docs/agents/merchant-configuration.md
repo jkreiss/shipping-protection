@@ -120,8 +120,14 @@ revert what customers see. Pricing/setup publication does not touch this
 metafield. Authorized editors can use any wording, punctuation, and line breaks
 as literal plain text (label up to 120 characters, supporting text up to 500).
 There is no required phrase or blocked-word list. Blank fields restore defaults;
-unsupported control characters are rejected. The fee cannot be removed by
-copy editing. Follow
+unsupported control characters (including C1, bidi formatting, zero-width space,
+BOM, and Unicode line/paragraph separators) are rejected before trimming.
+Ordinary Unicode, emoji, literal markup, tabs, and newline/carriage returns remain
+permitted. The merged offer is validated before publication, including preserved
+fields from earlier saves. Settings uses “Add shipping protection” as its label
+placeholder; custom copy renders as “Add shipping protection — $X.XX”, while blank
+copy retains the localized default sentence. The fee cannot be removed by
+copy editing. Server and checkout acceptance are checked through shared fixtures. Follow
 [legal copy rules](legal-product.md#changing-customer-facing-copy).
 
 Potential pricing models for future work:

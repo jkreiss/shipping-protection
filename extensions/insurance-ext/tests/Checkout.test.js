@@ -13,6 +13,7 @@ import {
 } from "@shopify/ui-extensions-tester/checkout";
 import {
   calculateRoundedFee,
+  deliveryEligibility,
   protectionAttributes,
   reconstructQuote,
 } from "../src/shipping-protection";
@@ -252,15 +253,506 @@ function setOffer(offer) {
 
 beforeEach(() => {
   extension.setUp();
+  // Preserve the host boundary, including reactive cart/config/capability updates.
+  makeReactive(extension.shopify.lines);
+  makeReactive(extension.shopify.appMetafields);
+  makeReactive(extension.shopify.instructions);
+  makeReactive(extension.shopify.deliveryGroups);
+  extension.shopify.applyCartLinesChange = successfulMutation;
+});
+
+/** @template T @param {{value: T}} host */
+function makeReactive(host) {
+  const value = signal(host.value);
+  Object.defineProperty(host, "value", {
+    configurable: true,
+    get: () => value.value,
+    set: (next) => {
+      value.value = next;
+    },
+  });
+}
+
+describe("checkout cleanup and recovery regressions", () => {
+  async function mount() {
+    await act(async () => {
+      await renderExtension();
+    });
+    await act(async () => {});
+  }
+
+  /** @param {number} milliseconds */
+  async function advance(milliseconds) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(milliseconds);
+    });
+    await act(async () => {});
+  }
+
+  function uncheck() {
+    const checkbox = requireCheckbox();
+    checkbox.checked = false;
+    fireEvent.change(checkbox);
+  }
+
+  function requireRetry() {
+    const button = document.querySelector("s-button");
+    if (!button) throw new Error("Expected Retry control");
+    return button;
+  }
+
+  test("no eligible merchandise is ineligible even when delivery groups are missing", () => {
+    expect(deliveryEligibility([], new Set())).toBe("ineligible");
+  });
+
+  test.each([
+    "last item removed",
+    "digital only",
+    "protection only",
+    "disabled",
+    "subscription",
+    "zero fee",
+  ])("removes protection during pending delivery: %s", async (state) => {
+    setCheckout({ lines: [merchandiseLine(), protectionLine()] });
+    extension.shopify.deliveryGroups.value = [];
+    await mount();
+    expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+    await act(async () => {
+      if (state === "disabled")
+        extension.shopify.appMetafields.value = [
+          appMetafield(configuration({ enabled: false })),
+        ];
+      else
+        extension.shopify.lines.value = [
+          ...(state === "last item removed" || state === "protection only"
+            ? []
+            : [
+                merchandiseLine({
+                  requiresShipping: state !== "digital only",
+                  sellingPlan: state === "subscription",
+                  amount: state === "zero fee" ? 0.24 : 100,
+                }),
+              ]),
+          protectionLine(),
+        ];
+    });
+    await waitFor(() =>
+      expect(
+        extension.shopify.lines.value.filter(
+          (line) => line.merchandise.id === PROTECTION_ID,
+        ),
+      ).toHaveLength(0),
+    );
+    expect(document.querySelector("s-checkbox")).toBeNull();
+  });
+
+  test.each(["canAddCartLine", "canUpdateCartLine"])(
+    "permission loss preserves selected protection: %s",
+    async (permission) => {
+      setCheckout({ lines: [merchandiseLine(), protectionLine()] });
+      await mount();
+      await act(() => {
+        extension.shopify.instructions.value = {
+          ...extension.shopify.instructions.value,
+          lines: {
+            ...extension.shopify.instructions.value.lines,
+            [permission]: false,
+          },
+        };
+      });
+      expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+      expect(extension.shopify.lines.value).toHaveLength(2);
+    },
+  );
+
+  test("pickup removal failure keeps the actual fee and recovery control visible", async () => {
+    vi.useFakeTimers();
+    setCheckout({
+      lines: [merchandiseLine(), protectionLine({ amount: 1.5 })],
+      deliveryType: "pickup",
+    });
+    extension.shopify.i18n.formatCurrency = (amount) => `$${amount}`;
+    extension.shopify.i18n.translate =
+      /** @type {typeof extension.shopify.i18n.translate} */ (
+        (key, options) =>
+          key === "removeProtection"
+            ? `Shipping protection — ${options?.fee}`
+            : key
+      );
+    const apply = vi
+      .fn()
+      .mockResolvedValue({ type: "error", message: "failed" });
+    extension.shopify.applyCartLinesChange = apply;
+    await mount();
+    expect(requireCheckbox().getAttribute("label")).toContain("$1.5");
+    expect(document.body.textContent).toContain("protectionUnavailable");
+    expect(document.body.textContent).toContain("mutationError");
+    await advance(249);
+    expect(apply).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(apply).toHaveBeenCalledTimes(2);
+    await advance(999);
+    expect(apply).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(apply).toHaveBeenCalledTimes(3);
+    await advance(5000);
+    expect(apply).toHaveBeenCalledTimes(3);
+    extension.shopify.applyCartLinesChange = successfulMutation;
+    await act(async () => {
+      fireEvent.click(requireRetry());
+    });
+    await advance(0);
+    expect(extension.shopify.lines.value).toHaveLength(1);
+    expect(document.querySelector("s-banner")).toBeNull();
+  });
+
+  test("unavailable removal is explained and resumes when capability recovers", async () => {
+    setCheckout({
+      lines: [merchandiseLine(), protectionLine()],
+      deliveryType: "pickup",
+    });
+    extension.shopify.instructions.value = {
+      ...extension.shopify.instructions.value,
+      lines: {
+        ...extension.shopify.instructions.value.lines,
+        canRemoveCartLine: false,
+      },
+    };
+    await mount();
+    expect(requireCheckbox().hasAttribute("disabled")).toBe(true);
+    expect(document.body.textContent).toContain("removalUnavailable");
+    await act(async () => {
+      extension.shopify.instructions.value = {
+        ...extension.shopify.instructions.value,
+        lines: {
+          ...extension.shopify.instructions.value.lines,
+          canRemoveCartLine: true,
+        },
+      };
+    });
+    await waitFor(() => expect(extension.shopify.lines.value).toHaveLength(1));
+  });
+
+  test("unchecking removes every protection line using IDs refreshed after each mutation", async () => {
+    setCheckout({
+      lines: [
+        merchandiseLine(),
+        protectionLine(),
+        protectionLine({ id: "duplicate" }),
+      ],
+    });
+    extension.shopify.applyCartLinesChange = vi
+      .fn()
+      .mockResolvedValue({ type: "error", message: "failed" });
+    await mount();
+    await act(async () => {
+      extension.shopify.applyCartLinesChange = async (change) => {
+        const result = await successfulMutation(change);
+        extension.shopify.lines.value = extension.shopify.lines.value.map(
+          (line) => ({ ...line, id: `${line.id}-changed` }),
+        );
+        return result;
+      };
+      uncheck();
+      uncheck();
+    });
+    await waitFor(() => expect(extension.shopify.lines.value).toHaveLength(1));
+    await waitFor(() => expect(requireCheckbox().checked).toBe(false));
+  });
+
+  test("partial buyer removal failure retains selection until Retry removes the remainder", async () => {
+    vi.useFakeTimers();
+    setCheckout({
+      lines: [
+        merchandiseLine(),
+        protectionLine(),
+        protectionLine({ id: "duplicate", amount: 0 }),
+      ],
+    });
+    const apply = vi
+      .fn()
+      .mockResolvedValue({ type: "error", message: "failed" });
+    extension.shopify.applyCartLinesChange = apply;
+    await mount();
+    apply.mockImplementationOnce(successfulMutation);
+    await act(async () => {
+      uncheck();
+    });
+    await advance(250);
+    await advance(1000);
+    expect(extension.shopify.lines.value).toHaveLength(2);
+    expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+    expect(document.body.textContent).toContain("mutationError");
+    extension.shopify.applyCartLinesChange = successfulMutation;
+    await act(async () => {
+      fireEvent.click(requireRetry());
+    });
+    await advance(0);
+    expect(extension.shopify.lines.value).toHaveLength(1);
+    expect(document.querySelector("s-banner")).toBeNull();
+  });
+
+  test.each(["returned error", "rejection", "synchronous throw"])(
+    "releases the runner and recovers from %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      setCheckout({
+        lines: [merchandiseLine(), protectionLine({ quantity: 3 })],
+      });
+      const apply = vi.fn((change) => {
+        if (apply.mock.calls.length > 1) return successfulMutation(change);
+        if (failure === "synchronous throw") throw new Error("failed");
+        if (failure === "rejection") return Promise.reject(new Error("failed"));
+        return Promise.resolve(
+          createResult("applyCartLinesChange", {
+            type: "error",
+            message: "failed",
+          }),
+        );
+      });
+      extension.shopify.applyCartLinesChange = apply;
+      await mount();
+      expect(requireCheckbox().hasAttribute("disabled")).toBe(false);
+      await advance(250);
+      expect(extension.shopify.lines.value[1].quantity).toBe(1);
+      expect(document.querySelector("s-banner")).toBeNull();
+    },
+  );
+
+  test("a new rule resets failed reconciliation and writes its current contract", async () => {
+    vi.useFakeTimers();
+    setCheckout({
+      lines: [merchandiseLine(), protectionLine({ quantity: 3 })],
+    });
+    extension.shopify.applyCartLinesChange = vi
+      .fn()
+      .mockResolvedValue({ type: "error", message: "failed" });
+    await mount();
+    await advance(250);
+    await advance(1000);
+    const next = configuration({
+      ruleId: "rule-2",
+      ruleVersion: 2,
+      rateBasisPoints: 40,
+    });
+    extension.shopify.applyCartLinesChange = successfulMutation;
+    await act(async () => {
+      extension.shopify.appMetafields.value = [appMetafield(next)];
+    });
+    expect(extension.shopify.lines.value[1].attributes).toEqual(
+      protectionAttributes(next),
+    );
+    expect(document.querySelector("s-banner")).toBeNull();
+  });
+
+  test("successful mutations wait for published cart changes before further cleanup", async () => {
+    vi.useFakeTimers();
+    setCheckout({
+      lines: [
+        merchandiseLine(),
+        protectionLine(),
+        protectionLine({ id: "duplicate" }),
+      ],
+      deliveryType: "pickup",
+    });
+    const apply = vi
+      .fn()
+      .mockResolvedValue(createResult("applyCartLinesChange"));
+    extension.shopify.applyCartLinesChange = apply;
+    await mount();
+    await advance(5000);
+    expect(apply).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      extension.shopify.lines.value = [
+        merchandiseLine(),
+        protectionLine({ id: "fresh" }),
+      ];
+    });
+    expect(apply).toHaveBeenCalledTimes(2);
+    expect(apply.mock.calls[1][0].id).toBe("gid://shopify/CartLine/fresh");
+  });
+
+  test.each(["buyer removes", "rule changes", "capabilities change"])(
+    "acknowledged success waits for cart publication when %s",
+    async (change) => {
+      vi.useFakeTimers();
+      setCheckout({
+        lines: [merchandiseLine(), protectionLine({ quantity: 3 })],
+      });
+      const apply = vi
+        .fn()
+        .mockResolvedValue(createResult("applyCartLinesChange"));
+      extension.shopify.applyCartLinesChange = apply;
+      await mount();
+      await act(async () => {
+        if (change === "buyer removes") uncheck();
+        else if (change === "rule changes")
+          extension.shopify.appMetafields.value = [
+            appMetafield(configuration({ ruleId: "rule-2", ruleVersion: 2 })),
+          ];
+        else
+          extension.shopify.instructions.value = {
+            ...extension.shopify.instructions.value,
+            lines: {
+              ...extension.shopify.instructions.value.lines,
+              canAddCartLine: false,
+            },
+          };
+      });
+      await advance(5000);
+      expect(apply).toHaveBeenCalledTimes(1);
+      // Once the host publishes the first result, the current action can run.
+      extension.shopify.applyCartLinesChange = successfulMutation;
+      await act(async () => {
+        extension.shopify.lines.value = [
+          merchandiseLine(),
+          protectionLine({ id: "published" }),
+        ];
+      });
+      expect(extension.shopify.lines.value).toHaveLength(
+        change === "buyer removes" ? 1 : 2,
+      );
+      if (change === "rule changes")
+        expect(extension.shopify.lines.value[1].attributes[0].value).toBe(
+          "rule-2",
+        );
+    },
+  );
+
+  test.each(["add", "remove", "update"])(
+    "an unrelated cart update does not repeat an acknowledged %s",
+    async (operation) => {
+      vi.useFakeTimers();
+      setCheckout({
+        lines: [
+          merchandiseLine(),
+          ...(operation === "add"
+            ? []
+            : [protectionLine({ quantity: operation === "update" ? 3 : 1 })]),
+        ],
+        deliveryType: operation === "remove" ? "pickup" : "shipping",
+      });
+      const apply = vi
+        .fn()
+        .mockResolvedValue(createResult("applyCartLinesChange"));
+      extension.shopify.applyCartLinesChange = apply;
+      await mount();
+      if (operation === "add")
+        await act(async () => {
+          const checkbox = requireCheckbox();
+          checkbox.checked = true;
+          fireEvent.change(checkbox);
+        });
+      await act(async () => {
+        extension.shopify.lines.value = [
+          merchandiseLine({ amount: 200 }),
+          ...extension.shopify.lines.value.filter(
+            (line) => line.merchandise.id === PROTECTION_ID,
+          ),
+        ];
+      });
+      await advance(5000);
+      expect(apply).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await successfulMutation(apply.mock.calls[0][0]);
+      });
+      expect(apply).toHaveBeenCalledTimes(1);
+      expect(document.querySelector("s-banner")).toBeNull();
+    },
+  );
+
+  test("unmount cancels automatic retries", async () => {
+    vi.useFakeTimers();
+    setCheckout({
+      lines: [merchandiseLine(), protectionLine({ quantity: 3 })],
+    });
+    const apply = vi
+      .fn()
+      .mockResolvedValue({ type: "error", message: "failed" });
+    extension.shopify.applyCartLinesChange = apply;
+    await mount();
+    await act(() => {
+      render(null, document.body);
+    });
+    await advance(5000);
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  test("cart satisfaction cancels obsolete retry and clears its error", async () => {
+    vi.useFakeTimers();
+    setCheckout({
+      lines: [merchandiseLine(), protectionLine({ quantity: 3 })],
+    });
+    const apply = vi
+      .fn()
+      .mockResolvedValue({ type: "error", message: "failed" });
+    extension.shopify.applyCartLinesChange = apply;
+    await mount();
+    await act(async () => {
+      extension.shopify.lines.value = [merchandiseLine(), protectionLine()];
+    });
+    await advance(5000);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("s-banner")).toBeNull();
+  });
 });
 
 afterEach(() => {
   render(null, document.body);
   extension.tearDown();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+/** @param {import("@shopify/ui-extensions/checkout").CartLineChange} change */
+async function successfulMutation(change) {
+  const lines = extension.shopify.lines.value;
+  if (change.type === "removeCartLine") {
+    if (!lines.some(({ id }) => id === change.id))
+      throw new Error("Stale cart ID");
+    extension.shopify.lines.value = lines.filter(({ id }) => id !== change.id);
+  } else if (change.type === "updateCartLine") {
+    extension.shopify.lines.value = lines.map((line) =>
+      line.id === change.id
+        ? {
+            ...line,
+            quantity: change.quantity ?? line.quantity,
+            attributes: change.attributes ?? line.attributes,
+          }
+        : line,
+    );
+  } else {
+    extension.shopify.lines.value = [...lines, protectionLine()];
+  }
+  return createResult("applyCartLinesChange");
+}
+
 describe("shipping protection quote", () => {
+  test.each(["9007199254740992", "90071992547409.91"])(
+    "refuses a final fee that cannot safely retain its minor units: %s",
+    (amount) => {
+      expect(calculateRoundedFee([amount], 10000, 2)).toBeNull();
+    },
+  );
+
+  // Deferred by scope: type/title is not a unique discount identity.
+  test.fails(
+    "DEFERRED: distinct same-titled line and order discounts preserve the pre-discount fee",
+    () => {
+      const orderDiscount = {
+        type: "automatic",
+        title: "Automatic discount",
+        discountedAmount: { amount: 10, currencyCode: "USD" },
+      };
+      expect(
+        reconstructQuote(
+          [merchandiseLine({ amount: 80, discounts: [20] })],
+          configuration(),
+          [orderDiscount],
+        ),
+      ).toEqual({ amount: 0.25, currencyCode: "USD" });
+    },
+  );
   test("reconstructs the pre-discount quote from totals and allocations", () => {
     const quote = reconstructQuote(
       [merchandiseLine({ amount: 80, discounts: [15, 5] })],
@@ -374,7 +866,8 @@ describe("shipping protection checkout UI", () => {
 
   test("renders arbitrary merchant wording and markup as literal text", async () => {
     setCheckout();
-    const supportingText = "Lost or damaged packages.\n<script>alert(1)</script>";
+    const supportingText =
+      "Lost or damaged packages.\n<script>alert(1)</script>";
     setOffer({
       checkboxLabel: "Protect my parcel < $5",
       supportingText,
@@ -694,9 +1187,7 @@ describe("shipping protection checkout UI", () => {
         return deliveryGroups.value;
       },
     };
-    const applyCartLinesChange = vi
-      .fn()
-      .mockResolvedValue(createResult("applyCartLinesChange"));
+    const applyCartLinesChange = vi.fn(successfulMutation);
     extension.shopify.applyCartLinesChange = applyCartLinesChange;
     await renderExtension();
 
@@ -713,7 +1204,9 @@ describe("shipping protection checkout UI", () => {
       deliveryGroups.value = [deliveryGroup([physical.id], "pickup")];
     });
 
-    expect(document.body.querySelector("s-checkbox")).toBeNull();
+    await waitFor(() =>
+      expect(document.body.querySelector("s-checkbox")).toBeNull(),
+    );
     await waitFor(() => {
       expect(applyCartLinesChange).toHaveBeenCalledWith({
         type: "removeCartLine",
@@ -733,13 +1226,13 @@ describe("shipping protection checkout UI", () => {
       lines: [physical, protection],
       deliveryType: /** @type {DeliveryType} */ (type),
     });
-    const applyCartLinesChange = vi
-      .fn()
-      .mockResolvedValue(createResult("applyCartLinesChange"));
+    const applyCartLinesChange = vi.fn(successfulMutation);
     extension.shopify.applyCartLinesChange = applyCartLinesChange;
     await renderExtension();
 
-    expect(document.body.querySelector("s-checkbox")).toBeNull();
+    await waitFor(() =>
+      expect(document.body.querySelector("s-checkbox")).toBeNull(),
+    );
     await waitFor(() => {
       expect(applyCartLinesChange).toHaveBeenCalledWith({
         type: "removeCartLine",

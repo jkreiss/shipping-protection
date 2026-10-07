@@ -33,10 +33,7 @@ export async function updateCheckoutOffer(
     shopDomain,
     async () => {
       const settings = await getShopConfiguration(shopDomain, { database });
-      if (
-        ("checkboxLabel" in validated || "supportingText" in validated) &&
-        settings.protectionCopyEditable !== true
-      ) {
+      if (settings.protectionCopyEditable !== true) {
         throw new UserFacingError(
           "This store's checkout offer setting is managed by the app operator.",
         );
@@ -51,6 +48,9 @@ export async function updateCheckoutOffer(
         ),
         ...validated,
       };
+      if (!parseCheckoutOffer(offer)) {
+        throw new UserFacingError("Enter valid plain text for all checkout copy before saving.");
+      }
       // Publish first using Shopify's compare-and-set, then mirror the accepted
       // values locally. Reads use a valid live offer if the local save was interrupted.
       await writeJsonMetafield(
