@@ -63,17 +63,10 @@ describe("shared checkout contracts", () => {
               metafield("shipping_protection_offer", singleField),
             ),
           ).toEqual({ checkboxLabel: null, supportingText: null });
+          expect(() =>
+            validateCheckoutOfferChanges({ [field]: offer[field] }),
+          ).toThrow();
         }
-      }
-      if (
-        !valid &&
-        typeof checkboxLabel === "string" &&
-        checkboxLabel.includes("Protect")
-      ) {
-        expect(() => validateCheckoutOfferChanges({ checkboxLabel })).toThrow();
-        expect(() =>
-          validateCheckoutOfferChanges({ supportingText }),
-        ).toThrow();
       }
     },
   );

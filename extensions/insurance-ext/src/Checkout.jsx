@@ -109,10 +109,9 @@ export function ShippingProtection() {
           : false;
   // A new rule or recovered capability starts a fresh budget. The publication
   // gate is separate: unrelated changes cannot repeat an acknowledged write.
-  const cartFingerprint = JSON.stringify(lines);
   const reconciliationKey = JSON.stringify([
     configuration,
-    cartFingerprint,
+    lines,
     eligible,
     action,
     desiredSelection,

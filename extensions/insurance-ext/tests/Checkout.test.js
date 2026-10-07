@@ -301,6 +301,15 @@ describe("checkout cleanup and recovery regressions", () => {
     return button;
   }
 
+  /** @param {Partial<typeof extension.shopify.instructions.value.lines>} changes */
+  function setLinePermissions(changes) {
+    const current = extension.shopify.instructions.value;
+    extension.shopify.instructions.value = {
+      ...current,
+      lines: { ...current.lines, ...changes },
+    };
+  }
+
   test("no eligible merchandise is ineligible even when delivery groups are missing", () => {
     expect(deliveryEligibility([], new Set())).toBe("ineligible");
   });
@@ -352,13 +361,7 @@ describe("checkout cleanup and recovery regressions", () => {
       setCheckout({ lines: [merchandiseLine(), protectionLine()] });
       await mount();
       await act(() => {
-        extension.shopify.instructions.value = {
-          ...extension.shopify.instructions.value,
-          lines: {
-            ...extension.shopify.instructions.value.lines,
-            [permission]: false,
-          },
-        };
+        setLinePermissions({ [permission]: false });
       });
       expect(requireCheckbox().hasAttribute("checked")).toBe(true);
       expect(extension.shopify.lines.value).toHaveLength(2);
@@ -411,24 +414,12 @@ describe("checkout cleanup and recovery regressions", () => {
       lines: [merchandiseLine(), protectionLine()],
       deliveryType: "pickup",
     });
-    extension.shopify.instructions.value = {
-      ...extension.shopify.instructions.value,
-      lines: {
-        ...extension.shopify.instructions.value.lines,
-        canRemoveCartLine: false,
-      },
-    };
+    setLinePermissions({ canRemoveCartLine: false });
     await mount();
     expect(requireCheckbox().hasAttribute("disabled")).toBe(true);
     expect(document.body.textContent).toContain("removalUnavailable");
     await act(async () => {
-      extension.shopify.instructions.value = {
-        ...extension.shopify.instructions.value,
-        lines: {
-          ...extension.shopify.instructions.value.lines,
-          canRemoveCartLine: true,
-        },
-      };
+      setLinePermissions({ canRemoveCartLine: true });
     });
     await waitFor(() => expect(extension.shopify.lines.value).toHaveLength(1));
   });
@@ -590,14 +581,7 @@ describe("checkout cleanup and recovery regressions", () => {
           extension.shopify.appMetafields.value = [
             appMetafield(configuration({ ruleId: "rule-2", ruleVersion: 2 })),
           ];
-        else
-          extension.shopify.instructions.value = {
-            ...extension.shopify.instructions.value,
-            lines: {
-              ...extension.shopify.instructions.value.lines,
-              canAddCartLine: false,
-            },
-          };
+        else setLinePermissions({ canAddCartLine: false });
       });
       await advance(5000);
       expect(apply).toHaveBeenCalledTimes(1);
