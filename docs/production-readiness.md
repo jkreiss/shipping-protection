@@ -777,3 +777,17 @@ Temporary CLI validation for local and staging-template placeholders could not
 complete: Shopify returned “Cannot find a valid organization.” Production
 configuration validated successfully. Actual staging deployment, metafield
 confirmation, and checkout acceptance remain pending release actions.
+
+Disposable GitHub workflows verified the aggregate gate against
+[failed](https://github.com/jkreiss/shipping-protection/actions/runs/37695454424),
+[skipped](https://github.com/jkreiss/shipping-protection/actions/runs/37695454133), and
+[cancelled](https://github.com/jkreiss/shipping-protection/actions/runs/37695454119)
+dependencies. Each `verify` job failed and its observer passed. The deliberately
+failing fixtures were removed from the temporary branch before the final normal
+CI run; they are absent from the implementation branch.
+
+The [final normal CI run](https://github.com/jkreiss/shipping-protection/actions/runs/37695669892)
+passed `checks`, `docker`, and `verify` at `79ec988`. That temporary branch's
+application source matches implementation commit `e78c2c5`; the only difference
+is enabling CI on the disposable branch. No production/staging deployment or
+Railway/GitHub protection setting was changed.
