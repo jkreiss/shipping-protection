@@ -3,7 +3,7 @@ import prisma from "../app/db.server.js";
 import { persistNormalizedOrder } from "../app/order-ingestion.server.js";
 import { normalizeGraphqlOrder } from "../app/order-normalization.js";
 import { reconcileOrders } from "../app/order-reconciliation.server.js";
-import { redactShopData } from "../app/shop.server.js";
+import { redactCustomerOrders, redactShopData } from "../app/shop.server.js";
 
 const rollback = new Error("POSTGRES_VERIFICATION_ROLLBACK");
 const timestamp = new Date("2026-09-23T00:00:00.000Z");
@@ -312,6 +312,14 @@ try {
     }));
     await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT event_append_check');
     await transaction.$executeRawUnsafe('RELEASE SAVEPOINT event_append_check');
+    // Customer redaction removes only the named order in the requesting shop,
+    // including its confirmed purchase and append-only claim events.
+    assert.equal(await redactCustomerOrders(transaction, shop.shopDomain, [9001]), 1);
+    assert.equal(await transaction.order.count({ where: { id: paidOrder.id } }), 0);
+    assert.equal(await transaction.protectionPurchase.count({ where: { id: paidPurchase.id } }), 0);
+    assert.equal(await transaction.claimEvent.count({ where: { shopId: shop.id, claimId: claim.id } }), 0);
+    assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 1);
+    assert.equal(await transaction.order.count({ where: { id: otherOrder.id } }), 1);
     await redactShopData(transaction, shop.shopDomain);
     assert.equal(await transaction.shop.count({ where: { id: shop.id } }), 0);
     assert.equal(await transaction.order.count({ where: { shopId: shop.id } }), 0);
@@ -338,5 +346,5 @@ try {
 }
 
 console.log(
-  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, and event redaction.",
+  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, customer redaction, and event redaction.",
 );

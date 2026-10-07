@@ -53,6 +53,40 @@ export async function redactShopData(transaction, shopDomain) {
   await transaction.shop.deleteMany({ where: { shopDomain } });
 }
 
+export async function deleteCustomerOrders(shopDomain, orderIds) {
+  return prisma.$transaction((transaction) => redactCustomerOrders(transaction, shopDomain, orderIds));
+}
+
+// Erases the orders a customers/redact request names. Shopify sends numeric
+// order IDs; rows hold Admin GraphQL IDs. A malformed list is ignored rather
+// than retried, since a retry would carry the same payload. Returns the number
+// of orders deleted.
+export async function redactCustomerOrders(transaction, shopDomain, orderIds) {
+  const isOrderId = (id) => (Number.isSafeInteger(id) && id > 0) || (typeof id === "string" && /^[1-9]\d*$/.test(id));
+  if (!Array.isArray(orderIds) || orderIds.length === 0 || !orderIds.every(isOrderId)) return 0;
+  const shopifyOrderIds = orderIds.map((id) => `gid://shopify/Order/${id}`);
+
+  const shop = await transaction.shop.findUnique({ where: { shopDomain }, select: { id: true } });
+  if (!shop) return 0;
+  const orders = await transaction.order.findMany({
+    where: { shopId: shop.id, shopifyOrderId: { in: shopifyOrderIds } }, select: { id: true },
+  });
+  if (orders.length === 0) return 0;
+
+  const ids = { in: orders.map((order) => order.id) };
+  // Confirmed purchases and claim events reject ordinary deletes; this
+  // transaction-local setting permits privacy redaction only.
+  await transaction.$executeRawUnsafe("SET LOCAL app.allow_shop_redaction = 'on'");
+  await transaction.claimEvent.deleteMany({ where: { shopId: shop.id, claim: { protectionPurchase: { orderId: ids } } } });
+  await transaction.claim.deleteMany({ where: { shopId: shop.id, protectionPurchase: { orderId: ids } } });
+  await transaction.protectionRefund.deleteMany({ where: { shopId: shop.id, orderId: ids } });
+  await transaction.protectionPurchase.deleteMany({ where: { shopId: shop.id, orderId: ids } });
+  await transaction.orderLine.deleteMany({ where: { shopId: shop.id, orderId: ids } });
+  await transaction.order.deleteMany({ where: { shopId: shop.id, id: ids } });
+  await transaction.webhookDelivery.deleteMany({ where: { shopId: shop.id, shopifyOrderId: { in: shopifyOrderIds } } });
+  return orders.length;
+}
+
 // Records the scopes Shopify reports for an installation (app/scopes_update).
 // A payload without a list of scope names is ignored rather than retried, since
 // a retry would carry the same payload.

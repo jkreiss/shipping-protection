@@ -1,14 +1,21 @@
 import { authenticate } from "../shopify.server";
-import { deleteShopData } from "../shop.server";
+import { deleteCustomerOrders, deleteShopData } from "../shop.server";
 
 export const action = async ({ request }) => {
-  const { shop, topic } = await authenticate.webhook(request);
+  const { shop, topic, payload } = await authenticate.webhook(request);
 
   if (topic === "SHOP_REDACT") {
     await deleteShopData(shop);
   }
 
-  // Customer requests contain PII, but this app stores no customer data.
-  // Authentication above verifies the HMAC before this acknowledgement.
+  // The app stores no customer profile, only order records keyed by order ID,
+  // so erasing a customer means erasing the orders Shopify names.
+  if (topic === "CUSTOMERS_REDACT") {
+    await deleteCustomerOrders(shop, payload?.orders_to_redact);
+  }
+
+  // A data request needs nothing back: the stored order records hold no
+  // customer details. Authentication above verifies the HMAC before this
+  // acknowledgement.
   return new Response();
 };

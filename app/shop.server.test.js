@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { recordGrantedScopes, withShopSettingsLock } from "./shop.server";
+import { recordGrantedScopes, redactCustomerOrders, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
 
 function database() {
@@ -84,5 +84,74 @@ describe("settings lock", () => {
     const db = lockDatabase();
     await expect(withShopSettingsLock(undefined, async () => "x", { database: db })).rejects.toThrow("shop domain");
     expect(db.shop.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("customer redaction", () => {
+  function redactionDatabase() {
+    const deleted = () => vi.fn().mockResolvedValue({ count: 1 });
+    return {
+      shop: { findUnique: vi.fn().mockResolvedValue({ id: "shop-1" }) },
+      order: { findMany: vi.fn().mockResolvedValue([{ id: "order-1" }, { id: "order-2" }]), deleteMany: deleted() },
+      $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+      claimEvent: { deleteMany: deleted() },
+      claim: { deleteMany: deleted() },
+      protectionRefund: { deleteMany: deleted() },
+      protectionPurchase: { deleteMany: deleted() },
+      orderLine: { deleteMany: deleted() },
+      webhookDelivery: { deleteMany: deleted() },
+    };
+  }
+
+  test("deletes the named orders and everything recorded against them in that shop", async () => {
+    const db = redactionDatabase();
+    const redacted = await redactCustomerOrders(db, "one.myshopify.com", [1001, "1002"]);
+
+    expect(redacted).toBe(2);
+    const gids = ["gid://shopify/Order/1001", "gid://shopify/Order/1002"];
+    expect(db.shop.findUnique).toHaveBeenCalledWith({ where: { shopDomain: "one.myshopify.com" }, select: { id: true } });
+    expect(db.order.findMany).toHaveBeenCalledWith({
+      where: { shopId: "shop-1", shopifyOrderId: { in: gids } }, select: { id: true },
+    });
+    expect(db.$executeRawUnsafe).toHaveBeenCalledWith("SET LOCAL app.allow_shop_redaction = 'on'");
+    const orders = { in: ["order-1", "order-2"] };
+    expect(db.claimEvent.deleteMany).toHaveBeenCalledWith({
+      where: { shopId: "shop-1", claim: { protectionPurchase: { orderId: orders } } },
+    });
+    expect(db.claim.deleteMany).toHaveBeenCalledWith({ where: { shopId: "shop-1", protectionPurchase: { orderId: orders } } });
+    for (const table of [db.protectionRefund, db.protectionPurchase, db.orderLine]) {
+      expect(table.deleteMany).toHaveBeenCalledWith({ where: { shopId: "shop-1", orderId: orders } });
+    }
+    expect(db.order.deleteMany).toHaveBeenCalledWith({ where: { shopId: "shop-1", id: orders } });
+    expect(db.webhookDelivery.deleteMany).toHaveBeenCalledWith({
+      where: { shopId: "shop-1", shopifyOrderId: { in: gids } },
+    });
+  });
+
+  test("does nothing when the shop holds none of the named orders", async () => {
+    const db = redactionDatabase();
+    db.order.findMany.mockResolvedValue([]);
+    expect(await redactCustomerOrders(db, "one.myshopify.com", [1001])).toBe(0);
+    expect(db.$executeRawUnsafe).not.toHaveBeenCalled();
+    expect(db.order.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test("does nothing for an unknown shop", async () => {
+    const db = redactionDatabase();
+    db.shop.findUnique.mockResolvedValue(null);
+    expect(await redactCustomerOrders(db, "gone.myshopify.com", [1001])).toBe(0);
+    expect(db.order.findMany).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["empty", []],
+    ["not a list", "1001"],
+    ["not order IDs", [1001, "gid://shopify/Order/1002"]],
+    ["fractional", [10.5]],
+  ])("ignores a payload whose order list is %s", async (_name, orderIds) => {
+    const db = redactionDatabase();
+    expect(await redactCustomerOrders(db, "one.myshopify.com", orderIds)).toBe(0);
+    expect(db.shop.findUnique).not.toHaveBeenCalled();
   });
 });
