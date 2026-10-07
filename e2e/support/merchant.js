@@ -204,7 +204,7 @@ export class Merchant {
     await expect(
       this.frame.getByRole("button", { name: "Save rate", exact: true }),
     ).toBeEnabled();
-    await expect(this.frame.getByText("Active", { exact: true })).toBeVisible();
+    await expect(this.frame.getByText("Ready", { exact: true })).toBeVisible();
     return this.rate();
   }
   async verifyTestGateway() {
