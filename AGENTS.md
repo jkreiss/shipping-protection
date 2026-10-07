@@ -9,7 +9,8 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 - Shopify is authoritative for commerce records; the application database owns application state. Frontend events are funnel analytics, never financial truth.
 - Keep secrets and privileged operations server-side. Treat external input, including AI output, as untrusted.
 - Preserve financial idempotency and historical auditability. Changes must never block checkout.
-- Do not invent legal/compliance guarantees or sell/gate existing Australian Consumer Law remedies as protection. Customer-facing copy uses “shipping protection” unless legal review confirms otherwise.
+- The initial release is for US stores. US copy may offer protection for stolen, damaged, and undelivered packages. Australian stores come later with their own wording and settings; for them, never sell or gate existing Australian Consumer Law remedies as protection.
+- Do not invent legal/compliance guarantees. Customer-facing copy uses “shipping protection” unless legal review confirms otherwise.
 
 ## Keeping docs current
 

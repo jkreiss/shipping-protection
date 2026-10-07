@@ -35,7 +35,7 @@ as text with no rate form. Enforce the restriction server-side.
 Copy has its own operator-controlled editing permission.
 Locked stores see current values without the corresponding form. Enforce both
 permissions server-side, and preserve the other settings when saving one editor.
-Blank copy fields restore translated defaults; always show the fee and store
+Blank copy fields restore the defaults; always show the fee and store
 disclosure. The placement instructions use Settings → Checkout → Configure →
 Edit and suggest placing the block directly under “Shipping method”.
 
@@ -52,7 +52,7 @@ reserve "Finish setup" for stores whose setup actually needs attention.
 Copy:
 
 - plain language merchants understand, with no basis points or internal jargon
-- never imply protection covers what Australian Consumer Law already requires
+- for Australian stores (later), never imply protection covers what Australian Consumer Law already requires
 
 Components:
 
