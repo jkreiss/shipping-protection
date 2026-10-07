@@ -70,7 +70,7 @@ Settings groups pricing and customer-facing text in one **Checkout offer** block
 Checkout requires customers to choose protection themselves. Blank copy fields
 restore the default wording. Copy editing accepts any wording, punctuation, and
 line breaks as plain text (label up to 120 characters, supporting text up to
-500). The fee and store disclosure remain visible.
+500). The fee always appears beside the label.
 
 Lock or allow each editor separately for an installed store from an operator
 shell with database access:

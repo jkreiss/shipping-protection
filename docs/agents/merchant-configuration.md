@@ -120,8 +120,8 @@ revert what customers see. Pricing/setup publication does not touch this
 metafield. Authorized editors can use any wording, punctuation, and line breaks
 as literal plain text (label up to 120 characters, supporting text up to 500).
 There is no required phrase or blocked-word list. Blank fields restore defaults;
-unsupported control characters are rejected. The fee and store
-disclosure cannot be removed by copy editing. Follow
+unsupported control characters are rejected. The fee cannot be removed by
+copy editing. Follow
 [legal copy rules](legal-product.md#changing-customer-facing-copy).
 
 Potential pricing models for future work:

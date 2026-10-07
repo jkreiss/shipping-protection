@@ -233,7 +233,7 @@ export function ShippingProtection() {
         onChange={onCheckboxChange}
       />
       <s-text color="subdued" type="small">
-        {offer.supportingText ?? shopify.i18n.translate("supportingText")}{" "}
+        {offer.supportingText ?? shopify.i18n.translate("supportingText")}
       </s-text>
     </s-stack>
   );

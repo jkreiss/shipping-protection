@@ -348,7 +348,7 @@ describe("shipping protection checkout UI", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  test("uses merchant copy while keeping the fee and store disclosure visible", async () => {
+  test("uses merchant copy while keeping the fee visible", async () => {
     setCheckout();
     setOffer({
       checkboxLabel: "Choose shipping protection",
@@ -360,7 +360,6 @@ describe("shipping protection checkout UI", () => {
           ({
             checkboxLabel: "Add shipping protection",
             supportingText: "Covers packages stolen after delivery.",
-            merchantDisclosure: "Optional add-on from this store.",
           })[key] ?? key
       );
     extension.shopify.i18n.formatCurrency = () => "$0.25";
@@ -368,11 +367,8 @@ describe("shipping protection checkout UI", () => {
     expect(requireCheckbox().getAttribute("label")).toBe(
       "Choose shipping protection — $0.25",
     );
-    expect(document.body.textContent).toContain(
+    expect(document.querySelector("s-text")?.textContent).toBe(
       "For packages stolen after delivery.",
-    );
-    expect(document.body.textContent).toContain(
-      "Optional add-on from this store.",
     );
   });
 
@@ -388,9 +384,8 @@ describe("shipping protection checkout UI", () => {
     expect(requireCheckbox().getAttribute("label")).toBe(
       "Protect my parcel < $5 — $0.25",
     );
-    expect(document.body.textContent).toContain(supportingText);
+    expect(document.querySelector("s-text")?.textContent).toBe(supportingText);
     expect(document.querySelector("script")).toBeNull();
-    expect(document.body.textContent).toContain("merchantDisclosure");
   });
 
   test.each(["no delivery groups", "no selected option", "rates loading"])(

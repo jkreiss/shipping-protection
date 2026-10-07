@@ -17,8 +17,8 @@ where cart-line removal is available.
 The offer requires manual opt-in. Per-store Settings can customize the label
 and supporting text through the separate app-owned Shop JSON metafield
 `$app.shipping_protection_offer`. Setup repair, rate changes, and turning
-protection off preserve these settings. The fee and store disclosure always
-appear. Blank text uses the defaults in `locales/en.default.json`.
+protection off preserve these settings. The fee always appears beside the
+label. Blank text uses the defaults in `locales/en.default.json`.
 
 The offer is hidden for digital-only carts, subscriptions, direct store pickup,
 zero-rounded fees, invalid configuration, or checkouts that cannot mutate cart

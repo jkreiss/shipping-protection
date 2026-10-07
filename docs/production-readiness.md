@@ -57,7 +57,8 @@ operator-controlled editing permissions. Checkout requires manual opt-in.
 The offer payload contains only its schema version, checkbox label, and
 supporting text.
 
-The store disclosure is rendered separately so a custom field cannot remove it.
+The fee is rendered beside the label, so a custom field cannot remove it. There
+is no separate store disclosure.
 
 Local verification: all 391 tests passed, along with `npm run lint`,
 `npm run typecheck`, `npm run build`, Prisma client generation, and
@@ -76,12 +77,12 @@ during the local migration status check, so applied migration state was not
 verified and neither migration was run here.
 Deploy the Shopify app version (`npm run deploy`) as well as the web app: the
 extension must request `$app.shipping_protection_offer` and include the new
-copy rendering and disclosure locale key. No live release or store update
+copy rendering. No live release or store update
 has been verified for this change.
 
 After deployment, verify one store with each editor locked and another with all
 editors available. Test manual opt-in, untick/removal, default copy reset, custom
-copy with the fee/disclosure visible, direct pickup, and a failed cart mutation.
+copy with the fee visible, direct pickup, and a failed cart mutation.
 Confirm that rate changes, setup repair, and protection
 off/on preserve the offer settings. Open **Settings → Checkout → Configure →
 Edit** and place the block directly under **Shipping method**; verify Shop Pay
