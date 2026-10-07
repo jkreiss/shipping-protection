@@ -13,7 +13,7 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 
 ## Codex workspaces
 
-- Create Codex Git worktrees under `.codex/worktrees/<task-name>` in the repository root. Use this location instead of sibling directories.
+- Create Codex Git worktrees as sibling directories in the parent `yasas` directory, using `../insurance-<task-name>` relative to this repository root. Keep worktrees outside this repository so Shopify CLI does not discover conflicting app configurations during type checking or releases.
 - Reuse the current worktree when already working in one; do not create nested worktrees.
 - After merging, remove Codex-created worktrees only when they are clean and their commits are merged. Preserve other agents' worktrees and unfinished work.
 
