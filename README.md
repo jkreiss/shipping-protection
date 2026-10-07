@@ -311,12 +311,16 @@ duplicate deliveries, failed processing and recovery, uninstall and reinstall,
 and merchant-local date filters. Verify `/healthz`, worker completion, Shopify
 delivery logs, Sentry alerts, and reconciliation. Keep real customer charges
 disabled until approved protection terms and a defined claims process exist.
-`npm audit --omit=dev` currently reports four high advisories, all from
-`deepmerge-ts` under `prisma` → `@prisma/config` (assessed 2026-10-01). That
-code runs only in the Prisma CLI while it loads this repository's own
+`npm audit --omit=dev` currently reports ten high advisories (assessed
+2026-10-07). Four come from `deepmerge-ts` under `prisma` → `@prisma/config`.
+That code runs only in the Prisma CLI while it loads this repository's own
 configuration (for example `prisma migrate deploy`); the Prisma client the app
 runs does not include it, and no request input reaches it. npm's suggested fix
-is a Prisma downgrade, so leave it until Prisma ships a patched release.
+is a Prisma downgrade, so leave it until Prisma ships a patched release. The
+other six come from `braces` under `@shopify/ui-extensions` → `ts-morph`, the
+extension type tooling; none of it is in the server build, and the fix is a
+major `@shopify/ui-extensions` upgrade. `compression` and `source-map-js` were
+updated to their patched versions on 2026-10-07.
 
 **To do (no custom domain yet):** once the app has its production domain, create
 a Sentry Uptime monitor on `https://<domain>/healthz` that alerts the operator on
