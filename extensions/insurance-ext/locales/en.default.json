@@ -1,5 +1,6 @@
 {
   "checkboxLabel": "Add shipping protection for {{fee}}",
-  "supportingText": "Covers packages stolen after delivery. Optional add-on from this store.",
-  "mutationError": "Shipping protection could not be updated. Please try again."
+  "supportingText": "Covers packages stolen after delivery.",
+  "mutationError": "Shipping protection could not be updated. Please try again.",
+  "merchantDisclosure": "Optional add-on from this store."
 }

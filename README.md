@@ -46,8 +46,9 @@ rule, shop metafield, and Cart Transform. It first checks for a Shopify Plus
 plan and Cart Transform `updateOperation` eligibility. The only implemented
 attachment strategy is `CHECKOUT_UI_CART_TRANSFORM`.
 
-After deploying an app version, add the block to the order summary in Checkout
-Editor and save; it offers protection before an address is entered. Shop Pay
+After deploying an app version, open **Settings → Checkout → Configure → Edit**,
+add the Shipping Protection block, and save. Place it under **Shipping method**;
+it offers protection before an address is entered. Shop Pay
 activation is separate. The backend cannot confirm
 the block was placed, so place a test order. See the [checkout extension
 README](extensions/insurance-ext/README.md) for eligibility and activation.
@@ -58,12 +59,28 @@ variant on one of the shop's pricing rules. A legacy metafield without a rule,
 or a rule left on a replaced product, fails the "Pricing is linked to the
 current protection product" check until **Update protection setup** is run.
 
-## Rate editing
+## Checkout offer settings
 
-`ShopConfiguration.protectionRateEditable` (default `true`) controls whether a
-store can change its rate. Locked stores see their rate without a form, and the
-server rejects changes. Edit the row directly, or use the command, which takes
-the settings lock and refuses unknown or uninstalled stores:
+Settings groups pricing and customer-facing text in one **Checkout offer** block.
+Checkout requires customers to choose protection themselves. Blank copy fields
+restore the translated defaults; custom plain text applies to every checkout
+language. The fee and store disclosure remain visible. Copy names shipping
+protection and may describe only the current theft-after-delivery benefit.
+
+Lock or allow each editor separately for an installed store from an operator
+shell with database access:
+
+```shell
+npm run merchant:checkout-editing -- store.myshopify.com pricing locked
+npm run merchant:checkout-editing -- store.myshopify.com copy locked
+```
+
+Use `locked` or `editable` for either setting. Both permissions default on. Permission changes
+preserve the store's saved offer and rate, and merchant requests cannot change
+the permissions. See [release notes](docs/production-readiness.md#checkout-offer-settings-2026-10-07)
+for the required migration and Shopify extension deployment.
+
+The existing pricing-only command remains available:
 
 ```shell
 npm run merchant:rate-editing -- store.myshopify.com locked

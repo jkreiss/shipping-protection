@@ -1,5 +1,6 @@
 const CONFIG_NAMESPACE = "$app";
 const CONFIG_KEY = "shipping_protection_config";
+const OFFER_KEY = "shipping_protection_offer";
 const CONFIG_BASIS = "SHIPPABLE_PRE_DISCOUNT";
 const RATE_BASIS_POINTS = 25;
 const MIN_RATE_BASIS_POINTS = 1;
@@ -208,6 +209,53 @@ export function currencyMinorUnits(currencyCode) {
 }
 
 /**
+ * @typedef {{checkboxLabel: string | null, supportingText: string | null}} CheckoutOffer
+ * @param {CheckoutAppMetafield[]} appMetafields
+ * @returns {CheckoutOffer}
+ */
+export function readCheckoutOffer(appMetafields) {
+  const fallback = {
+    checkboxLabel: null,
+    supportingText: null,
+  };
+  const entry = appMetafields.find(
+    ({ target, metafield }) =>
+      target.type === "shop" &&
+      metafield.namespace === CONFIG_NAMESPACE &&
+      metafield.key === OFFER_KEY,
+  );
+  if (!entry) return fallback;
+  try {
+    const offer = JSON.parse(entry.metafield.value);
+    const validCopy = (
+      /** @type {unknown} */ value,
+      /** @type {number} */ limit,
+    ) =>
+      value === null ||
+      (typeof value === "string" &&
+        value.length > 0 &&
+        value.length <= limit &&
+        !/[<>]/.test(value) &&
+        [...value].every(
+          (character) =>
+            character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+        ));
+    if (
+      offer?.schemaVersion !== 1 ||
+      !validCopy(offer.checkboxLabel, 120) ||
+      !validCopy(offer.supportingText, 500)
+    )
+      return fallback;
+    return {
+      checkboxLabel: offer.checkboxLabel,
+      supportingText: offer.supportingText,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * @param {string[]} amounts
  * @param {number} rateBasisPoints
  * @param {number} minorUnits
@@ -292,7 +340,9 @@ export function reconstructQuote(
   );
   if (eligibleLines.length === 0) return null;
 
-  const orderDiscounts = new Set(orderDiscountAllocations.map(discountIdentity));
+  const orderDiscounts = new Set(
+    orderDiscountAllocations.map(discountIdentity),
+  );
   const currencyCode = eligibleLines[0].cost.totalAmount.currencyCode;
   /** @type {string[]} */
   const amounts = [];

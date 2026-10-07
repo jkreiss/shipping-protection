@@ -36,6 +36,7 @@ export function resolveConfiguration(
     strategy,
     protectionEnabled: strategy !== "NONE",
     protectionRateEditable: settings?.protectionRateEditable === true,
+    protectionCopyEditable: settings?.protectionCopyEditable === true,
     reasons,
     merchantActivationRequired: strategy === "CHECKOUT_UI_CART_TRANSFORM",
     coverage: {

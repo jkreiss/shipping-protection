@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { setProtectionRateEditing } from "./rate-editing.server.js";
+import {
+  setProtectionRateEditing,
+  setProtectionEditing,
+} from "./rate-editing.server.js";
 
 // Exercise the real per-shop settings lock against an in-memory database boundary.
 function database() {
@@ -64,6 +67,29 @@ function database() {
 }
 
 describe("operator rate editing configuration", () => {
+  test("locks copy for one tenant and rejects preselection editing", async () => {
+    const db = database();
+    await expect(
+      setProtectionEditing("one.myshopify.com", "preselection", false, {
+        database: db,
+      }),
+    ).rejects.toThrow();
+    await setProtectionEditing("one.myshopify.com", "copy", false, {
+      database: db,
+    });
+    expect(db.configurations.get("one")).toMatchObject({
+      protectionRateEditable: true,
+      protectionCopyEditable: false,
+    });
+    expect(db.configurations.get("two")).not.toHaveProperty(
+      "protectionCopyEditable",
+    );
+    await expect(
+      setProtectionEditing("one.myshopify.com", "protectionEnabled", true, {
+        database: db,
+      }),
+    ).rejects.toThrow();
+  });
   test("locks one store, preserves its setup, and leaves another store editable", async () => {
     const db = database();
     await setProtectionRateEditing("one.myshopify.com", false, {

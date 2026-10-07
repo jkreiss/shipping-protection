@@ -99,6 +99,34 @@ sets access for one installed store from a trusted operator shell with database
 credentials. Operator access changes use the same per-shop settings lock as rate
 publishing. Setup updates preserve the permission and the existing rate.
 
+### Checkout offer
+
+`ShopConfiguration.protectionCopyEditable` is an operator-controlled permission,
+defaulting true. `protectionCheckboxLabel` and `protectionSupportingText` are
+nullable plain text, where null uses translated checkout defaults. Resolve the
+copy editor permission in `resolveConfiguration` and enforce it in
+`updateCheckoutOffer` before Shopify publication. Merchant form fields cannot
+grant editing access.
+
+`npm run merchant:checkout-editing -- store.myshopify.com pricing|copy locked|editable`
+sets one editing permission using the per-shop settings lock. It preserves all
+saved offer settings and rejects unknown or uninstalled stores.
+
+Both `main` and `rsa/pretick` retain `protectionPreselectionEditable` (default true)
+and `protectionPreselected` (default false) in the same schema and migration. On
+`main`, there is no selection editor, server update action, operator command, or
+automatic checkout selection. Copy publication preserves the version-1 offer's
+preselection flag for branch compatibility, and does not write the database's
+preselection setting. The checkout block ignores that flag.
+
+Offer updates use that same lock and Shopify compare-and-set to publish the
+separate `$app.shipping_protection_offer` Shop JSON metafield, then mirror the
+accepted values locally. A valid published offer is used when reading Settings
+and when merging subsequent updates, so an interrupted local save does not
+revert what customers see. Pricing/setup publication does not touch this
+metafield. The fee and translated store disclosure cannot be removed by copy
+editing. Follow [legal copy rules](legal-product.md#changing-customer-facing-copy).
+
 Potential pricing models for future work:
 
 - fixed fee

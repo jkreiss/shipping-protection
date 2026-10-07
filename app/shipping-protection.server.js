@@ -13,6 +13,7 @@ import { ensureInstalledShop, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
 import { disableShopProtection, enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
+import { checkoutOfferForSettings } from "./merchant/checkout-offer.server";
 import {
   loadCore, loadProduct, findProduct, buildChecks, writeJsonMetafield,
   disableKnownConfiguration, repairProduct, ensureTransform, activateProduct,
@@ -96,6 +97,7 @@ export async function readShippingProtectionState(admin, shopDomain) {
     ready: healthReady,
     protectionOff,
     configuration,
+    checkoutOffer: checkoutOfferForSettings(settings, core.shop.checkoutOffer?.jsonValue),
     capabilities,
     configuredStrategy: settings.attachmentStrategy,
     checks,

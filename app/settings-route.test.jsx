@@ -6,10 +6,13 @@ const mocks = vi.hoisted(() => ({
   readShippingProtectionState: vi.fn(),
   setupShippingProtection: vi.fn(),
   reportFailure: vi.fn(),
+  updateCheckoutOffer: vi.fn(),
 }));
 
 vi.mock("./shopify.server", () => ({
-  authenticate: { admin: async () => ({ admin: {}, session: { shop: "one.myshopify.com" } }) },
+  authenticate: {
+    admin: async () => ({ admin: {}, session: { shop: "one.myshopify.com" } }),
+  },
 }));
 vi.mock("./shipping-protection.server", () => ({
   activatePricingRule: mocks.activatePricingRule,
@@ -17,7 +20,12 @@ vi.mock("./shipping-protection.server", () => ({
   readShippingProtectionState: mocks.readShippingProtectionState,
   setupShippingProtection: mocks.setupShippingProtection,
 }));
-vi.mock("./observability.server", () => ({ reportFailure: mocks.reportFailure }));
+vi.mock("./observability.server", () => ({
+  reportFailure: mocks.reportFailure,
+}));
+vi.mock("./merchant/checkout-offer.server", () => ({
+  updateCheckoutOffer: mocks.updateCheckoutOffer,
+}));
 
 import { action } from "./routes/app.settings";
 import { UserFacingError } from "./user-facing-error";
@@ -25,7 +33,12 @@ import { UserFacingError } from "./user-facing-error";
 function submit(fields) {
   const body = new FormData();
   for (const [key, value] of Object.entries(fields)) body.set(key, value);
-  return action({ request: new Request("https://app.example/app/settings", { method: "POST", body }) });
+  return action({
+    request: new Request("https://app.example/app/settings", {
+      method: "POST",
+      body,
+    }),
+  });
 }
 
 beforeEach(() => {
@@ -34,40 +47,114 @@ beforeEach(() => {
 });
 
 describe("settings errors", () => {
+  test("asks the merchant to check live state after an interrupted offer save", async () => {
+    mocks.updateCheckoutOffer.mockRejectedValueOnce(
+      new Error("Database unavailable after publication"),
+    );
+    mocks.readShippingProtectionState.mockResolvedValue({
+      checkoutOffer: { checkboxLabel: "Choose shipping protection" },
+    });
+    const result = await submit({
+      intent: "update-copy",
+      checkboxLabel: "Choose shipping protection",
+      supportingText: "After-delivery theft.",
+    });
+    expect(result.state.checkoutOffer.checkboxLabel).toBe(
+      "Choose shipping protection",
+    );
+    expect(result.error).toContain("Refresh");
+    expect(result.error).not.toContain("weren't saved");
+    expect(result.success).toBeUndefined();
+  });
   test("shows a message written for merchants", async () => {
-    mocks.setupShippingProtection.mockRejectedValue(new UserFacingError("Set up protection before changing the rate."));
+    mocks.setupShippingProtection.mockRejectedValue(
+      new UserFacingError("Set up protection before changing the rate."),
+    );
     const result = await submit({ intent: "setup" });
     expect(result.error).toBe("Set up protection before changing the rate.");
     expect(mocks.reportFailure).not.toHaveBeenCalled();
   });
 
   test("explains an invalid rate without calling Shopify", async () => {
-    const result = await submit({ intent: "update-rate", ratePercent: "1.234" });
+    const result = await submit({
+      intent: "update-rate",
+      ratePercent: "1.234",
+    });
     expect(result.error).toContain("at most two decimal places");
     expect(mocks.activatePricingRule).not.toHaveBeenCalled();
   });
 
   test("hides internal error details and reports them", async () => {
-    const internal = new Error("Field 'cartTransformCreate' doesn't exist; postgres://user:pw@host");
+    const internal = new Error(
+      "Field 'cartTransformCreate' doesn't exist; postgres://user:pw@host",
+    );
     mocks.setupShippingProtection.mockRejectedValue(internal);
     const result = await submit({ intent: "setup" });
     expect(result.error).not.toContain("cartTransformCreate");
     expect(result.error).toContain("weren't saved");
-    expect(mocks.reportFailure).toHaveBeenCalledWith("settings_action_failed", internal, {
-      shop: "one.myshopify.com", intent: "setup",
-    });
+    expect(mocks.reportFailure).toHaveBeenCalledWith(
+      "settings_action_failed",
+      internal,
+      {
+        shop: "one.myshopify.com",
+        intent: "setup",
+      },
+    );
   });
 });
 
 describe("protection on/off settings", () => {
+  test("rejects preselection requests without publishing checkout changes", async () => {
+    const result = await submit({
+      intent: "update-preselection",
+      preselected: "true",
+      protectionPreselectionEditable: "true",
+    });
+    expect(result.error).toBe("Unknown settings action.");
+    expect(result.success).toBeUndefined();
+    expect(mocks.updateCheckoutOffer).not.toHaveBeenCalled();
+  });
+
+  test("passes only copy fields and displays a server permission denial", async () => {
+    mocks.updateCheckoutOffer.mockRejectedValueOnce(
+      new UserFacingError("This store's checkout copy is managed for you."),
+    );
+    const result = await submit({
+      intent: "update-copy",
+      checkboxLabel: "Choose shipping protection",
+      supportingText: "After-delivery theft.",
+      protectionCopyEditable: "true",
+      preselected: "true",
+    });
+    expect(result.error).toContain("managed");
+    expect(result.success).toBeUndefined();
+    expect(mocks.updateCheckoutOffer).toHaveBeenCalledWith(
+      {},
+      "one.myshopify.com",
+      {
+        checkboxLabel: "Choose shipping protection",
+        supportingText: "After-delivery theft.",
+      },
+    );
+  });
+
   test("turns protection off for the authenticated shop, ignoring a submitted shop", async () => {
     const state = { protectionOff: true };
     mocks.disableShippingProtection.mockResolvedValue(state);
 
-    const result = await submit({ intent: "disable", shop: "two.myshopify.com" });
+    const result = await submit({
+      intent: "disable",
+      shop: "two.myshopify.com",
+    });
 
-    expect(result).toMatchObject({ state, success: expect.stringContaining("turned off") });
-    expect(mocks.disableShippingProtection).toHaveBeenCalledWith({}, "one.myshopify.com");
+    expect(result).toMatchObject({
+      state,
+      success: expect.stringContaining("turned off"),
+    });
+    expect(mocks.disableShippingProtection).toHaveBeenCalledWith(
+      {},
+      "one.myshopify.com",
+    );
     expect(mocks.setupShippingProtection).not.toHaveBeenCalled();
     expect(mocks.activatePricingRule).not.toHaveBeenCalled();
   });
@@ -78,14 +165,24 @@ describe("protection on/off settings", () => {
 
     const result = await submit({ intent: "enable" });
 
-    expect(result).toMatchObject({ state, success: expect.stringContaining("turned on") });
-    expect(mocks.setupShippingProtection).toHaveBeenCalledWith({}, "one.myshopify.com");
+    expect(result).toMatchObject({
+      state,
+      success: expect.stringContaining("turned on"),
+    });
+    expect(mocks.setupShippingProtection).toHaveBeenCalledWith(
+      {},
+      "one.myshopify.com",
+    );
     expect(mocks.activatePricingRule).not.toHaveBeenCalled();
   });
 
   test("reports a failed turn-off without claiming success", async () => {
-    mocks.disableShippingProtection.mockRejectedValue(new Error("Shopify unavailable"));
-    mocks.readShippingProtectionState.mockResolvedValue({ protectionOff: false });
+    mocks.disableShippingProtection.mockRejectedValue(
+      new Error("Shopify unavailable"),
+    );
+    mocks.readShippingProtectionState.mockResolvedValue({
+      protectionOff: false,
+    });
 
     const result = await submit({ intent: "disable" });
 

@@ -1,6 +1,12 @@
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "preact/hooks";
 import {
   actualProtectionTotal,
   containsSellingPlan,
@@ -10,6 +16,7 @@ import {
   protectionAttributes,
   protectionAttributesMatch,
   readConfiguration,
+  readCheckoutOffer,
   reconciledProtectionAttributes,
   reconstructQuote,
 } from "./shipping-protection";
@@ -29,10 +36,13 @@ export function ShippingProtection() {
     [appMetafields],
   );
   const [busy, setBusy] = useState(false);
+  const offer = useMemo(
+    () => readCheckoutOffer(appMetafields),
+    [appMetafields],
+  );
   const [mutationFailed, setMutationFailed] = useState(false);
   const mutationLock = useRef(false);
   const attemptedReconciliation = useRef(/** @type {string | null} */ (null));
-
   const currentProtectionLines = useMemo(
     () =>
       configuration ? protectionLines(lines, configuration.variantId) : [],
@@ -77,6 +87,45 @@ export function ShippingProtection() {
     )
     .join("|");
 
+  const changeSelection = useCallback(
+    async (/** @type {boolean} */ desiredChecked) => {
+      if (!configuration || mutationLock.current) return;
+      mutationLock.current = true;
+      setBusy(true);
+      setMutationFailed(false);
+      try {
+        const latest = protectionLines(
+          shopify.lines.value,
+          configuration.variantId,
+        );
+        let result;
+        if (desiredChecked) {
+          if (latest.length > 0) return;
+          result = await shopify.applyCartLinesChange({
+            type: "addCartLine",
+            merchandiseId: configuration.variantId,
+            quantity: 1,
+            attributes: protectionAttributes(configuration),
+          });
+        } else {
+          if (latest.length === 0) return;
+          result = await shopify.applyCartLinesChange({
+            type: "removeCartLine",
+            id: latest[0].id,
+            quantity: latest[0].quantity,
+          });
+        }
+        if (result.type === "error") setMutationFailed(true);
+      } catch {
+        setMutationFailed(true);
+      } finally {
+        mutationLock.current = false;
+        setBusy(false);
+      }
+    },
+    [configuration],
+  );
+
   useEffect(() => {
     if (!configuration || mutationLock.current) return;
 
@@ -104,10 +153,7 @@ export function ShippingProtection() {
       shouldOffer &&
       currentProtectionLines.length === 1 &&
       (currentProtectionLines[0].quantity !== 1 ||
-        !protectionAttributesMatch(
-          currentProtectionLines[0],
-          configuration,
-        )) &&
+        !protectionAttributesMatch(currentProtectionLines[0], configuration)) &&
       instructions.canUpdateCartLine
     ) {
       updateTarget = currentProtectionLines[0];
@@ -137,10 +183,7 @@ export function ShippingProtection() {
         type: "updateCartLine",
         id: updateTarget.id,
         quantity: 1,
-        attributes: reconciledProtectionAttributes(
-          updateTarget,
-          configuration,
-        ),
+        attributes: reconciledProtectionAttributes(updateTarget, configuration),
       });
     } else {
       return;
@@ -156,6 +199,7 @@ export function ShippingProtection() {
         setBusy(false);
       });
   }, [
+    busy,
     configuration,
     currentProtectionLines,
     delivery,
@@ -166,7 +210,6 @@ export function ShippingProtection() {
   ]);
 
   if (!shouldOffer || !configuration || !displayedFee) return null;
-  const activeConfiguration = configuration;
 
   const formattedFee = shopify.i18n.formatCurrency(displayedFee.amount, {
     currency: displayedFee.currencyCode,
@@ -182,11 +225,16 @@ export function ShippingProtection() {
       <s-checkbox
         checked={checked}
         disabled={busy}
-        label={shopify.i18n.translate("checkboxLabel", { fee: formattedFee })}
+        label={
+          offer.checkboxLabel
+            ? `${offer.checkboxLabel} — ${formattedFee}`
+            : shopify.i18n.translate("checkboxLabel", { fee: formattedFee })
+        }
         onChange={onCheckboxChange}
       />
       <s-text color="subdued" type="small">
-        {shopify.i18n.translate("supportingText")}
+        {offer.supportingText ?? shopify.i18n.translate("supportingText")}{" "}
+        {shopify.i18n.translate("merchantDisclosure")}
       </s-text>
     </s-stack>
   );
@@ -201,43 +249,6 @@ export function ShippingProtection() {
     const desiredChecked = target.checked;
     if (desiredChecked === checked) return;
 
-    mutationLock.current = true;
-    setBusy(true);
-    setMutationFailed(false);
-
-    try {
-      let result;
-      if (desiredChecked) {
-        const alreadyPresent = protectionLines(
-          shopify.lines.value,
-          activeConfiguration.variantId,
-        );
-        if (alreadyPresent.length > 0) return;
-        result = await shopify.applyCartLinesChange({
-          type: "addCartLine",
-          merchandiseId: activeConfiguration.variantId,
-          quantity: 1,
-          attributes: protectionAttributes(activeConfiguration),
-        });
-      } else {
-        const latest = protectionLines(
-          shopify.lines.value,
-          activeConfiguration.variantId,
-        )[0];
-        if (!latest) return;
-        result = await shopify.applyCartLinesChange({
-          type: "removeCartLine",
-          id: latest.id,
-          quantity: latest.quantity,
-        });
-      }
-
-      if (result.type === "error") setMutationFailed(true);
-    } catch {
-      setMutationFailed(true);
-    } finally {
-      mutationLock.current = false;
-      setBusy(false);
-    }
+    await changeSelection(desiredChecked);
   }
 }

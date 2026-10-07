@@ -27,3 +27,7 @@ default_placement = "ORDER_SUMMARY4"
 [[extensions.metafields]]
 namespace = "$app"
 key = "shipping_protection_config"
+
+[[extensions.metafields]]
+namespace = "$app"
+key = "shipping_protection_offer"

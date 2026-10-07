@@ -14,10 +14,18 @@ selected. It stays visible while shipping rates reload after address changes.
 Choosing direct store pickup hides the offer and removes any protection line
 where cart-line removal is available.
 
-The offer is never preselected. It is hidden for digital-only carts,
-subscriptions, direct store pickup, zero-rounded fees, invalid configuration,
-or checkouts that cannot mutate cart lines. Existing protection lines are the
-source of consent and are reconciled to one unit.
+The offer requires manual opt-in. Per-store Settings can customize the label
+and supporting text through the separate app-owned Shop JSON metafield
+`$app.shipping_protection_offer`. Setup repair, rate changes, and turning
+protection off preserve these settings. The fee and translated store disclosure
+always appear. Blank text uses the translated defaults; custom text appears in
+every language. This branch ignores any published preselection flag.
 
-After deploying an app version, add the block to the order summary and save it
-in the Checkout Editor. Shop Pay activation is configured separately.
+The offer is hidden for digital-only carts, subscriptions, direct store pickup,
+zero-rounded fees, invalid configuration, or checkouts that cannot mutate cart
+lines. Existing protection lines determine selection state and are reconciled
+to one unit.
+
+After deploying an app version, open Settings → Checkout → Configure → Edit,
+add the block, and save. Place it directly under the block labeled
+“Shipping method”. Shop Pay activation is configured separately.

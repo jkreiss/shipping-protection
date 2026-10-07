@@ -8,12 +8,27 @@ export async function setProtectionRateEditing(
   editable,
   { database = prisma } = {},
 ) {
+  return setProtectionEditing(shopDomain, "pricing", editable, { database });
+}
+
+const EDITING_FIELDS = {
+  pricing: "protectionRateEditable",
+  copy: "protectionCopyEditable",
+};
+
+export async function setProtectionEditing(
+  shopDomain,
+  setting,
+  editable,
+  { database = prisma } = {},
+) {
   if (
     typeof shopDomain !== "string" ||
     !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(
       shopDomain,
     ) ||
-    typeof editable !== "boolean"
+    typeof editable !== "boolean" ||
+    !Object.hasOwn(EDITING_FIELDS, setting)
   ) {
     throw new UserFacingError(
       "Use a myshopify.com store domain and a boolean editing permission.",
@@ -25,16 +40,17 @@ export async function setProtectionRateEditing(
   });
   if (!shop || shop.installationState !== "INSTALLED") {
     throw new UserFacingError(
-      "Choose an installed store before changing rate-editing access.",
+      "Choose an installed store before changing checkout editing access.",
     );
   }
+  const field = EDITING_FIELDS[setting];
   return withShopSettingsLock(
     shopDomain,
     () =>
       database.shopConfiguration.upsert({
         where: { shopId: shop.id },
-        create: { shopId: shop.id, protectionRateEditable: editable },
-        update: { protectionRateEditable: editable },
+        create: { shopId: shop.id, [field]: editable },
+        update: { [field]: editable },
       }),
     { database },
   );

@@ -230,6 +230,27 @@ function requireCheckbox() {
   return checkbox;
 }
 
+/** @param {Partial<import("../src/shipping-protection").CheckoutOffer> & {preselected?: boolean}} offer */
+function setOffer(offer) {
+  extension.shopify.appMetafields.value = [
+    ...extension.shopify.appMetafields.value,
+    {
+      ...appMetafield(),
+      metafield: {
+        ...appMetafield().metafield,
+        key: "shipping_protection_offer",
+        value: JSON.stringify({
+          schemaVersion: 1,
+          preselected: false,
+          checkboxLabel: null,
+          supportingText: null,
+          ...offer,
+        }),
+      },
+    },
+  ];
+}
+
 beforeEach(() => {
   extension.setUp();
 });
@@ -262,6 +283,104 @@ describe("shipping protection quote", () => {
 });
 
 describe("shipping protection checkout UI", () => {
+  test("keeps checkout opt-in even when a published offer has a preselection flag", async () => {
+    setCheckout();
+    setOffer({
+      preselected: true,
+      checkboxLabel: "Choose shipping protection",
+    });
+    const apply = vi
+      .fn()
+      .mockResolvedValue(createResult("applyCartLinesChange"));
+    extension.shopify.applyCartLinesChange = apply;
+    await act(async () => {
+      await renderExtension();
+    });
+    await act(async () => {});
+    expect(requireCheckbox().hasAttribute("checked")).toBe(false);
+    expect(requireCheckbox().getAttribute("label")).toContain(
+      "Choose shipping protection",
+    );
+    await act(async () => {
+      render(null, document.body);
+    });
+    await act(async () => {
+      await renderExtension();
+    });
+    expect(requireCheckbox().hasAttribute("checked")).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+  });
+  test.each([
+    {
+      schemaVersion: 9,
+      preselected: true,
+      checkboxLabel: null,
+      supportingText: null,
+    },
+    {
+      schemaVersion: 1,
+      preselected: "true",
+      checkboxLabel: null,
+      supportingText: null,
+    },
+    {
+      schemaVersion: 1,
+      preselected: true,
+      checkboxLabel: "<b>Shipping protection</b>",
+      supportingText: null,
+    },
+  ])("uses opt-in defaults for malformed offer data: %j", async (offer) => {
+    setCheckout();
+    extension.shopify.appMetafields.value = [
+      ...extension.shopify.appMetafields.value,
+      {
+        ...appMetafield(),
+        metafield: {
+          ...appMetafield().metafield,
+          key: "shipping_protection_offer",
+          value: JSON.stringify(offer),
+        },
+      },
+    ];
+    const apply = vi
+      .fn()
+      .mockResolvedValue(createResult("applyCartLinesChange"));
+    extension.shopify.applyCartLinesChange = apply;
+    await renderExtension();
+    await act(async () => {});
+    expect(requireCheckbox().hasAttribute("checked")).toBe(false);
+    expect(requireCheckbox().getAttribute("label")).toBe("checkboxLabel");
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  test("uses merchant copy while keeping the fee and store disclosure visible", async () => {
+    setCheckout();
+    setOffer({
+      checkboxLabel: "Choose shipping protection",
+      supportingText: "For packages stolen after delivery.",
+    });
+    extension.shopify.i18n.translate =
+      /** @type {typeof extension.shopify.i18n.translate} */ (
+        (key) =>
+          ({
+            checkboxLabel: "Add shipping protection",
+            supportingText: "Covers packages stolen after delivery.",
+            merchantDisclosure: "Optional add-on from this store.",
+          })[key] ?? key
+      );
+    extension.shopify.i18n.formatCurrency = () => "$0.25";
+    await renderExtension();
+    expect(requireCheckbox().getAttribute("label")).toBe(
+      "Choose shipping protection — $0.25",
+    );
+    expect(document.body.textContent).toContain(
+      "For packages stolen after delivery.",
+    );
+    expect(document.body.textContent).toContain(
+      "Optional add-on from this store.",
+    );
+  });
+
   test.each(["no delivery groups", "no selected option", "rates loading"])(
     "offers protection before an address is entered: %s",
     async (state) => {
@@ -366,7 +485,7 @@ describe("shipping protection checkout UI", () => {
         attributes: protectionAttributes(configuration()),
       });
     });
-    expect(applyCartLinesChange).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(applyCartLinesChange).toHaveBeenCalledTimes(1));
   });
 
   test("derives checked state and displayed fee from the existing line", async () => {
@@ -419,7 +538,7 @@ describe("shipping protection checkout UI", () => {
     fireEvent.change(checkbox);
     fireEvent.change(checkbox);
 
-    expect(applyCartLinesChange).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(applyCartLinesChange).toHaveBeenCalledTimes(1));
     resolveMutation(createResult("applyCartLinesChange"));
     await waitFor(() => expect(checkbox.hasAttribute("disabled")).toBe(false));
   });
@@ -529,8 +648,11 @@ describe("shipping protection checkout UI", () => {
   test("keeps protection visible and allows removal while delivery options reload", async () => {
     const protection = protectionLine();
     setCheckout({ lines: [merchandiseLine(), protection] });
-    extension.shopify.deliveryGroups.value = extension.shopify.deliveryGroups.value
-      .map((group) => ({ ...group, selectedDeliveryOption: undefined }));
+    extension.shopify.deliveryGroups.value =
+      extension.shopify.deliveryGroups.value.map((group) => ({
+        ...group,
+        selectedDeliveryOption: undefined,
+      }));
     const applyCartLinesChange = vi
       .fn()
       .mockResolvedValue(createResult("applyCartLinesChange"));

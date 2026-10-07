@@ -50,6 +50,44 @@ the offer takes real customer money.
 | Emergency shutdown | [Settings](../app/routes/app.settings.jsx) supports setup and rate changes, with no disable action. Transform deletion exists only inside setup repair. | **Launch blocker until a full shutdown procedure is rehearsed.** Use section 6; do not assume a disable button exists. |
 | Dependency risk | Non-breaking fixes applied 2026-10-01 (`qs`/`express`, `morgan`) and 2026-10-07 (`compression`, `source-map-js`). As of 2026-10-07, `npm audit --omit=dev` reports ten high advisories, none in the server runtime: four from `deepmerge-ts` in the Prisma CLI's config loader (`prisma` → `@prisma/config`), which only reads this repository's own config and whose suggested fix is a Prisma downgrade; six from `braces` in extension type tooling (`@shopify/ui-extensions` → `ts-morph`), whose fix is a major `@shopify/ui-extensions` upgrade. | Re-run `npm audit --omit=dev` for the release SHA and record any new findings. |
 
+### Checkout offer settings (2026-10-07)
+
+Settings on `main` groups pricing and public checkout copy, with separate
+operator-controlled editing permissions. Checkout remains manual opt-in even
+when a published offer has a preselection flag. Pretick controls and automatic
+selection are isolated on `rsa/pretick`. Both branches retain exactly the same
+Prisma schema and `20261007000000_checkout_offer_settings` migration, including
+the unused preselection columns on `main`. Copy updates preserve the existing
+version-1 offer flag without changing the database's preselection value.
+
+Checkout text defaults retain the same English/French meaning; the store
+disclosure is rendered separately so a custom field cannot remove it. The
+protection product description is unchanged.
+
+Local verification on `main`: all 396 tests passed, along with `npm run lint`,
+`npm run typecheck`, `npm run build`, and `npx prisma validate`. The full suite
+required permission to open its local mock Shopify server listener. Regressions
+cover opt-in with a published preselection flag, rejected preselection actions,
+copy permissions, and an interrupted local save after Shopify publication.
+This evidence does not verify a live checkout or migration.
+
+Before releasing this change, apply migration
+`20261007000000_checkout_offer_settings` using `npx prisma migrate deploy` against
+the intended environment and generate the Prisma client as part of the build.
+Deploy the Shopify app version (`npm run deploy`) as well as the web app: the
+extension must request `$app.shipping_protection_offer` and include the new
+copy rendering and disclosure locale key. No live release or store update
+has been verified for this change.
+
+After deployment, verify one store with each editor locked and another with all
+editors available. Test manual opt-in, untick/removal, a saved preselection flag
+being ignored, default copy reset, custom copy with the fee/disclosure visible,
+direct pickup, and a
+failed cart mutation. Confirm that rate changes, setup repair, and protection
+off/on preserve the offer settings. Open **Settings → Checkout → Configure →
+Edit** and place the block directly under **Shipping method**; verify Shop Pay
+separately. Keep legal review of public text as a separate release requirement.
+
 ### Settings that need live verification
 
 | System | Required evidence | Owner |

@@ -90,6 +90,10 @@ export async function loadCore(admin) {
             jsonValue
             compareDigest
           }
+          checkoutOffer: metafield(namespace: "$app", key: "shipping_protection_offer") {
+            jsonValue
+            compareDigest
+          }
         }
         publications(first: 50) {
           nodes {

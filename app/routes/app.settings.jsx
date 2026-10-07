@@ -15,6 +15,12 @@ import {
 } from "../shipping-protection.server";
 import { UserFacingError } from "../user-facing-error";
 import { reportFailure } from "../observability.server";
+import { updateCheckoutOffer } from "../merchant/checkout-offer.server";
+import {
+  DEFAULT_CHECKBOX_LABEL,
+  DEFAULT_SUPPORTING_TEXT,
+  MERCHANT_DISCLOSURE,
+} from "../merchant/checkout-offer";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -26,7 +32,11 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (!["setup", "update-rate", "enable", "disable"].includes(String(intent))) {
+  if (
+    !["setup", "update-rate", "update-copy", "enable", "disable"].includes(
+      String(intent),
+    )
+  ) {
     return {
       state: await readShippingProtectionState(admin, session.shop),
       error: "Unknown settings action.",
@@ -34,6 +44,16 @@ export const action = async ({ request }) => {
   }
 
   try {
+    if (intent === "update-copy") {
+      await updateCheckoutOffer(admin, session.shop, {
+        checkboxLabel: formData.get("checkboxLabel"),
+        supportingText: formData.get("supportingText"),
+      });
+      return {
+        state: await readShippingProtectionState(admin, session.shop),
+        success: "Checkout copy updated.",
+      };
+    }
     if (intent === "disable") {
       return {
         state: await disableShippingProtection(admin, session.shop),
@@ -55,9 +75,10 @@ export const action = async ({ request }) => {
 
     return {
       state: await setupShippingProtection(admin, session.shop),
-      success: intent === "enable"
-        ? "Shipping protection is turned on."
-        : "Shipping protection is set up.",
+      success:
+        intent === "enable"
+          ? "Shipping protection is turned on."
+          : "Shipping protection is set up.",
     };
   } catch (error) {
     const userFacing = error instanceof UserFacingError;
@@ -79,7 +100,9 @@ export const action = async ({ request }) => {
         ? error.message
         : intent === "disable"
           ? "Couldn't finish turning off shipping protection. Refresh to check its status, then try again."
-          : "Something went wrong and your settings weren't saved. Try again in a few minutes.",
+          : intent === "update-copy"
+            ? "Couldn't confirm the checkout offer update. Refresh to check its current settings, then try again."
+            : "Something went wrong and your settings weren't saved. Try again in a few minutes.",
     };
   }
 };
@@ -96,8 +119,10 @@ export default function Settings() {
   const supported =
     state.capabilities.checkoutUiSupported &&
     state.capabilities.cartTransformUpdateSupported;
-  const failingChecks = state.checks.filter((check) =>
-    !check.ok && (!off || !["checkoutConfig", "transformConfig"].includes(check.id)),
+  const failingChecks = state.checks.filter(
+    (check) =>
+      !check.ok &&
+      (!off || !["checkoutConfig", "transformConfig"].includes(check.id)),
   );
   const hasExistingSetup = Boolean(
     state.product ||
@@ -105,8 +130,15 @@ export default function Settings() {
     (state.configuredStrategy && state.configuredStrategy !== "NONE"),
   );
   const needsSetup = !off && (!active || failingChecks.length > 0);
-  const canTurnOff = !off && (active || state.configuredStrategy === "CHECKOUT_UI_CART_TRANSFORM");
+  const canTurnOff =
+    !off &&
+    (active || state.configuredStrategy === "CHECKOUT_UI_CART_TRANSFORM");
   const rateEditable = state.configuration.protectionRateEditable === true;
+  const copyEditable = state.configuration.protectionCopyEditable === true;
+  const offer = state.checkoutOffer ?? {
+    checkboxLabel: null,
+    supportingText: null,
+  };
   const currentPercent = state.pricing
     ? basisPointsToPercent(state.pricing.rateBasisPoints)
     : "0.25";
@@ -122,7 +154,8 @@ export default function Settings() {
     statusMessage =
       "Update protection setup to make the offer ready for checkout.";
   } else {
-    statusMessage = "Set up shipping protection, then add its block to checkout.";
+    statusMessage =
+      "Set up shipping protection, then add its block to checkout.";
   }
 
   useEffect(() => {
@@ -178,10 +211,12 @@ export default function Settings() {
                 ))}
               </s-unordered-list>
             </s-stack>
-          ) : !off && (
-            <s-text color="subdued">
-              The protection product and checkout pricing are ready.
-            </s-text>
+          ) : (
+            !off && (
+              <s-text color="subdued">
+                The protection product and checkout pricing are ready.
+              </s-text>
+            )
           )}
 
           {needsSetup && (
@@ -201,11 +236,16 @@ export default function Settings() {
 
           {(off || canTurnOff) && (
             <fetcher.Form method="post">
-              <input type="hidden" name="intent" value={off ? "enable" : "disable"} />
+              <input
+                type="hidden"
+                name="intent"
+                value={off ? "enable" : "disable"}
+              />
               <s-stack direction="block" gap="base">
                 <s-paragraph color="subdued">
-                  Existing orders keep their purchased protection. Your saved rate
-                  and checkout block stay in place when protection is turned off.
+                  Existing orders keep their purchased protection. Your saved
+                  rate and checkout block stay in place when protection is
+                  turned off.
                 </s-paragraph>
                 <s-stack direction="inline" gap="base">
                   <s-button
@@ -214,7 +254,9 @@ export default function Settings() {
                     disabled={isSaving || (off && !supported)}
                     {...(isSaving ? { loading: true } : {})}
                   >
-                    {off ? "Turn on shipping protection" : "Turn off shipping protection"}
+                    {off
+                      ? "Turn on shipping protection"
+                      : "Turn off shipping protection"}
                   </s-button>
                 </s-stack>
               </s-stack>
@@ -223,74 +265,143 @@ export default function Settings() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Pricing">
-        {rateEditable ? (
-          <fetcher.Form method="post">
-            <input type="hidden" name="intent" value="update-rate" />
-            <s-stack direction="block" gap="base">
-              <s-number-field
-                key={currentPercent}
-                label="Protection rate"
-                name="ratePercent"
-                suffix="%"
-                min={0.01}
-                max={100}
-                step={0.01}
-                inputMode="decimal"
-                value={currentPercent}
-                details="Percentage of the order's shippable merchandise, before discounts. For example, 1 means 1%."
-              />
-              <s-paragraph color="subdued">
-                A new rate applies to new checkouts only. Past orders keep the
-                rate they were charged.
-              </s-paragraph>
-              <s-stack direction="inline" gap="base">
-                <s-button
-                  variant="primary"
-                  type="submit"
-                  disabled={!active || isSaving}
-                  {...(isSaving ? { loading: true } : {})}
-                >
-                  Save rate
-                </s-button>
-              </s-stack>
-            </s-stack>
-          </fetcher.Form>
-        ) : (
+      <s-section heading="Checkout offer">
+        <s-stack direction="block" gap="large">
           <s-stack direction="block" gap="base">
-            {state.pricing ? (
+            <s-heading>Pricing</s-heading>
+            {rateEditable ? (
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value="update-rate" />
+                <s-stack direction="block" gap="base">
+                  <s-number-field
+                    key={currentPercent}
+                    label="Protection rate"
+                    name="ratePercent"
+                    suffix="%"
+                    min={0.01}
+                    max={100}
+                    step={0.01}
+                    inputMode="decimal"
+                    value={currentPercent}
+                    details="Percentage of the order's shippable merchandise, before discounts. For example, 1 means 1%."
+                  />
+                  <s-paragraph color="subdued">
+                    A new rate applies to new checkouts only. Past orders keep
+                    the rate they were charged.
+                  </s-paragraph>
+                  <s-stack direction="inline" gap="base">
+                    <s-button
+                      variant="primary"
+                      type="submit"
+                      disabled={!active || isSaving}
+                      {...(isSaving ? { loading: true } : {})}
+                    >
+                      Save rate
+                    </s-button>
+                  </s-stack>
+                </s-stack>
+              </fetcher.Form>
+            ) : (
+              <s-stack direction="block" gap="base">
+                {state.pricing ? (
+                  <>
+                    <s-text type="strong">
+                      Protection rate: {state.pricing.percentage}
+                    </s-text>
+                    <s-paragraph color="subdued">
+                      Percentage of the order&apos;s shippable merchandise,
+                      before discounts.
+                    </s-paragraph>
+                  </>
+                ) : (
+                  <s-paragraph>
+                    Your protection rate will appear after setup.
+                  </s-paragraph>
+                )}
+                <s-paragraph>
+                  This store&apos;s protection rate is managed for you.
+                </s-paragraph>
+              </s-stack>
+            )}
+          </s-stack>
+          <s-divider />
+          <s-stack direction="block" gap="base">
+            <s-heading>Customer-facing copy</s-heading>
+            {copyEditable ? (
+              <fetcher.Form
+                method="post"
+                key={`copy-${offer.checkboxLabel}-${offer.supportingText}`}
+              >
+                <input type="hidden" name="intent" value="update-copy" />
+                <s-stack direction="block" gap="base">
+                  <s-text-field
+                    name="checkboxLabel"
+                    label="Checkbox label"
+                    value={offer.checkboxLabel ?? ""}
+                    placeholder={DEFAULT_CHECKBOX_LABEL}
+                    maxLength={120}
+                    details="Use shipping protection in the label. The fee is always shown beside it. Leave blank to use the default wording."
+                    {...(isSaving ? { disabled: true } : {})}
+                  />
+                  <s-text-area
+                    name="supportingText"
+                    label="Supporting text"
+                    value={offer.supportingText ?? ""}
+                    placeholder={DEFAULT_SUPPORTING_TEXT}
+                    maxLength={500}
+                    rows={3}
+                    details="Describe protection for packages stolen after delivery. Leave blank to use the default wording."
+                    {...(isSaving ? { disabled: true } : {})}
+                  />
+                  <s-paragraph color="subdued">
+                    Only describe this store&apos;s theft-after-delivery
+                    benefit. Loss, damage, and returns aren&apos;t benefits of
+                    this offer. Custom text appears in every checkout language;
+                    default wording follows the checkout language.
+                  </s-paragraph>
+                  <s-paragraph color="subdued">
+                    {MERCHANT_DISCLOSURE} is always shown.
+                  </s-paragraph>
+                  <s-stack direction="inline" gap="base">
+                    <s-button
+                      variant="primary"
+                      type="submit"
+                      {...(isSaving ? { disabled: true, loading: true } : {})}
+                    >
+                      Save copy
+                    </s-button>
+                  </s-stack>
+                </s-stack>
+              </fetcher.Form>
+            ) : (
               <>
                 <s-text type="strong">
-                  Protection rate: {state.pricing.percentage}
+                  {offer.checkboxLabel ?? DEFAULT_CHECKBOX_LABEL}
                 </s-text>
-                <s-paragraph color="subdued">
-                  Percentage of the order&apos;s shippable merchandise, before
-                  discounts.
+                <s-paragraph>
+                  {offer.supportingText ?? DEFAULT_SUPPORTING_TEXT}{" "}
+                  {MERCHANT_DISCLOSURE}
+                </s-paragraph>
+                <s-paragraph>
+                  This store&apos;s checkout copy is managed for you.
                 </s-paragraph>
               </>
-            ) : (
-              <s-paragraph>
-                Your protection rate will appear after setup.
-              </s-paragraph>
             )}
-            <s-paragraph>
-              This store&apos;s protection rate is managed for you.
-            </s-paragraph>
           </s-stack>
-        )}
+        </s-stack>
       </s-section>
 
       <s-section heading="Can't see protection at checkout?">
         <s-stack direction="block" gap="base">
           <s-paragraph>
             Make sure the Shipping Protection block is added to your checkout.
-            Completing setup here prepares the offer; you choose where it appears
-            in Shopify&apos;s checkout editor.
+            Completing setup here prepares the offer; you choose where it
+            appears in Shopify&apos;s checkout editor.
           </s-paragraph>
           <s-ordered-list>
             <s-list-item>
-              In Shopify, go to Settings → Checkout → Configurations → Edit to
-              open the checkout editor.
+              In Shopify, go to Settings → Checkout → Configure → Edit to open
+              the checkout editor.
             </s-list-item>
             <s-list-item>
               Add the Shipping Protection block to your checkout and save.
@@ -306,8 +417,9 @@ export default function Settings() {
           <s-stack direction="block" gap="small-200">
             <s-heading>We suggest</s-heading>
             <s-paragraph>
-              Place the Shipping Protection block directly below the shipping
-              method selector so customers see it when choosing delivery.
+              Place the Shipping Protection block directly under the block
+              labeled “Shipping method” so customers see it when choosing
+              delivery.
             </s-paragraph>
           </s-stack>
         </s-stack>

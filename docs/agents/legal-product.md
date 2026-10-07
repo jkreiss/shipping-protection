@@ -50,7 +50,7 @@ Current wording (chosen by the product owner 2026-10-07 for the first, theft-onl
 
 Keep every surface saying the same thing. When the wording changes, update all of these together:
 
-1. Checkout block, English: `extensions/insurance-ext/locales/en.default.json` (`supportingText`; `checkboxLabel` names the product).
+1. Checkout block, English: `extensions/insurance-ext/locales/en.default.json` (`supportingText`; `checkboxLabel` names the product; `merchantDisclosure` keeps the store's optional add-on disclosure visible).
 2. Checkout block, French: `extensions/insurance-ext/locales/fr.json`. Translate the new English meaning; don't leave the old benefits in place.
 3. Protection product description: `PRODUCT_DESCRIPTION` in `app/shopify/protection-admin.server.js`. Add the outgoing text, exactly as it was, to `RETIRED_DESCRIPTIONS` so setup repair replaces it on stores that already have the product. Setup never overwrites a description the merchant wrote.
 4. The repair test in `app/shopify/protection-admin.server.test.js`: add the outgoing text to the `test.each` cases and update the assertions about what the description contains.
@@ -62,7 +62,7 @@ Wording rules:
 - Never say or imply that loss, damage, faulty goods, or consumer-law remedies need protection, or that customers without it aren't covered.
 - Say "shipping protection", not "insurance" or "coverage" as a noun for the product.
 - Don't remove "Optional add-on from this store": it tells the customer the merchant, not the app, makes the promise.
-- Keep the copy aligned with what the merchant has enabled. The copy is the same for every store, which works while theft is the only benefit. Once stores can choose benefits (theft only, or theft plus free returns), the copy must come from each store's configuration.
+- Keep the copy aligned with what the merchant has enabled. Settings allows store-specific label and supporting text through `$app.shipping_protection_offer`, subject to an independent operator editing permission. Blank fields use the English/French defaults. Custom text is plain text (label up to 120 characters, supporting text up to 500) and applies to every checkout language. The price and translated `merchantDisclosure` are always rendered separately. The server requires “shipping protection” in custom labels and rejects the named unsupported-benefit terms and insurance/coverage wording; this validation does not provide legal sign-off or establish that arbitrary custom text is accurate. The protection product description remains the theft-only default and setup continues to preserve merchant-authored descriptions.
 
 Checkout locale changes only reach customers after `shopify app deploy`; the product description changes on each store the next time setup or repair runs.
 
