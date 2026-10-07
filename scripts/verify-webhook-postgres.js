@@ -22,10 +22,14 @@ const attributes = [
   { key: "_yasas_protection_basis", value: "SHIPPABLE_PRE_DISCOUNT" },
 ];
 
+// Placed now, so the 24-month retention ceiling never skips the order. One value
+// for the whole run keeps every copy of the order identical.
+const orderCreatedAt = new Date().toISOString();
+
 function sampleOrder() {
   return {
     id: orderId, name: "#9001",
-    createdAt: "2026-09-23T00:00:00Z", updatedAt: "2026-09-23T00:01:00Z",
+    createdAt: orderCreatedAt, updatedAt: "2026-09-23T00:01:00Z",
     processedAt: "2026-09-23T00:00:30Z", currencyCode: "AUD", test: true,
     cancelledAt: null, displayFinancialStatus: "PAID", fullyPaid: true,
     subtotalPriceSet: money("100.25"), totalPriceSet: money("100.25"),

@@ -3,8 +3,10 @@ import { processNextDelivery, workerConcurrency } from "./webhook-worker.server.
 import { reconcileOrders, reconciliationDue, shopsToReportBehind } from "./order-reconciliation.server.js";
 import { expectWorkerLoops, logEvent, reportCondition, reportFailure, workerHeartbeat } from "./observability.server.js";
 import { isAccessLost } from "./shopify/admin-graphql.server.js";
+import { purgeExpiredOrders, RETENTION_INTERVAL_MS } from "./order-retention.server.js";
 
-// The worker's delivery and reconciliation loops. scripts/worker.js supplies
+// The worker's delivery and reconciliation loops; the reconciliation loop also
+// runs the daily retention purge. scripts/worker.js supplies
 // Prisma and Shopify; tests supply doubles. stop() lets each loop finish its
 // current batch, then run() disconnects and resolves.
 export function createWorkerRuntime({
@@ -16,10 +18,15 @@ export function createWorkerRuntime({
   pollMs = 2_000,
   reconcileIdleMs = 30_000,
   reconcileFailureBackoffMs = 5 * 60_000,
+  purgeOrders = purgeExpiredOrders,
+  retentionIntervalMs = RETENTION_INTERVAL_MS,
+  retentionFailureBackoffMs = 60 * 60_000,
 }) {
-  // In-memory only: a restart simply retries failed shops sooner.
+  // In-memory only: a restart simply retries failed shops sooner and purges
+  // again on start, which finds little to delete.
   const reconcileRetryAt = new Map();
   const behindReportedAt = new Map();
+  let retentionDueAt = 0;
   let stopping = false;
 
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -68,6 +75,28 @@ export function createWorkerRuntime({
     return worked;
   }
 
+  // Runs at most once per interval. Each turn is time-boxed; an unfinished purge
+  // continues on the next pass, after reconciliation has had its turn. A failure
+  // retries after a backoff rather than every pass.
+  async function retentionPass(now = Date.now()) {
+    if (now < retentionDueAt) return false;
+    const started = Date.now();
+    try {
+      const result = await purgeOrders({
+        database, shouldStop: () => stopping, onProgress: () => workerHeartbeat("reconciliation"),
+      });
+      retentionDueAt = result.complete ? now + retentionIntervalMs : now;
+      logEvent(result.complete ? "retention_purge_completed" : "retention_purge_paused", {
+        ordersDeleted: result.ordersDeleted, deliveriesDeleted: result.deliveriesDeleted,
+        cutoff: result.cutoff.toISOString(), durationMs: Date.now() - started,
+      });
+    } catch (error) {
+      retentionDueAt = now + retentionFailureBackoffMs;
+      reportFailure("retention_purge_failed", error, { durationMs: Date.now() - started });
+    }
+    return true;
+  }
+
   // Each loop claims one order's queued deliveries at a time; an empty queue
   // makes it wait before polling again. A loop finishes its current batch on stop.
   async function deliveryLoop(id) {
@@ -85,6 +114,7 @@ export function createWorkerRuntime({
   async function reconciliationLoop() {
     while (!stopping) {
       workerHeartbeat("reconciliation");
+      await retentionPass();
       let worked = false;
       try {
         worked = await reconciliationPass();
@@ -109,5 +139,5 @@ export function createWorkerRuntime({
     }
   }
 
-  return { run, stop: () => { stopping = true; }, reconciliationPass };
+  return { run, stop: () => { stopping = true; }, reconciliationPass, retentionPass };
 }

@@ -3,10 +3,13 @@ import prisma from "../app/db.server.js";
 import { persistNormalizedOrder } from "../app/order-ingestion.server.js";
 import { normalizeGraphqlOrder } from "../app/order-normalization.js";
 import { reconcileOrders } from "../app/order-reconciliation.server.js";
+import { purgeExpiredOrderBatch } from "../app/order-retention.server.js";
 import { redactCustomerOrders, redactShopData } from "../app/shop.server.js";
 
 const rollback = new Error("POSTGRES_VERIFICATION_ROLLBACK");
 const timestamp = new Date("2026-09-23T00:00:00.000Z");
+// Orders are placed now, so the 24-month retention ceiling never skips them.
+const orderCreatedAt = new Date();
 const shopMoney = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
 
 function graphqlOrder(id, protectedOrder) {
@@ -30,7 +33,7 @@ function graphqlOrder(id, protectedOrder) {
   const total = protectedOrder ? "100.25" : "100.00";
   return {
     id, name: id.endsWith("9001") ? "#9001" : "#9002",
-    createdAt: timestamp.toISOString(), updatedAt: "2026-09-23T01:00:00Z",
+    createdAt: orderCreatedAt.toISOString(), updatedAt: "2026-09-23T01:00:00Z",
     processedAt: timestamp.toISOString(), currencyCode: "AUD", test: true,
     cancelledAt: null, displayFinancialStatus: "PAID", fullyPaid: true,
     subtotalPriceSet: shopMoney(total), totalPriceSet: shopMoney(total),
@@ -89,7 +92,7 @@ function normalizedOrder({ id, name, protectedOrder }) {
   return {
     shopifyOrderId: id,
     name,
-    shopifyCreatedAt: timestamp,
+    shopifyCreatedAt: orderCreatedAt,
     shopifyUpdatedAt: timestamp,
     processedAt: timestamp,
     currencyCode: "AUD",
@@ -312,6 +315,30 @@ try {
     }));
     await transaction.$executeRawUnsafe('ROLLBACK TO SAVEPOINT event_append_check');
     await transaction.$executeRawUnsafe('RELEASE SAVEPOINT event_append_check');
+    // The retention purge deletes an order placed before its cutoff, including a
+    // confirmed purchase and append-only claim events, and keeps newer orders.
+    const expiredAt = new Date("2024-01-01T00:00:00.000Z");
+    const expiredOrder = await transaction.order.create({ data: {
+      shopId: otherShop.id, shopifyOrderId: "gid://shopify/Order/8001", name: "#8001",
+      shopifyCreatedAt: expiredAt, shopifyUpdatedAt: expiredAt, currencyCode: "AUD",
+      subtotalAmount: "100.0000", totalAmount: "100.2500", totalDiscountsAmount: "0.0000",
+      totalShippingAmount: "0.0000", totalTaxAmount: "0.0000",
+    } });
+    const expiredPurchase = await transaction.protectionPurchase.create({ data: {
+      shopId: otherShop.id, orderId: expiredOrder.id, currencyCode: "AUD", feeAmount: "0.2500",
+      attributionStatus: "UNATTRIBUTED", purchasedAt: expiredAt,
+      protectionLineIds: ["gid://shopify/Order/8001/LineItem/2"],
+    } });
+    const expiredClaim = await transaction.claim.create({ data: {
+      shopId: otherShop.id, protectionPurchaseId: expiredPurchase.id, type: "LOST",
+    } });
+    await transaction.claimEvent.create({ data: { shopId: otherShop.id, claimId: expiredClaim.id, type: "SUBMITTED" } });
+    assert.ok(await purgeExpiredOrderBatch(transaction, new Date("2024-06-01T00:00:00.000Z")) >= 1);
+    assert.equal(await transaction.order.count({ where: { id: expiredOrder.id } }), 0);
+    assert.equal(await transaction.protectionPurchase.count({ where: { id: expiredPurchase.id } }), 0);
+    assert.equal(await transaction.claimEvent.count({ where: { claimId: expiredClaim.id } }), 0);
+    assert.equal(await transaction.order.count({ where: { id: otherOrder.id } }), 1);
+    assert.equal(await transaction.order.count({ where: { id: paidOrder.id } }), 1);
     // Customer redaction removes only the named order in the requesting shop,
     // including its confirmed purchase and append-only claim events.
     assert.equal(await redactCustomerOrders(transaction, shop.shopDomain, [9001]), 1);
@@ -346,5 +373,5 @@ try {
 }
 
 console.log(
-  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, customer redaction, and event redaction.",
+  "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, customer redaction, retention purge, and event redaction.",
 );

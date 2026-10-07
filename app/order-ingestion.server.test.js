@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import process from "node:process";
 import { persistNormalizedOrder } from "./order-ingestion.server";
 
@@ -106,7 +106,24 @@ function transaction(rules = [rule]) {
   };
 }
 
+// The fixtures are placed in September 2026. A fixed clock keeps them inside the
+// 24-month retention ceiling however long these tests live.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-07T00:00:00Z"));
+});
+afterAll(() => vi.useRealTimers());
+
 describe("normalized order persistence", () => {
+  test("never stores an order placed before the retention ceiling", async () => {
+    const tx = transaction();
+    const expired = { ...normalizedOrder(), shopifyCreatedAt: new Date("2024-10-06T23:59:59Z") };
+
+    expect(await persistNormalizedOrder(tx, shop, expired)).toBeNull();
+    expect(tx.pricingRule.findMany).not.toHaveBeenCalled();
+    expect(tx.order.upsert).not.toHaveBeenCalled();
+  });
+
   test("stores every unprotected order without a protection purchase", async () => {
     const tx = transaction();
     await persistNormalizedOrder(tx, shop, normalizedOrder());

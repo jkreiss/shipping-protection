@@ -73,18 +73,25 @@ export async function redactCustomerOrders(transaction, shopDomain, orderIds) {
   });
   if (orders.length === 0) return 0;
 
-  const ids = { in: orders.map((order) => order.id) };
-  // Confirmed purchases and claim events reject ordinary deletes; this
-  // transaction-local setting permits privacy redaction only.
-  await transaction.$executeRawUnsafe("SET LOCAL app.allow_shop_redaction = 'on'");
-  await transaction.claimEvent.deleteMany({ where: { shopId: shop.id, claim: { protectionPurchase: { orderId: ids } } } });
-  await transaction.claim.deleteMany({ where: { shopId: shop.id, protectionPurchase: { orderId: ids } } });
-  await transaction.protectionRefund.deleteMany({ where: { shopId: shop.id, orderId: ids } });
-  await transaction.protectionPurchase.deleteMany({ where: { shopId: shop.id, orderId: ids } });
-  await transaction.orderLine.deleteMany({ where: { shopId: shop.id, orderId: ids } });
-  await transaction.order.deleteMany({ where: { shopId: shop.id, id: ids } });
-  await transaction.webhookDelivery.deleteMany({ where: { shopId: shop.id, shopifyOrderId: { in: shopifyOrderIds } } });
+  await deleteOrderRecords(transaction, shop.id, orders.map((order) => order.id), shopifyOrderIds);
   return orders.length;
+}
+
+// Deletes one shop's orders and everything recorded against them, including
+// webhook deliveries for those Shopify order IDs. Customer redaction and the
+// retention purge share it.
+export async function deleteOrderRecords(transaction, shopId, orderIds, shopifyOrderIds) {
+  const ids = { in: orderIds };
+  // Confirmed purchases and claim events reject ordinary deletes; this
+  // transaction-local setting permits privacy deletion only.
+  await transaction.$executeRawUnsafe("SET LOCAL app.allow_shop_redaction = 'on'");
+  await transaction.claimEvent.deleteMany({ where: { shopId, claim: { protectionPurchase: { orderId: ids } } } });
+  await transaction.claim.deleteMany({ where: { shopId, protectionPurchase: { orderId: ids } } });
+  await transaction.protectionRefund.deleteMany({ where: { shopId, orderId: ids } });
+  await transaction.protectionPurchase.deleteMany({ where: { shopId, orderId: ids } });
+  await transaction.orderLine.deleteMany({ where: { shopId, orderId: ids } });
+  await transaction.order.deleteMany({ where: { shopId, id: ids } });
+  await transaction.webhookDelivery.deleteMany({ where: { shopId, shopifyOrderId: { in: shopifyOrderIds } } });
 }
 
 // Records the scopes Shopify reports for an installation (app/scopes_update).
