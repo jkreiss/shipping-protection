@@ -281,27 +281,36 @@ export default function Settings() {
       </s-section>
 
       <s-section heading="Can't see protection at checkout?">
-        <s-paragraph>
-          Make sure the Shipping Protection block is added to your checkout.
-          Completing setup here prepares the offer; you choose where it appears
-          in Shopify&apos;s checkout editor.
-        </s-paragraph>
-        <s-ordered-list>
-          <s-list-item>
-            In Shopify, go to Settings → Checkout → Customize to open the
-            checkout editor.
-          </s-list-item>
-          <s-list-item>
-            Add the Shipping Protection block to the order summary and save.
-          </s-list-item>
-          <s-list-item>
-            If your store offers Shop Pay, turn the block on for Shop Pay too.
-          </s-list-item>
-          <s-list-item>
-            Place a test order to confirm protection is added and priced
-            correctly.
-          </s-list-item>
-        </s-ordered-list>
+        <s-stack direction="block" gap="base">
+          <s-paragraph>
+            Make sure the Shipping Protection block is added to your checkout.
+            Completing setup here prepares the offer; you choose where it appears
+            in Shopify&apos;s checkout editor.
+          </s-paragraph>
+          <s-ordered-list>
+            <s-list-item>
+              In Shopify, go to Settings → Checkout → Configurations → Edit to
+              open the checkout editor.
+            </s-list-item>
+            <s-list-item>
+              Add the Shipping Protection block to your checkout and save.
+            </s-list-item>
+            <s-list-item>
+              If your store offers Shop Pay, turn the block on for Shop Pay too.
+            </s-list-item>
+            <s-list-item>
+              Place a test order to confirm protection is added and priced
+              correctly.
+            </s-list-item>
+          </s-ordered-list>
+          <s-stack direction="block" gap="small-200">
+            <s-heading>We suggest</s-heading>
+            <s-paragraph>
+              Place the Shipping Protection block directly below the shipping
+              method selector so customers see it when choosing delivery.
+            </s-paragraph>
+          </s-stack>
+        </s-stack>
       </s-section>
     </s-page>
   );
