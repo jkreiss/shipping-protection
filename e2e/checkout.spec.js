@@ -4,6 +4,26 @@ test.beforeEach(async ({ staging }) => {
   await staging.merchant.setRate("1");
 });
 
+test("protection appears and can be selected before an address is entered", async ({
+  checkout,
+  staging,
+}) => {
+  await checkout.start("physical", staging.runId, "before-address", false, {
+    enterDetails: false,
+  });
+  const address = checkout.page.getByRole("textbox", {
+    name: /^Address$/i,
+  });
+  await expect(address).toBeEmpty();
+  await checkout.expectOffer(1, false);
+  await checkout.selectProtection(true);
+  await checkout.expectOffer(1, true);
+  await checkout.expectProtectionLine(1);
+  await expect(address).toBeEmpty();
+  await checkout.selectProtection(false);
+  await checkout.expectNoProtectionLine();
+});
+
 test("protection starts unselected, adds one priced line, and can be removed", async ({
   checkout,
   staging,

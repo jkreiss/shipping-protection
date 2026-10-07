@@ -9,6 +9,11 @@ The extension reads the app-owned Shop JSON metafield
 that configuration together with the unlisted product and the Cart Transform,
 created with `blockOnFailure: false` so a Function error never blocks checkout.
 
+The offer appears as checkout loads, before an address or delivery option is
+selected. It stays visible while shipping rates reload after address changes.
+Choosing direct store pickup hides the offer and removes any protection line
+where cart-line removal is available.
+
 The offer is never preselected. It is hidden for digital-only carts,
 subscriptions, direct store pickup, zero-rounded fees, invalid configuration,
 or checkouts that cannot mutate cart lines. Existing protection lines are the

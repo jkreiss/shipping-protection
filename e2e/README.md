@@ -175,7 +175,7 @@ records, or changes permissions.
 | File                | Coverage                                                                                                                                                                                               |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `admin.spec.js`     | Overview and Settings render; a saved rate survives refresh; invalid rate does not publish a rule                                                                                                      |
-| `checkout.spec.js`  | Default opt-out, one priced protection line, removal, mixed/digital-only carts, pre-discount pricing; desktop and mobile Chromium                                                                      |
+| `checkout.spec.js`  | Offer and selection before an address is entered, default opt-out, one priced protection line, removal, mixed/digital-only carts, pre-discount pricing; desktop and mobile Chromium |
 | `lifecycle.spec.js` | Paid protected orders at 1% and 2%, historical purchase snapshots, an unprotected control order, webhook ingestion, protection-only refund, Overview deltas, exclusion of test orders from live totals |
 
 ```sh

@@ -1,8 +1,9 @@
 /// <reference types="@shopify/ui-extensions/purchase.checkout.block.render" />
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fireEvent, waitFor } from "@testing-library/preact";
+import { act, fireEvent, waitFor } from "@testing-library/preact";
 import { h, render } from "preact";
+import { signal } from "@preact/signals";
 import { getExtension } from "@shopify/ui-extensions-tester";
 import {
   createCartLine,
@@ -261,6 +262,47 @@ describe("shipping protection quote", () => {
 });
 
 describe("shipping protection checkout UI", () => {
+  test.each(["no delivery groups", "no selected option", "rates loading"])(
+    "offers protection before an address is entered: %s",
+    async (state) => {
+      setCheckout();
+      extension.shopify.deliveryGroups.value =
+        state === "no delivery groups"
+          ? []
+          : extension.shopify.deliveryGroups.value.map((group) => ({
+              ...group,
+              selectedDeliveryOption: undefined,
+              deliveryOptions:
+                state === "rates loading" ? [] : group.deliveryOptions,
+            }));
+      const applyCartLinesChange = vi
+        .fn()
+        .mockResolvedValue(createResult("applyCartLinesChange"));
+      extension.shopify.applyCartLinesChange = applyCartLinesChange;
+      const formatCurrency = vi.spyOn(extension.shopify.i18n, "formatCurrency");
+      await renderExtension();
+
+      const checkbox = requireCheckbox();
+      expect(checkbox.hasAttribute("checked")).toBe(false);
+      expect(applyCartLinesChange).not.toHaveBeenCalled();
+      expect(formatCurrency).toHaveBeenCalledWith(0.25, {
+        currency: "USD",
+      });
+
+      checkbox.checked = true;
+      fireEvent.change(checkbox);
+
+      await waitFor(() => {
+        expect(applyCartLinesChange).toHaveBeenCalledWith({
+          type: "addCartLine",
+          merchandiseId: PROTECTION_ID,
+          quantity: 1,
+          attributes: protectionAttributes(configuration()),
+        });
+      });
+    },
+  );
+
   test.each(["shipping", "local", "pickupPoint"])(
     "renders an unchecked offer for eligible %s delivery",
     async (deliveryType) => {
@@ -484,7 +526,7 @@ describe("shipping protection checkout UI", () => {
     });
   });
 
-  test("keeps the buyer's protection while delivery options reload", async () => {
+  test("keeps protection visible and allows removal while delivery options reload", async () => {
     const protection = protectionLine();
     setCheckout({ lines: [merchandiseLine(), protection] });
     extension.shopify.deliveryGroups.value = extension.shopify.deliveryGroups.value
@@ -495,8 +537,61 @@ describe("shipping protection checkout UI", () => {
     extension.shopify.applyCartLinesChange = applyCartLinesChange;
     await renderExtension();
 
+    const checkbox = requireCheckbox();
+    expect(checkbox.hasAttribute("checked")).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(applyCartLinesChange).not.toHaveBeenCalled();
+
+    checkbox.checked = false;
+    fireEvent.change(checkbox);
+    await waitFor(() => {
+      expect(applyCartLinesChange).toHaveBeenCalledWith({
+        type: "removeCartLine",
+        id: protection.id,
+        quantity: 1,
+      });
+    });
+  });
+
+  test("removes early protection when the buyer later selects store pickup", async () => {
+    const physical = merchandiseLine();
+    const protection = protectionLine();
+    setCheckout({ lines: [physical, protection] });
+    const deliveryGroups = signal(/** @type {DeliveryGroup[]} */ ([]));
+    // The tester's default signals are static; use a reactive value for transitions.
+    extension.shopify.deliveryGroups = {
+      ...extension.shopify.deliveryGroups,
+      get value() {
+        return deliveryGroups.value;
+      },
+    };
+    const applyCartLinesChange = vi
+      .fn()
+      .mockResolvedValue(createResult("applyCartLinesChange"));
+    extension.shopify.applyCartLinesChange = applyCartLinesChange;
+    await renderExtension();
+
+    expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+    expect(applyCartLinesChange).not.toHaveBeenCalled();
+
+    await act(() => {
+      deliveryGroups.value = [deliveryGroup([physical.id])];
+    });
+    expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+    expect(applyCartLinesChange).not.toHaveBeenCalled();
+
+    await act(() => {
+      deliveryGroups.value = [deliveryGroup([physical.id], "pickup")];
+    });
+
+    expect(document.body.querySelector("s-checkbox")).toBeNull();
+    await waitFor(() => {
+      expect(applyCartLinesChange).toHaveBeenCalledWith({
+        type: "removeCartLine",
+        id: protection.id,
+        quantity: 1,
+      });
+    });
   });
 
   test.each([

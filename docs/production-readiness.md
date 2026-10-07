@@ -150,6 +150,7 @@ CI proves its isolated checks; it does not prove these hosted behaviors.
 
 | Scenario | Evidence required |
 | --- | --- |
+| Before address entry | Protection is visible and selectable as checkout loads, with the expected fee and no address entered. It stays visible while rates reload; a later store pickup choice hides the offer and removes protection. Check desktop and mobile order summaries. |
 | Opt in / remove / quantity changes | One protection line of quantity 1 when selected; no line after removal; correct recalculation when merchandise changes. Include checkout reload and Shop Pay if used. |
 | Eligibility | Digital-only carts, subscriptions, pickup, zero-rounded fees, and unavailable cart mutation produce the intended offer behavior without checkout errors. |
 | Price | Compare final Shopify line amounts with the approved rate and shippable pre-discount basis. Exercise discounts, tax, rounding, and every enabled currency. Old paid purchases retain their pricing snapshot after a rate change. |

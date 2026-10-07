@@ -60,7 +60,7 @@ export function ShippingProtection() {
     configuration?.enabled &&
     !containsSellingPlan(lines) &&
     eligibleLines.length > 0 &&
-    delivery === "eligible" &&
+    delivery !== "ineligible" &&
     quote &&
     quote.amount > 0 &&
     mutationsAvailable,
@@ -82,8 +82,8 @@ export function ShippingProtection() {
 
     let removeTarget = null;
     let updateTarget = null;
-    // While delivery is pending the offer is hidden, but the buyer's line
-    // stays until checkout settles on an option.
+    // Offer protection while delivery is pending, including before an address
+    // is entered. Keep the buyer's line until checkout settles on an option.
     if (
       !shouldOffer &&
       delivery !== "pending" &&

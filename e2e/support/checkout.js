@@ -87,7 +87,13 @@ export class Checkout {
   }
 
   /** @param {"physical" | "mixed" | "digital"} kind */
-  async start(kind = "physical", runId = "", label = "", discount = false) {
+  async start(
+    kind = "physical",
+    runId = "",
+    label = "",
+    discount = false,
+    { enterDetails = true } = {},
+  ) {
     const origin = `https://${this.config.shopDomain}`;
     const email = syntheticEmail(runId, label);
     await this.page.goto(`${origin}/cart`);
@@ -163,6 +169,11 @@ export class Checkout {
         ).toBe(4000);
     }
     await this.page.goto(`${origin}/checkout`);
+    if (!enterDetails) {
+      await input(this.page, /Email(?: or mobile phone number)?/i);
+      await this.summary();
+      return email;
+    }
     await (
       await input(this.page, /Email(?: or mobile phone number)?/i)
     ).fill(email);

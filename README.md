@@ -47,7 +47,8 @@ plan and Cart Transform `updateOperation` eligibility. The only implemented
 attachment strategy is `CHECKOUT_UI_CART_TRANSFORM`.
 
 After deploying an app version, add the block to the order summary in Checkout
-Editor and save; Shop Pay activation is separate. The backend cannot confirm
+Editor and save; it offers protection before an address is entered. Shop Pay
+activation is separate. The backend cannot confirm
 the block was placed, so place a test order. See the [checkout extension
 README](extensions/insurance-ext/README.md) for eligibility and activation.
 
