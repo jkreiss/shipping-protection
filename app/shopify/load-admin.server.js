@@ -16,7 +16,7 @@ export function loadAdminConfig(env = process.env) {
   return { origin: url.origin, token: env.SHOPIFY_ADMIN_MOCK_TOKEN };
 }
 
-export async function loadAdminGraphql(config, shop, query, variables) {
+export async function loadAdminGraphql(config, shop, query, variables, signal = undefined) {
   if (!/^load-[1-9]\d*\.myshopify\.com$/.test(shop ?? "")) {
     throw new Error("Load Admin API requires a fake load-N.myshopify.com tenant.");
   }
@@ -25,7 +25,7 @@ export async function loadAdminGraphql(config, shop, query, variables) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
     body: JSON.stringify({ query, variables }),
     redirect: "error",
-    signal: AbortSignal.timeout(30_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
   });
   // Let the worker's existing durable retry/backoff handle HTTP failures.
   if (!response.ok) throw new Error(`Mock Shopify Admin HTTP ${response.status}.`);

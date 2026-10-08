@@ -54,3 +54,32 @@ export async function runVerification({
   if (failures.length)
     throw new AggregateError(failures, "Verification cleanup failed.");
 }
+
+// A failed transaction may never signal its barrier. Race its outcome as well
+// as a deadline so the caller can release other transactions and clean up.
+export async function waitForVerificationBarrier(
+  barrier,
+  operation,
+  { label = "Verification barrier", timeoutMs = 5000 } = {},
+) {
+  let timer;
+  try {
+    return await Promise.race([
+      barrier,
+      operation.then(() => {
+        throw new Error(
+          `${label}: operation completed before reaching the barrier.`,
+        );
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error(`${label}: timed out waiting for the barrier.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}

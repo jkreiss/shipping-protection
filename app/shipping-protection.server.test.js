@@ -45,7 +45,8 @@ vi.mock("./shopify/protection-admin.server", async (importOriginal) => ({
     functionConfigKey: "function-configuration",
   },
 }));
-vi.mock("./shop.server", () => ({
+vi.mock("./shop.server", async (importOriginal) => ({
+  ...await importOriginal(),
   ensureInstalledShop: mocks.ensureInstalledShop,
   withShopSettingsLock: mocks.withShopSettingsLock,
 }));
@@ -64,6 +65,7 @@ import { activatePricingRule, disableShippingProtection, readShippingProtectionS
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.ensureInstalledShop.mockReset().mockResolvedValue({ installationGeneration: 0 });
   mocks.disableKnownConfiguration.mockReset();
   mocks.disableShopProtection.mockReset();
   mocks.publishSnapshot.mockReset();
@@ -298,7 +300,7 @@ describe("shipping protection shop isolation", () => {
   test("rejects a session shop that differs from Shopify's response", async () => {
     await expect(readShippingProtectionState({}, "two.myshopify.com"))
       .rejects.toThrow("Shopify shop identity does not match the session");
-    expect(mocks.ensureInstalledShop).not.toHaveBeenCalled();
+    expect(mocks.ensureInstalledShop.mock.calls).toEqual([["two.myshopify.com"]]);
   });
 
   test("rejects setup before changing Shopify on an unsupported shop", async () => {
@@ -585,5 +587,20 @@ describe("repairing a live store", () => {
     expect(mocks.ensureTransform).toHaveBeenCalledWith({}, expect.anything(),
       expect.objectContaining({ enabled: false }), { overwrite: true });
     expect(disabledWrites().length).toBeGreaterThan(0);
+  });
+});
+
+
+describe("installation generation of a fetched protection snapshot", () => {
+  test("captures the generation before Shopify fetch and rejects a reinstall during it", async () => {
+    const core = await mocks.loadCore();
+    let generation = 0;
+    mocks.ensureInstalledShop.mockImplementation(async () => ({ installationGeneration: generation }));
+    mocks.loadCore.mockImplementationOnce(async () => {
+      generation = 2;
+      return { ...core, shopConfig: { ...core.shopConfig, schemaVersion: 2 }, transformConfig: { ...core.shopConfig, schemaVersion: 2 } };
+    });
+    await expect(readShippingProtectionState({}, "one.myshopify.com")).rejects.toThrow(/access|installation|Installed/i);
+    expect(mocks.reconcilePublishedPricingRule).not.toHaveBeenCalled();
   });
 });

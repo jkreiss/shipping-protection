@@ -19,7 +19,7 @@ const run = (file, { env = process.env, cwd = root, args = [] } = {}) =>
     timeout: 90_000,
   });
 
-test.each(["verify-postgres.js", "verify-webhook-postgres.js"])(
+test.each(["verify-postgres.js", "verify-webhook-postgres.js", "verify-merchant-auth-postgres.js"])(
   "%s refuses a missing isolation flag before connection",
   (file) => {
     const result = run(`scripts/${file}`, {
@@ -71,7 +71,7 @@ test.skipIf(!isolated)(
 );
 
 test.skipIf(!isolated)(
-  "both verifiers refuse nonempty shops without changes, then pass from another directory with no fixtures left",
+  "all verifiers refuse nonempty shops without changes, then pass from another directory with no fixtures left",
   async () => {
     const { PrismaClient } = await import("@prisma/client");
     const db = new PrismaClient();
@@ -82,7 +82,7 @@ test.skipIf(!isolated)(
       fixture = await db.shop.create({
         data: { shopDomain: "existing-verifier-regression.invalid" },
       });
-      for (const file of ["verify-postgres.js", "verify-webhook-postgres.js"]) {
+      for (const file of ["verify-postgres.js", "verify-webhook-postgres.js", "verify-merchant-auth-postgres.js"]) {
         const result = run(`scripts/${file}`);
         expect(result.status).toBe(1);
         expect(result.stderr).toContain("empty Shop table");
@@ -91,7 +91,7 @@ test.skipIf(!isolated)(
       }
       await db.shop.delete({ where: { id: fixture.id } });
       fixture = null;
-      for (const file of ["verify-postgres.js", "verify-webhook-postgres.js"]) {
+      for (const file of ["verify-postgres.js", "verify-webhook-postgres.js", "verify-merchant-auth-postgres.js"]) {
         const result = run(`scripts/${file}`, { cwd: temporary });
         expect(result.stderr, result.stdout).not.toContain(
           "Cannot find module",

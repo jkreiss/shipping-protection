@@ -21,6 +21,7 @@
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",
     "verify:postgres": "node scripts/verify-postgres.js",
+    "verify:merchant-auth-postgres": "node scripts/verify-merchant-auth-postgres.js",
     "verify:webhook-postgres": "node scripts/verify-webhook-postgres.js",
     "test": "vitest run",
     "test:e2e": "node --env-file-if-exists=.env.e2e node_modules/@playwright/test/cli.js test",

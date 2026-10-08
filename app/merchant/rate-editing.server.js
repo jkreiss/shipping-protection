@@ -1,3 +1,4 @@
+import { withInstalledShopWrite } from "../settings-lease-context.server.js";
 import prisma from "../db.server.js";
 import { withShopSettingsLock } from "../shop.server.js";
 import { UserFacingError } from "../user-facing-error.js";
@@ -47,11 +48,13 @@ export async function setProtectionEditing(
   return withShopSettingsLock(
     shopDomain,
     () =>
-      database.shopConfiguration.upsert({
-        where: { shopId: shop.id },
-        create: { shopId: shop.id, [field]: editable },
-        update: { [field]: editable },
-      }),
+      withInstalledShopWrite(database, shopDomain, (transaction, installed) =>
+        transaction.shopConfiguration.upsert({
+          where: { shopId: installed.id },
+          create: { shopId: installed.id, [field]: editable },
+          update: { [field]: editable },
+        }),
+      ),
     { database },
   );
 }

@@ -14,15 +14,15 @@ export function resolveConfiguration(
 ) {
   const reasons = [];
   let strategy = "NONE";
-  if (!settings?.protectionEnabled || settings.attachmentStrategy === "NONE") {
+  const capabilityReasons = () => {
     if (!capabilities.checkoutUiSupported) reasons.push("Checkout UI blocks require Shopify Plus.");
     if (!capabilities.cartTransformUpdateSupported) reasons.push("Cart Transform price updates are unavailable for this shop.");
-  }
+  };
+  if (!settings?.protectionEnabled || settings.attachmentStrategy === "NONE") capabilityReasons();
   if (settings?.protectionEnabled && settings.attachmentStrategy !== "NONE") {
     if (settings.attachmentStrategy === "CHECKOUT_UI_CART_TRANSFORM") {
       if (!implemented.checkoutUiCartTransform) reasons.push("Checkout attachment is not implemented.");
-      if (!capabilities.checkoutUiSupported) reasons.push("Checkout UI blocks require Shopify Plus.");
-      if (!capabilities.cartTransformUpdateSupported) reasons.push("Cart Transform price updates are unavailable for this shop.");
+      capabilityReasons();
       if (!healthReady) reasons.push("Protection setup needs to be updated.");
       if (reasons.length === 0) strategy = "CHECKOUT_UI_CART_TRANSFORM";
     } else if (settings.attachmentStrategy === "THEME_CART") {

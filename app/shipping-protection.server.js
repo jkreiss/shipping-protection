@@ -9,7 +9,7 @@ import {
   getActivePricingRule,
   reconcilePublishedPricingRule,
 } from "./pricing-rule.server";
-import { ensureInstalledShop, withShopSettingsLock } from "./shop.server";
+import { InstallationAccessLostError, ensureInstalledShop, withShopSettingsLock } from "./shop.server";
 import { UserFacingError } from "./user-facing-error";
 import { disableShopProtection, enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
@@ -58,22 +58,24 @@ function pricingRuleCheck(seed, activeRule) {
 }
 
 export async function readShippingProtectionState(admin, shopDomain) {
-  return (await loadShippingProtectionState(admin, shopDomain, await loadCore(admin))).state;
+  const { installationGeneration } = await ensureInstalledShop(shopDomain);
+  return (await loadShippingProtectionState(admin, shopDomain, await loadCore(admin), installationGeneration)).state;
 }
 
 // Builds the state from an already loaded core and also returns the product it
 // found, so callers that need either don't load them again.
-async function loadShippingProtectionState(admin, shopDomain, core) {
+async function loadShippingProtectionState(admin, shopDomain, core, installationGeneration) {
   const domain = shopDomain ?? core.shop.myshopifyDomain;
   assertSessionShop(core, domain);
-  await ensureInstalledShop(domain, core.shop.id);
+  const installed = await ensureInstalledShop(domain, core.shop.id, undefined, installationGeneration);
+  if (installed.installationGeneration !== installationGeneration) throw new InstallationAccessLostError();
   if (
     core.shopConfig?.schemaVersion === 2 &&
     sameContract(core.shopConfig, core.transformConfig, core.shopConfig.enabled)
   ) {
     // Turning off an offer preserves its published rule. Finish an interrupted
     // rate save even while off, so restoring protection keeps that same rate.
-    await reconcilePublishedPricingRule(domain, core.shopConfig);
+    await reconcilePublishedPricingRule(domain, core.shopConfig, undefined, installationGeneration);
   }
   const seed = core.shopConfig ?? core.transformConfig;
   const activeRule = await getActivePricingRule(domain);
@@ -189,13 +191,14 @@ async function publishRate(
   if (settings.protectionRateEditable !== true) {
     throw new UserFacingError("This store's protection rate is managed by the app operator.");
   }
+  const { installationGeneration } = await ensureInstalledShop(shopDomain);
   const core = await loadCore(admin);
   assertSessionShop(core, shopDomain);
   const capabilities = observedShopifyCapabilities(core.shop);
   if (!capabilities.checkoutUiSupported || !capabilities.cartTransformUpdateSupported) {
     throw new UserFacingError("This store's Shopify plan doesn't support the checkout protection offer.");
   }
-  const { state: current, product } = await loadShippingProtectionState(admin, shopDomain, core);
+  const { state: current, product } = await loadShippingProtectionState(admin, shopDomain, core, installationGeneration);
   if (!current.configuration.protectionEnabled) {
     throw new UserFacingError("Set up protection before changing the rate.");
   }

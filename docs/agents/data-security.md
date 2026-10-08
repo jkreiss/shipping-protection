@@ -40,6 +40,22 @@ External input includes:
 
 Treat all external input as untrusted.
 
+## Installation lifecycle
+
+`session-storage.server.js` verifies each supplied token against Shopify's shop
+identity and current installation before saving. The generation is captured
+before that request; persistence locks the shop row and checks the generation
+inside a short transaction using the Shopify Prisma storage delegate. Token
+invalidation by the SDK can save a loaded session without a token, but cannot
+create or reactivate an installation. Refresh-token fields stay with the SDK.
+
+Uninstall locks the same row, increments `installationGeneration` on an actual
+transition, clears the settings lease, and deletes sessions atomically. A shop
+without its first saved session still gets an uninstall tombstone. A verified
+reinstall increments the generation again and preserves configuration and
+financial history. Page/setup loaders only read an installed shop; a changed
+Shopify ID is saved conditionally against that installed generation.
+
 ## Data Model and Database
 
 Use Prisma migrations.

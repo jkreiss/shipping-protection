@@ -3,7 +3,7 @@ import { readClaimsOverview } from "./claims.server";
 
 test("claims retrieve Shopify timezone and scope records to the authenticated tenant", async () => {
   const database = {
-    shop: { findUnique: vi.fn().mockResolvedValue({ id: "shop-1", configuration: {} }) },
+    shop: { findUnique: vi.fn().mockResolvedValue({ id: "shop-1", installationState: "INSTALLED", configuration: {} }) },
     claim: { findMany: vi.fn().mockResolvedValue([{
       id: "c1", type: "LOST", status: "SUBMITTED", submittedAt: new Date("2026-03-09T07:30:00Z"),
       protectionPurchase: { order: { name: "#1001", shopifyOrderId: "gid://shopify/Order/1" } },

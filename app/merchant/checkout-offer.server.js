@@ -1,3 +1,4 @@
+import { withInstalledShopWrite } from "../settings-lease-context.server.js";
 import prisma from "../db.server.js";
 import { withShopSettingsLock } from "../shop.server.js";
 import {
@@ -60,13 +61,13 @@ export async function updateCheckoutOffer(
         offer,
         core.shop.checkoutOffer?.compareDigest ?? null,
       );
-      await database.shopConfiguration.update({
+      await withInstalledShopWrite(database, shopDomain, (transaction) => transaction.shopConfiguration.update({
         where: { shopId: settings.shopId },
         data: {
           protectionCheckboxLabel: offer.checkboxLabel,
           protectionSupportingText: offer.supportingText,
         },
-      });
+      }));
       return offer;
     },
     { database },
