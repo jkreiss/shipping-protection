@@ -22,7 +22,8 @@ const mocks = vi.hoisted(() => ({
   assertFunctionDeployed: vi.fn(),
 }));
 
-vi.mock("./shopify/protection-admin.server", () => ({
+vi.mock("./shopify/protection-admin.server", async (importOriginal) => ({
+  sameContract: (await importOriginal()).sameContract,
   loadCore: mocks.loadCore,
   loadProduct: mocks.loadProduct,
   findProduct: mocks.findProduct,
@@ -274,6 +275,13 @@ describe("merchant rate editing", () => {
     expect(mocks.createAndPublishPricingRule).toHaveBeenCalledWith(expect.objectContaining({
       shopDomain: "one.myshopify.com", rateBasisPoints: 75,
     }));
+  });
+
+  test("loads the shop and the product once before publishing, then re-reads to verify", async () => {
+    await activatePricingRule({}, "one.myshopify.com", 75);
+    // One load to check and publish, one to verify what was published.
+    expect(mocks.loadCore).toHaveBeenCalledTimes(2);
+    expect(mocks.findProduct).toHaveBeenCalledTimes(2);
   });
 
   test("denies rate changes when the permission is missing", async () => {

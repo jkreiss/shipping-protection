@@ -58,7 +58,7 @@ const PRODUCT_FIELDS = `#graphql
   }
 `;
 
-function sameContract(left, right, enabled) {
+export function sameContract(left, right, enabled) {
   return Boolean(
     left &&
     right &&
