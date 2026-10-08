@@ -1,7 +1,7 @@
 import prisma from "./db.server.js";
 import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
-import { adminGraphql, assertCompleteOrder, fetchShopifyOrder, ORDERS_QUERY } from "./order-shopify.server.js";
+import { adminGraphql, fetchShopifyOrder, ORDERS_QUERY, PermanentOrderError } from "./order-shopify.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
 import { queueOrderRefresh } from "./webhook-inbox.server.js";
 import { reportFailure } from "./observability.server.js";
@@ -58,7 +58,12 @@ export function shopsToReportBehind(shops, reportedAt, now = new Date()) {
 }
 
 async function storeOrder(database, persist, shop, order) {
-  const normalized = normalizeGraphqlOrder(assertCompleteOrder(order));
+  let normalized;
+  try {
+    normalized = normalizeGraphqlOrder(order);
+  } catch (error) {
+    throw new PermanentOrderError("Shopify order could not be normalized.", { cause: error });
+  }
   let afterCommit = [];
   await retrySerializationFailures(() => database.$transaction(
     (transaction) => {
@@ -181,10 +186,14 @@ export async function reconcileOrders({
         ordersFetched += 1;
         consecutiveFailures = 0;
       } catch (error) {
-        consecutiveFailures += 1;
         reportFailure("reconciliation_order_failed", error, { shopId: shop.id, shopifyOrderId: item.id });
-        if (consecutiveFailures >= MAX_CONSECUTIVE_ORDER_FAILURES) throw error;
-        await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
+        // Shopify's answer for this order won't change on a retry, so it is
+        // neither queued nor counted toward the streak that signals an outage.
+        if (!(error instanceof PermanentOrderError)) {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_ORDER_FAILURES) throw error;
+          await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
+        }
         ordersFailed += 1;
       } finally {
         onProgress?.();
