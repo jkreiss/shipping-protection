@@ -181,13 +181,14 @@ export async function reconcileOrders({
         consecutiveFailures = 0;
       } catch (error) {
         reportFailure("reconciliation_order_failed", error, { shopId: shop.id, shopifyOrderId: item.id });
-        // Shopify's answer for this order won't change on a retry, so it is
-        // neither queued nor counted toward the streak that signals an outage.
+        // Shopify's answer for this order won't change on a retry, so it doesn't
+        // count toward the streak that signals an outage. It is still queued, so
+        // the worker fails it at once and leaves a durable record.
         if (!(error instanceof PermanentOrderError)) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= MAX_CONSECUTIVE_ORDER_FAILURES) throw error;
-          await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
         }
+        await queueOrderRefresh({ shopId: shop.id, shopifyOrderId: item.id, version: item.updatedAt, database });
         ordersFailed += 1;
       } finally {
         onProgress?.();

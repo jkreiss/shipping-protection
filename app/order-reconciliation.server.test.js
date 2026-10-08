@@ -179,7 +179,8 @@ describe("order reconciliation", () => {
     const result = await reconcileOrders({ admin, shopDomain, database, persist });
 
     expect(persist.mock.calls.map(([, , order]) => order.shopifyOrderId)).toEqual([id(5)]);
-    expect(queued).toEqual([]);
+    // Queued so the worker fails each at once and leaves a durable record.
+    expect(queued.map(({ shopifyOrderId }) => shopifyOrderId)).toEqual([id(1), id(2), id(3), id(4)]);
     expect(result).toMatchObject({ complete: true, ordersFetched: 1, ordersFailed: 4 });
     expect(shopUpdates.at(-1)).toMatchObject({ orderReconciliationCursor: null });
   });
