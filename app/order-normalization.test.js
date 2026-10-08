@@ -136,6 +136,31 @@ describe("order normalization", () => {
     expect(mismatched.lines[0].presentmentUnitAmount).toBeNull();
   });
 
+  test("separates units removed by an order edit from refunded units", () => {
+    const money = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
+    const line = (n, quantity, currentQuantity) => ({
+      id: `gid://shopify/LineItem/${n}`, quantity, currentQuantity, requiresShipping: true,
+      originalUnitPriceSet: money("10.00"), discountedTotalSet: money(String(quantity * 10)),
+      product: null, variant: null, customAttributes: [],
+    });
+    const order = {
+      id: "gid://shopify/Order/1001", name: "#1001", createdAt: "2026-09-23T01:00:00Z",
+      updatedAt: "2026-09-23T01:01:00Z", currencyCode: "AUD",
+      lineItems: { nodes: [line(1, 2, 1), line(2, 2, 1), line(3, 2, 2), line(4, 2, 0)] },
+      refunds: [{ id: "gid://shopify/Refund/1", refundLineItems: { nodes: [
+        { lineItem: { id: "gid://shopify/LineItem/2" }, quantity: 1 },
+        { lineItem: { id: "gid://shopify/LineItem/4" }, quantity: 1 },
+      ] } }],
+    };
+
+    const lines = normalizeGraphqlOrder(order).lines;
+
+    // 1: one unit deleted. 2: one unit refunded, none deleted. 3: untouched.
+    // 4: one unit refunded and the other deleted.
+    expect(lines.map(({ removedQuantity }) => removedQuantity)).toEqual([1, 0, 0, 1]);
+    expect(lines.map(({ quantity }) => quantity)).toEqual([2, 2, 2, 2]);
+  });
+
   test("dates a fully paid order at the successful payment threshold", () => {
     const order = {
       currencyCode: "AUD", totalPriceSet: { shopMoney: { amount: "100.00", currencyCode: "AUD" } },

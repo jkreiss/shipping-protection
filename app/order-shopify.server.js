@@ -15,7 +15,7 @@ export const ORDER_FIELDS = `
   transactionsCount { count }
   lineItems(first: 250) {
     nodes {
-      id quantity requiresShipping
+      id quantity currentQuantity requiresShipping
       originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
       discountedTotalSet { shopMoney { amount currencyCode } }
       product { id } variant { id } customAttributes { key value }
@@ -26,7 +26,7 @@ export const ORDER_FIELDS = `
   refunds(first: 250) {
     id processedAt totalRefundedSet { shopMoney { amount currencyCode } }
     refundLineItems(first: 250) {
-      nodes { lineItem { id } subtotalSet { shopMoney { amount currencyCode } } }
+      nodes { lineItem { id } quantity subtotalSet { shopMoney { amount currencyCode } } }
       pageInfo { hasNextPage endCursor }
     }
     transactions(first: 250) {
@@ -51,12 +51,12 @@ export const ORDERS_QUERY = `#graphql
 
 export { adminGraphql };
 
-const LINE_FIELDS = `id quantity requiresShipping
+const LINE_FIELDS = `id quantity currentQuantity requiresShipping
   originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
   discountedTotalSet { shopMoney { amount currencyCode } }
   product { id } variant { id } customAttributes { key value }
   sellingPlan { sellingPlanId }`;
-const REFUND_LINE_FIELDS = `lineItem { id } subtotalSet { shopMoney { amount currencyCode } }`;
+const REFUND_LINE_FIELDS = `lineItem { id } quantity subtotalSet { shopMoney { amount currencyCode } }`;
 const TRANSACTION_FIELDS = `id kind status processedAt createdAt amountSet { shopMoney { amount currencyCode } }`;
 
 const LINE_PAGE_QUERY = `#graphql

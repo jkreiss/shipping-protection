@@ -300,6 +300,36 @@ describe("normalized order persistence", () => {
     expect(tx.storedPurchase()).toBeNull();
   });
 
+  test("protection removed by an order edit before payment records no purchase", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    // The edit deleted the protection line; Shopify still prices it in the totals.
+    Object.assign(order.lines[1], { removedQuantity: 1 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedPurchase()).toBeNull();
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: false, paidProtectionFee: "0.0000" });
+  });
+
+  test("a refunded protection line still records the paid purchase", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    Object.assign(order.lines[1], { removedQuantity: 0 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: true, paidProtectionFee: "0.2500" });
+  });
+
+  test("does not count merchandise removed by an order edit as eligible", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    Object.assign(order.lines[0], { removedQuantity: 1 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidEligible: false });
+  });
+
   test("refetches once when a copy from the same second differs", async () => {
     const tx = transaction();
     await persistNormalizedOrder(tx, shop, normalizedOrder());

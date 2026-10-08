@@ -9,7 +9,7 @@ const order = {
   id: "gid://shopify/Order/1", name: "#1", createdAt: "2026-09-23T00:00:00Z", updatedAt: "2026-09-23T00:01:00Z",
   currencyCode: "AUD", transactions: [], transactionsCount: { count: 0 }, refunds: [],
   totalPriceSet: money("10.00"),
-  lineItems: { nodes: [{ id: "gid://shopify/LineItem/1", quantity: 1, requiresShipping: true,
+  lineItems: { nodes: [{ id: "gid://shopify/LineItem/1", quantity: 1, currentQuantity: 1, requiresShipping: true,
     originalUnitPriceSet: money("10.00"), discountedTotalSet: money("10.00"),
     product: null, variant: null, customAttributes: [] }], pageInfo: { hasNextPage: false, endCursor: null } },
 };

@@ -88,8 +88,10 @@ export async function persistNormalizedOrder(
   // does. Line properties are customer-editable, so they only attribute a
   // protection line to its rule; they never make a line protection.
   const protectionVariants = new Set(rules.map(({ variantId }) => variantId));
+  // Units an order edit deleted still sit in the line's quantity and amounts.
   const lines = normalized.lines.map((line) => ({
     ...line,
+    liveQuantity: line.quantity - (line.removedQuantity ?? 0),
     isProtection: Boolean(line.variantId && protectionVariants.has(line.variantId)),
   }));
   const existing = await transaction.order.findUnique({
@@ -107,17 +109,17 @@ export async function persistNormalizedOrder(
       version: normalized.shopifyUpdatedAt.toISOString(), reason: "same-second", database: transaction,
     });
   }
-  const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.quantity > 0);
+  const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.liveQuantity > 0);
   const coveredMerchandise = scaledToMoney(lines
     .filter((line) => !line.isProtection && line.requiresShipping)
     .reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n));
-  const protectedLines = lines.filter((line) => line.isProtection);
+  const protectedLines = lines.filter((line) => line.isProtection && line.liveQuantity > 0);
   // Shopify skips the Cart Transform when any line has a selling plan, so the
   // protection line is never charged: a subscription order is not protected.
   // Likewise the Function charges the fee only on a single-unit protection
   // line and prices the rest at zero, so without one nothing was charged.
   const purchasable = protectedLines.length > 0 &&
-    protectedLines.some((line) => line.quantity === 1) &&
+    protectedLines.some((line) => line.liveQuantity === 1) &&
     !normalized.lines.some((line) => line.hasSellingPlan);
   const firstPayment = Boolean(normalized.paidAt && !existing?.firstPaidAt);
   const paidFacts = firstPayment ? {

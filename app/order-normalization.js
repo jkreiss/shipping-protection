@@ -153,8 +153,20 @@ export function normalizeGraphqlOrder(order) {
   }
   const presentmentCurrencyCode = typeof order.presentmentCurrencyCode === "string"
     ? order.presentmentCurrencyCode : null;
+  // Shopify's `quantity` counts refunded and removed units; `currentQuantity`
+  // leaves out both. Removed units (an order edit) have no refund, so subtract
+  // the refunded units to find them.
+  const refundedUnits = new Map();
+  for (const refund of order.refunds ?? []) {
+    for (const item of refund.refundLineItems?.nodes ?? []) {
+      const lineId = item.lineItem?.id;
+      if (lineId) refundedUnits.set(lineId, (refundedUnits.get(lineId) ?? 0) + Number(item.quantity ?? 0));
+    }
+  }
   const lines = order.lineItems.nodes.map((line) => {
     const quantity = Number(line.quantity);
+    const removedQuantity = line.currentQuantity == null ? 0
+      : Math.max(0, quantity - Number(line.currentQuantity) - (refundedUnits.get(line.id) ?? 0));
     const presentment = line.originalUnitPriceSet?.presentmentMoney;
     if (!line.originalUnitPriceSet?.shopMoney || !line.discountedTotalSet?.shopMoney ||
       line.originalUnitPriceSet.shopMoney.currencyCode !== currencyCode ||
@@ -169,6 +181,7 @@ export function normalizeGraphqlOrder(order) {
       productId: line.product?.id ?? null,
       variantId: line.variant?.id ?? null,
       quantity,
+      removedQuantity,
       requiresShipping: line.requiresShipping === true,
       currencyCode,
       originalUnitAmount: scaledToMoney(moneyToScaled(unit)),
