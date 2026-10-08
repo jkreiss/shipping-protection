@@ -45,7 +45,7 @@ function protectionAttribution(line, rules) {
 // currency, so compare there when Shopify returned those amounts. A mismatch
 // usually means the Function failed and the variant's fallback price applied.
 export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) {
-  if (!rule) return { pricingCheck: null, expectedFee: null };
+  if (!rule) return { pricingCheck: null, expectedFee: null, chargedFee: null, currencyCode: null };
   const relevant = [...eligibleLines, ...protectedLines];
   const presentment = normalized.presentmentCurrencyCode &&
     relevant.every((line) => line.presentmentUnitAmount != null);
@@ -61,7 +61,8 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
     (sum, line) => sum + moneyToScaled(unitAmount(line)) * BigInt(line.quantity), 0n,
   );
   const matched = expectedFee !== null && charged === moneyToScaled(expectedFee);
-  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
+  // Charged and expected share one basis, so an alert can show them together.
+  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee, chargedFee: scaledToMoney(charged), currencyCode };
 }
 
 function orderContentHash(normalized) {
@@ -206,7 +207,7 @@ export async function persistNormalizedOrder(
       .filter((line) => !line.isProtection && line.requiresShipping)
       .reduce((sum, line) => sum + moneyToScaled(line.preDiscountAmount), 0n);
     const fee = protectedLines.reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n);
-    const { pricingCheck, expectedFee } = livePriceCheck(
+    const { pricingCheck, expectedFee, chargedFee, currencyCode: checkedCurrency } = livePriceCheck(
       normalized,
       lines.filter((line) => !line.isProtection && line.requiresShipping),
       protectedLines,
@@ -238,7 +239,7 @@ export async function persistNormalizedOrder(
       afterCommit.push(() => reportFailure("protection_price_unmatched",
         new Error("Protection was not charged the live price."), {
           shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId,
-          feeAmount: purchase.feeAmount, expectedFeeAmount: expectedFee,
+          chargedFeeAmount: chargedFee, expectedFeeAmount: expectedFee, currencyCode: checkedCurrency,
         }));
     }
   } else if (!confirmedPurchase && (!purchasable || existing?.firstPaidAt)) {

@@ -466,8 +466,31 @@ describe("live price check", () => {
 
       expect(events.named("protection_price_unmatched")).toEqual([expect.objectContaining({
         shopId: "shop-1", shopifyOrderId: "gid://shopify/Order/1",
-        feeAmount: "5.0000", expectedFeeAmount: "0.25",
+        chargedFeeAmount: "5.0000", expectedFeeAmount: "0.25", currencyCode: "AUD",
       })]);
+    } finally {
+      events.restore();
+    }
+  });
+
+  test("reports the charged and expected fee in one currency when the customer paid in another", async () => {
+    const events = stderrEvents();
+    try {
+      const tx = transaction();
+      const paid = chargedProtection(normalizedOrder(attributed), "0.2400");
+      paid.presentmentCurrencyCode = "USD";
+      paid.lines[0].presentmentUnitAmount = "65.00";
+      paid.lines[1].presentmentUnitAmount = "0.30";
+      paid.paidAt = new Date("2026-09-23T00:02:00Z");
+      const afterCommit = [];
+      await persistNormalizedOrder(tx, shop, paid, afterCommit);
+      for (const report of afterCommit) report();
+
+      // 0.25% of 65.00 USD is 0.16 USD; 0.30 USD was charged. The shop-currency fee (0.2400) is not comparable.
+      expect(events.named("protection_price_unmatched")).toEqual([expect.objectContaining({
+        chargedFeeAmount: "0.3000", expectedFeeAmount: "0.16", currencyCode: "USD",
+      })]);
+      expect(events.named("protection_price_unmatched")[0]).not.toHaveProperty("feeAmount");
     } finally {
       events.restore();
     }
