@@ -2,82 +2,18 @@ import { describe, expect, test } from "vitest";
 import {
   completedPaymentAt,
   normalizeGraphqlOrder,
-  normalizeWebhookOrder,
 } from "./order-normalization";
-
-function webhookPayload(overrides = {}) {
-  return {
-    id: 1001,
-    admin_graphql_api_id: "gid://shopify/Order/1001",
-    name: "#1001",
-    checkout_token: "sensitive-checkout-token",
-    created_at: "2026-09-23T01:00:00Z",
-    updated_at: "2026-09-23T01:01:00Z",
-    processed_at: "2026-09-23T01:00:30Z",
-    currency: "AUD",
-    subtotal_price: "100.00",
-    total_price: "110.25",
-    total_discounts: "0.00",
-    total_tax: "10.00",
-    total_shipping_price_set: { shop_money: { amount: "0.00" } },
-    email: "never-store@example.com",
-    customer: { id: 9, first_name: "Never", last_name: "Store" },
-    shipping_address: { address1: "PII street" },
-    line_items: [
-      {
-        id: 11,
-        product_id: 21,
-        variant_id: 31,
-        quantity: 2,
-        price: "50.00",
-        total_discount: "0.00",
-        requires_shipping: true,
-        properties: [
-          { name: "gift_message", value: "do not persist" },
-          { name: "_yasas_protection_rule_id", value: "rule-1" },
-        ],
-      },
-    ],
-    ...overrides,
-  };
-}
 
 describe("order normalization", () => {
   test("keeps normalized facts while excluding PII and arbitrary properties", () => {
-    const normalized = normalizeWebhookOrder(webhookPayload());
-    expect(normalized).toMatchObject({
-      shopifyOrderId: "gid://shopify/Order/1001",
-      currencyCode: "AUD",
-      subtotalAmount: "100.0000",
-    });
-    expect(normalized).not.toHaveProperty("checkoutTokenHash");
-    expect(normalized.lines[0]).toMatchObject({
-      quantity: 2,
-      preDiscountAmount: "100.0000",
-      protectionAttributes: {
-        _yasas_protection_rule_id: "rule-1",
-      },
-    });
-    const serialized = JSON.stringify(normalized);
-    expect(serialized).not.toContain("never-store@example.com");
-    expect(serialized).not.toContain("Never");
-    expect(serialized).not.toContain("PII street");
-    expect(serialized).not.toContain("gift_message");
-    expect(serialized).not.toContain("sensitive-checkout-token");
-  });
-
-  test("rejects malformed payloads", () => {
-    expect(() => normalizeWebhookOrder({})).toThrow(
-      "Malformed orders/create payload",
-    );
-  });
-
-  test("normalizes the reconciliation GraphQL shape identically", () => {
     const normalized = normalizeGraphqlOrder(
       {
         id: "gid://shopify/Order/1001",
         name: "#1001",
         checkoutToken: "sensitive-checkout-token",
+        email: "never-store@example.com",
+        customer: { id: "gid://shopify/Customer/9", firstName: "Never", lastName: "Store" },
+        shippingAddress: { address1: "PII street" },
         createdAt: "2026-09-23T01:00:00Z",
         updatedAt: "2026-09-23T01:01:00Z",
         processedAt: "2026-09-23T01:00:30Z",
@@ -97,21 +33,33 @@ describe("order normalization", () => {
               discountedTotalSet: { shopMoney: { amount: "100.00", currencyCode: "AUD" } },
               product: { id: "gid://shopify/Product/21" },
               variant: { id: "gid://shopify/ProductVariant/31" },
-              customAttributes: [{ key: "ignored", value: "value" }],
+              customAttributes: [
+                { key: "gift_message", value: "do not persist" },
+                { key: "_yasas_protection_rule_id", value: "rule-1" },
+              ],
               sellingPlan: { sellingPlanId: "gid://shopify/SellingPlan/1" },
             },
           ],
         },
       },
     );
+    expect(normalized).toMatchObject({
+      shopifyOrderId: "gid://shopify/Order/1001",
+      currencyCode: "AUD",
+      subtotalAmount: "100.0000",
+    });
+    expect(normalized).not.toHaveProperty("checkoutTokenHash");
     expect(normalized.lines[0]).toMatchObject({
       originalUnitAmount: "50.0000",
       preDiscountAmount: "100.0000",
       finalAmount: "100.0000",
-      protectionAttributes: {},
+      protectionAttributes: { _yasas_protection_rule_id: "rule-1" },
       hasSellingPlan: true,
     });
-    expect(JSON.stringify(normalized)).not.toContain("sensitive-checkout-token");
+    const serialized = JSON.stringify(normalized);
+    for (const secret of ["sensitive-checkout-token", "never-store@example.com", "Never", "PII street", "gift_message"]) {
+      expect(serialized).not.toContain(secret);
+    }
   });
 
   test("keeps the presentment unit price the customer was charged in", () => {
