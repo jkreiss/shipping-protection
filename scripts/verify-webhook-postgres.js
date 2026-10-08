@@ -8,7 +8,7 @@ import process from "node:process";
 import prisma from "../app/db.server.js";
 import { receiveOrderWebhook } from "../app/webhook-inbox.server.js";
 import { claimDelivery, MAX_DELIVERY_ATTEMPTS, processNextDelivery } from "../app/webhook-worker.server.js";
-import { redactShopData } from "../app/shop.server.js";
+import { redactCustomerOrders, redactShopData } from "../app/shop.server.js";
 
 const money = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
 const orderId = "gid://shopify/Order/9001";
@@ -36,10 +36,10 @@ function sampleOrder() {
     transactions: [{ id: "gid://shopify/OrderTransaction/1", kind: "SALE", status: "SUCCESS",
       createdAt: "2026-09-23T00:02:00Z", processedAt: "2026-09-23T00:02:00Z", amountSet: money("100.25") }],
     lineItems: { nodes: [
-      { id: "gid://shopify/LineItem/9001", quantity: 1, requiresShipping: true,
+      { id: "gid://shopify/LineItem/9001", quantity: 1, currentQuantity: 1, requiresShipping: true,
         originalUnitPriceSet: money("120.00"), discountedTotalSet: money("100.00"),
         product: { id: "gid://shopify/Product/1" }, variant: { id: "gid://shopify/ProductVariant/1" }, customAttributes: [] },
-      { id: protectionLineId, quantity: 1, requiresShipping: false,
+      { id: protectionLineId, quantity: 1, currentQuantity: 1, requiresShipping: false,
         originalUnitPriceSet: money("0.25"), discountedTotalSet: money("0.25"),
         product: { id: "gid://shopify/Product/2" }, variant: { id: "gid://shopify/ProductVariant/2" }, customAttributes: attributes },
     ], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -138,6 +138,22 @@ async function verifyCoalescing() {
   await processNextDelivery({ adminForShop: async () => { throw new Error("temporary Admin failure"); } });
   assert.deepEqual((await statuses(partial.id)).map(({ status, attempts }) => [status, attempts]),
     [["FAILED", MAX_DELIVERY_ATTEMPTS], ["PENDING", 1]]);
+}
+
+async function verifyRedactionBeforeStore() {
+  // customers/redact for an order the worker has not stored yet removes its
+  // queued deliveries, so the order is never stored afterwards.
+  const redacted = await newShop();
+  await receiveOrderWebhook({ shopDomain: redacted.shopDomain, topic: "ORDERS_CREATE", webhookId: "r-1", payload: { id: 9601 } });
+  await receiveOrderWebhook({ shopDomain: redacted.shopDomain, topic: "ORDERS_PAID", webhookId: "r-2", payload: { id: 9601 } });
+  await receiveOrderWebhook({ shopDomain: redacted.shopDomain, topic: "ORDERS_CREATE", webhookId: "r-3", payload: { id: 9602 } });
+  assert.equal(await prisma.$transaction((transaction) => redactCustomerOrders(transaction, redacted.shopDomain, [9601])), 0);
+  assert.deepEqual((await statuses(redacted.id)).map(({ webhookId }) => webhookId), ["r-3"]);
+  const admin = countingAdmin();
+  assert.equal(await processNextDelivery({ adminForShop: admin.adminForShop }), true);
+  assert.equal(admin.fetches.has("gid://shopify/Order/9601"), false);
+  assert.equal(await prisma.order.count({ where: { shopId: redacted.id, shopifyOrderId: "gid://shopify/Order/9601" } }), 0);
+  assert.equal(await prisma.order.count({ where: { shopId: redacted.id, shopifyOrderId: "gid://shopify/Order/9602" } }), 1);
 }
 
 async function verifyKilledWorker() {
@@ -296,5 +312,6 @@ await runVerification({ database: prisma, cleanup: [async () => {
   assert.equal(await prisma.order.count({ where: { shopId: secondShop.id, shopifyOrderId: orderId } }), 1);
   assert.equal(await prisma.order.count({ where: { shopId: shop.id, shopifyOrderId: orderId } }), 1);
   await verifyCoalescing();
+  await verifyRedactionBeforeStore();
 } });
-console.log("PostgreSQL webhook verification passed: duplicate receipt, crash recovery, killed worker, paid snapshots, refunds, tenant isolation, and coalesced concurrent processing.");
+console.log("PostgreSQL webhook verification passed: duplicate receipt, crash recovery, killed worker, paid snapshots, refunds, tenant isolation, coalesced concurrent processing, and redaction before an order is stored.");
