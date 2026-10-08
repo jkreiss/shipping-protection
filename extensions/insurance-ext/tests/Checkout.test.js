@@ -1020,7 +1020,7 @@ describe("shipping protection checkout UI", () => {
     extension.shopify.i18n.formatCurrency = () => "$0.25";
     await renderExtension();
     expect(requireCheckbox().getAttribute("label")).toBe(
-      "Choose shipping protection — $0.25",
+      "Choose shipping protection $0.25",
     );
     expect(document.querySelector("s-text")?.textContent).toBe(
       "For packages stolen after delivery.",
@@ -1038,7 +1038,7 @@ describe("shipping protection checkout UI", () => {
     extension.shopify.i18n.formatCurrency = () => "$0.25";
     await renderExtension();
     expect(requireCheckbox().getAttribute("label")).toBe(
-      "Protect my parcel < $5 — $0.25",
+      "Protect my parcel < $5 $0.25",
     );
     expect(document.querySelector("s-text")?.textContent).toBe(supportingText);
     expect(document.querySelector("script")).toBeNull();
