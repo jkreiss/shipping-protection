@@ -795,3 +795,58 @@ At the end of the week, record measured peaks, backlog drain time, API cost,
 backfill duration, support incidents, and price/benefit findings. Use these to
 revise operational targets and decide whether to continue or expand the pilot.
 Do not infer readiness for unrelated merchants from a single successful order.
+
+## Section 8 operations fixes (2026-10-08)
+
+Production and the staging template now declare both JSON shop metafields,
+`shipping_protection_config` and `shipping_protection_offer`, referenced by the
+checkout extension. No migration is needed. The legacy pricing command and the
+current checkout editing command use the same operator implementation and
+preserve saved settings.
+
+Local verification used disposable PostgreSQL 17. Prisma 6 schema comparison
+returned 0 after migrations and 2 for a temporary unmigrated model. Both database
+verifiers refused nonempty shops before writes and passed from a different
+working directory, leaving no shops or orders. Verifier cleanup preserves the
+primary assertion error, attempts later cleanup, and always disconnects.
+
+CI retains the required `verify` name as an aggregate of `checks` and `docker`.
+Railway's Wait for CI waits for workflows; confirm it on both services in each
+environment. This change does not alter Railway settings or deploy Shopify.
+
+Before release: validate the app configuration, deploy the staging Shopify app
+version, confirm the `shipping_protection_offer` definition exists there, and test
+the checkout block with a paid protection order. Record the actual staging and
+production results only after these external checks. Docker and disposable CI
+verification evidence is recorded below when completed.
+
+The installed CLI `3.90.0` lacks `app config validate`. Production configuration
+passed local validation (`valid: true`, no issues) using a temporary CLI `4.8.5`
+without changing the project dependency. The CLI 4 major removes Node 20 support
+and deprecated flags; the dependency upgrade remains separate.
+
+Final local checks: 459 tests passed across 39 files, including real PostgreSQL 17
+integration. Lint, typecheck, build, schema comparison, and E2E discovery (12 tests)
+passed. The final Alpine image passed Node version, generated Prisma/schema, both
+PostgreSQL verifiers, web `/healthz`, worker startup, and graceful shutdown checks.
+The container readiness probe requires TCP so it cannot mistake PostgreSQL's
+temporary initialization server for the final server.
+
+Temporary CLI validation for local and staging-template placeholders could not
+complete: Shopify returned “Cannot find a valid organization.” Production
+configuration validated successfully. Actual staging deployment, metafield
+confirmation, and checkout acceptance remain pending release actions.
+
+Disposable GitHub workflows verified the aggregate gate against
+[failed](https://github.com/jkreiss/shipping-protection/actions/runs/37695454424),
+[skipped](https://github.com/jkreiss/shipping-protection/actions/runs/37695454133), and
+[cancelled](https://github.com/jkreiss/shipping-protection/actions/runs/37695454119)
+dependencies. Each `verify` job failed and its observer passed. The deliberately
+failing fixtures were removed from the temporary branch before the final normal
+CI run; they are absent from the implementation branch.
+
+The [final normal CI run](https://github.com/jkreiss/shipping-protection/actions/runs/37695669892)
+passed `checks`, `docker`, and `verify` at `79ec988`. That temporary branch's
+application source matches implementation commit `e78c2c5`; the only difference
+is enabling CI on the disposable branch. No production/staging deployment or
+Railway/GitHub protection setting was changed.

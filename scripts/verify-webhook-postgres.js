@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { runVerification } from "./verification.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -7,10 +9,6 @@ import prisma from "../app/db.server.js";
 import { receiveOrderWebhook } from "../app/webhook-inbox.server.js";
 import { claimDelivery, MAX_DELIVERY_ATTEMPTS, processNextDelivery } from "../app/webhook-worker.server.js";
 import { redactShopData } from "../app/shop.server.js";
-
-if (process.env.VERIFY_ISOLATED_DB !== "1") {
-  throw new Error("Set VERIFY_ISOLATED_DB=1 only for an isolated disposable test database.");
-}
 
 const money = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
 const orderId = "gid://shopify/Order/9001";
@@ -153,7 +151,7 @@ async function verifyKilledWorker() {
   assert.equal(await prisma.webhookDelivery.count({ where: { shopId: { not: crashed.id }, status: { in: ["PENDING", "PROCESSING"] } } }), 0,
     "Run against an empty queue: other deliveries could be claimed by the killed worker.");
   const order = { ...sampleOrder(), id: "gid://shopify/Order/9601" };
-  const child = spawn(process.execPath, ["scripts/verify-worker-crash-child.js", JSON.stringify(order)], { stdio: ["ignore", "pipe", "inherit"] });
+  const child = spawn(process.execPath, [fileURLToPath(new URL("./verify-worker-crash-child.js", import.meta.url)), JSON.stringify(order)], { stdio: ["ignore", "pipe", "inherit"] });
   // Rejects if the spawn fails; awaited in finally, so mark it handled now.
   const exited = once(child, "exit");
   exited.catch(() => {});
@@ -191,7 +189,15 @@ async function verifyKilledWorker() {
   assert.equal(await prisma.protectionPurchase.count({ where: { shopId: crashed.id } }), 1);
 }
 
-try {
+await runVerification({ database: prisma, cleanup: [async () => {
+  // Attempt every shop, even when one redaction fails.
+  const failures = [];
+  for (const shopDomain of shops) {
+    try { await prisma.$transaction((tx) => redactShopData(tx, shopDomain)); }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "Fixture redaction failed.");
+}], verify: async () => {
   await verifyKilledWorker();
   const shopDomain = `verify-${randomUUID().slice(0, 8)}.myshopify.com`;
   const shop = await prisma.shop.create({ data: { shopDomain } });
@@ -290,10 +296,5 @@ try {
   assert.equal(await prisma.order.count({ where: { shopId: secondShop.id, shopifyOrderId: orderId } }), 1);
   assert.equal(await prisma.order.count({ where: { shopId: shop.id, shopifyOrderId: orderId } }), 1);
   await verifyCoalescing();
-  console.log("PostgreSQL webhook verification passed: duplicate receipt, crash recovery, killed worker, paid snapshots, refunds, tenant isolation, and coalesced concurrent processing.");
-} finally {
-  for (const shopDomain of shops) {
-    await prisma.$transaction((tx) => redactShopData(tx, shopDomain));
-  }
-  await prisma.$disconnect();
-}
+} });
+console.log("PostgreSQL webhook verification passed: duplicate receipt, crash recovery, killed worker, paid snapshots, refunds, tenant isolation, and coalesced concurrent processing.");

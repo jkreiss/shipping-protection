@@ -58,3 +58,35 @@ test("detects missing, doubled or incorrect financial results", () => {
   const wrongCurrency = snapshot(); wrongCurrency.refunds[0].currencyCode = "USD";
   expect(() => assertSmokeSnapshot(wrongCurrency)).toThrow(/refund/);
 });
+
+test("smoke accepts ten-minute-old state and rejects the twenty-minute boundary", () => {
+  const now = new Date("2026-10-08T00:00:00Z");
+  const shop = {
+    installationState: "INSTALLED",
+    orderReconciliationSince: new Date(now.getTime() - 10 * 60_000),
+    orderReconciliationCursor: null,
+    orderReconciliationUntil: null,
+  };
+  expect(() => assertSmokeShopReady(shop, now)).not.toThrow();
+  expect(() =>
+    assertSmokeShopReady(
+      {
+        ...shop,
+        orderReconciliationSince: new Date(now.getTime() - 20 * 60_000 + 1),
+      },
+      now,
+    ),
+  ).not.toThrow();
+  expect(() =>
+    assertSmokeShopReady(
+      {
+        ...shop,
+        orderReconciliationSince: new Date(now.getTime() - 20 * 60_000),
+      },
+      now,
+    ),
+  ).toThrow();
+  expect(() =>
+    assertSmokeShopReady({ ...shop, orderReconciliationUntil: now }, now),
+  ).toThrow();
+});

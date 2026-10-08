@@ -12,7 +12,7 @@ evidence and recovery procedures live in the
 
 ## Local setup
 
-Use Node.js `>=20.19 <22` or `>=22.12`. The Shopify CLI is a dev dependency; run
+Use Node.js `22.18.0` to match CI and the Alpine container. The Shopify CLI is a dev dependency; run
 it through `npx shopify` or `npm run`.
 
 ```shell
@@ -30,12 +30,14 @@ Set `DATABASE_URL` in `.env` to the Supabase **Connect** → Session pooler URL
 (port 5432) with a percent-encoded password and
 `schema=public&sslmode=require`. Keep **Integrations → Data API** disabled in
 the Supabase dashboard, because the database holds Shopify access tokens.
-`compose.yaml` runs a local PostgreSQL as an alternative.
+For local PostgreSQL 17, run `docker compose up -d` and use
+`postgresql://yasas:yasas@127.0.0.1:5432/yasas?schema=public&sslmode=disable`.
+Compose binds the database only to loopback. Keep `sslmode=require` for Supabase.
 
 ```shell
 npm run setup            # prisma generate + migrate deploy
 npx prisma migrate status
-npm run verify:postgres
+npm run verify:schema
 npm run dev
 ```
 
@@ -136,13 +138,22 @@ npm test
 npm run lint
 npm run typecheck
 npm run build
-npm run verify:postgres
-npm run verify:webhook-postgres
+npm run verify:schema
+# Use an empty disposable database, with DATABASE_URL exported:
+VERIFY_ISOLATED_DB=1 npm run verify:postgres
+VERIFY_ISOLATED_DB=1 npm run verify:webhook-postgres
+# Build and test the final runtime against its own disposable PostgreSQL 17:
+docker build -t insurance-ci .
+bash scripts/verify-container.sh insurance-ci
 ```
 
 `typecheck` generates React Router and Cart Transform types, then checks the
-app, both extensions, and the E2E project. CI runs all of these plus
-`npm run test:e2e:list` against an isolated PostgreSQL database.
+app, both extensions, and the E2E project. CI's `checks` job runs these checks
+and E2E discovery against disposable PostgreSQL 17; `docker` builds and tests the
+final image. The required `verify` job succeeds only when both jobs succeed.
+Database verifiers require `VERIFY_ISOLATED_DB=1` and an empty `Shop` table;
+never run them against merchant data. `verify:schema` compares the migrated
+schema with Prisma's datamodel and exits 2 on drift.
 
 The live Playwright suite runs locally with `npm run test:e2e:headed`; see the
 [staging browser test guide](e2e/README.md).
@@ -190,15 +201,20 @@ deploy separately through Shopify CLI. The load environment also needs a
    the worker from the same image with start command `npm run worker` and no
    public domain. Start it only after migrations and the web health check pass.
 4. Connect both staging services to `main` and both production services to
-   `production`, and require the GitHub `CI / verify` check before automatic
-   deployment.
+   `production`. Enable Railway **Wait for CI** on each service: it waits for
+   GitHub workflows for the commit, rather than a selectable job name. GitHub
+   branch protection keeps the required aggregate `verify` check. See
+   [Railway's CI waiting behavior](https://docs.railway.com/deployments/github-autodeploys#wait-for-ci).
 5. Validate and deploy the Shopify configuration and extensions only after the
    matching backend passes smoke checks; app versions don't deploy the web app:
 
    ```sh
-   npx shopify app config validate --json --config production
+   npm exec --yes --package=@shopify/cli@4.8.5 -- shopify app config validate --json --config production
    npx shopify app deploy --config production
    ```
+
+   Configuration validation uses temporary CLI `4.8.5`; the project stays pinned
+   to `3.90.0`, which does not provide `app config validate`.
 
 6. Install on a Plus-capable development store, add the checkout block, place a
    paid protection test order, and confirm exactly one protection purchase is
@@ -253,3 +269,7 @@ Releases, listing non-merge commits since the last published release. It can
 also be run manually as **Generate Draft Changelog** in Actions. After a
 release passes production checks, rename the draft's `changelog-draft-*` tag to
 the version (for example, `v0.1.0`), make final copy edits, and publish.
+
+Generated notes keep the newest complete entries within 125,000 UTF-8 bytes,
+report omissions, and link the full diff or history. A generated draft is removed
+when no unreleased commits remain; manual drafts are preserved.

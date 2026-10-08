@@ -57,7 +57,12 @@ test("initial backfill resumes its original window across turns and skips stored
   const database = {
     shop: {
       findUnique: async () => ({ ...shopRow }),
-      update: async ({ data }) => Object.assign(shopRow, data),
+      updateMany: async ({ where, data }) => {
+        const matches = Object.entries(where).every(([key, value]) =>
+          value instanceof Date ? shopRow[key]?.getTime() === value.getTime() : shopRow[key] === value);
+        if (!matches) return { count: 0 };
+        Object.assign(shopRow, data); return { count: 1 };
+      },
     },
     order: { findMany: async ({ where }) => [...stored.values()].filter(({ shopifyOrderId }) =>
       where.shopId === shopRow.id && where.shopifyOrderId.in.includes(shopifyOrderId)) },

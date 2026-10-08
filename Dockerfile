@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:22.18.0-alpine AS build
 RUN apk add --no-cache openssl
 WORKDIR /app
 
@@ -10,15 +10,15 @@ RUN npm ci --include=dev
 COPY . .
 RUN npx prisma generate && npm run build
 
-FROM node:22-alpine
+FROM node:22.18.0-alpine
 RUN apk add --no-cache openssl
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY extensions/insurance-ext/package.json ./extensions/insurance-ext/package.json
 COPY extensions/shipping-protection-transform/package.json ./extensions/shipping-protection-transform/package.json
-COPY prisma ./prisma
 RUN npm ci --omit=dev --workspaces=false
+COPY prisma ./prisma
 
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules/.prisma/client ./node_modules/.prisma/client

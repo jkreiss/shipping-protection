@@ -11,6 +11,7 @@ export default defineConfig({
       "app/**/*.test.{js,jsx,ts,tsx}",
       "extensions/**/*.test.{js,jsx,ts,tsx}",
       "e2e/**/*.test.js",
+      "scripts/**/*.test.js",
     ],
   },
 });

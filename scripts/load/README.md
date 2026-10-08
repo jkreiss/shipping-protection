@@ -261,7 +261,7 @@ rule in one transaction. For a newly seeded shop it initializes the reconciliati
 watermark to now, so this smoke test does not start a full historical backfill.
 Existing fake-shop data is preserved; reruns create fresh webhook IDs and check
 the same three order records. An existing fake shop with a pending backfill,
-partial window, or watermark older than ten minutes is refused. Do not run it
+partial window, or watermark twenty minutes old or older is refused. Do not run it
 during an active large campaign.
 
 It sends eight signed HTTP deliveries for orders 1, 2, and 10: six unique events
@@ -345,7 +345,11 @@ refunds (AUD 4). It leaves those shops' future watermark in place for inspection
 Reconciliation seeds shop 3, sends **no webhooks**, and enables the worker's normal
 initial 60-day discovery. It waits for the completed window and queued refreshes,
 then checks the same exact financial set. It resets discovery and repeats the
-scan, checking again that no orders, purchases, or refunds were double-counted.
+scan against the same shops, checking after each pass that no orders, purchases,
+or refunds were double-counted. Completion requires a worker-written watermark
+that differs from the previous pass, with no active cursor/window and no queued
+refreshes. It never compares the worker timestamp with the laptop clock. A reset
+supersedes any old in-flight reconciliation page.
 Existing order versions can be skipped on the second scan, as in normal operation.
 
 For reconciliation, `LOAD_ORDERS_PER_SHOP` must equal the deployed

@@ -132,7 +132,7 @@ export async function verifyCampaign(database, shops, config) {
     refunds: Math.floor(config.orders / 10) * shops.length, refundAud: Math.floor(config.orders / 10) * 2 * shops.length };
 }
 
-async function waitForWorker(database, shops, config, run, deadline, report, armedAt = null) {
+async function waitForWorker(database, shops, config, run, deadline, report, previousWatermarks = new Map()) {
   const shopIds = shops.map((shop) => shop.id);
   const expected = config.shops * (2 * config.orders + Math.floor(config.orders / 10));
   while (Date.now() < deadline) {
@@ -146,9 +146,12 @@ async function waitForWorker(database, shops, config, run, deadline, report, arm
       const processed = await database.webhookDelivery.count({ where: { shopId: { in: shopIds }, webhookId: { startsWith: run }, status: "PROCESSED" } });
       if (processed === expected && backlog === 0) return;
     } else {
-      const complete = await database.shop.count({ where: { id: { in: shopIds }, orderReconciliationSince: { gte: armedAt },
-        orderReconciliationCursor: null, orderReconciliationUntil: null } });
-      if (complete === shops.length && backlog === 0) return;
+      const states = await database.shop.findMany({ where: { id: { in: shopIds } },
+        select: { id: true, orderReconciliationSince: true, orderReconciliationCursor: true, orderReconciliationUntil: true } });
+      const complete = states.length === shops.length && states.every((state) =>
+        state.orderReconciliationSince && !state.orderReconciliationCursor && !state.orderReconciliationUntil &&
+        state.orderReconciliationSince.getTime() !== previousWatermarks.get(state.id));
+      if (complete && backlog === 0) return states;
     }
     await pause(5000);
   }
@@ -184,13 +187,15 @@ export async function runCampaign(database, config, report) {
   } else {
     // Repeat discovery to prove re-reading the same authoritative records doesn't double count.
     report.passes = [];
+    let previousStates = shops;
     for (let pass = 1; pass <= 2; pass++) {
-      const armedAt = new Date();
+      const startedAt = Date.now();
+      const previousWatermarks = new Map(previousStates.map((shop) => [shop.id, shop.orderReconciliationSince?.getTime() ?? null]));
       await database.shop.updateMany({ where: { id: { in: shops.map((shop) => shop.id) } },
         data: { orderReconciliationSince: null, orderReconciliationCursor: null, orderReconciliationUntil: null } });
-      await waitForWorker(database, shops, config, report.run, deadline, report, armedAt);
+      previousStates = await waitForWorker(database, shops, config, report.run, deadline, report, previousWatermarks);
       const totals = await verifyCampaign(database, shops, config);
-      report.passes.push({ pass, seconds: (Date.now() - armedAt.getTime()) / 1000, totals });
+      report.passes.push({ pass, seconds: (Date.now() - startedAt) / 1000, totals });
     }
   }
   report.totals = await verifyCampaign(database, shops, config);

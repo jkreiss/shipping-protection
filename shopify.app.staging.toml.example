@@ -47,3 +47,8 @@ redirect_urls = [ "https://REPLACE_WITH_STAGING_HOST/auth/callback" ]
 type = "json"
 name = "Shipping protection configuration"
 description = "Checkout-only shipping protection product and pricing contract"
+
+[shop.metafields.app.shipping_protection_offer]
+type = "json"
+name = "Shipping protection checkout offer"
+description = "Per-store selection preference and customer-facing checkout text"

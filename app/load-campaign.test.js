@@ -1,5 +1,5 @@
-import { expect, test } from "vitest";
-import { campaignConfig, campaignEvents, checkCampaignOrder, sendCampaignEvents, verifyCampaign } from "../scripts/load/campaign.js";
+import { expect, test, vi } from "vitest";
+import { campaignConfig, campaignEvents, checkCampaignOrder, sendCampaignEvents, verifyCampaign, runCampaign } from "../scripts/load/campaign.js";
 
 const env = { APP_ENV: "load", LOAD_SMOKE_CONFIRM: "load-only", LOAD_SUPABASE_PROJECT_REF: "fake",
   DATABASE_URL: "postgresql://postgres.fake:dummy@pooler.example/postgres", SHOPIFY_APP_URL: "https://load.example",
@@ -96,4 +96,98 @@ test("sender stops after bounded network retries and enforces submission deadlin
   await expect(sendCampaignEvents(config, campaignEvents(config, "timeout"), async () => {
     throw new Error("should never send");
   }, async () => {}, Date.now() - 1)).rejects.toThrow(/timeout/);
+});
+
+test("two discovery passes require changed worker watermarks despite laptop clock skew", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-08"));
+  vi.stubGlobal("fetch", async () => ({
+    ok: true,
+    body: { cancel: async () => {} },
+  }));
+  let pass = 0,
+    polls = 0;
+  const financialChecks = [];
+  const workerTimes = [new Date("2000-01-01"), new Date("2000-01-02")];
+  let shop;
+  const poll = () => {
+    polls++;
+    // An active window never counts as done. On pass two, a repeated previous
+    // watermark must not count, even with its cursor and window cleared.
+    const since =
+      pass === 2 && polls === 1 ? workerTimes[0] : workerTimes[pass - 1];
+    return [
+      {
+        ...shop,
+        orderReconciliationSince: since,
+        orderReconciliationCursor: pass === 1 && polls === 1 ? "active" : null,
+        orderReconciliationUntil:
+          pass === 1 && polls === 1 ? workerTimes[0] : null,
+      },
+    ];
+  };
+  const db = {
+    shop: {
+      findFirst: async () => null,
+      findUnique: async () => shop,
+      upsert: async ({ create }) =>
+        (shop = { id: "shop", installationState: "INSTALLED", ...create }),
+      update: async () => shop,
+      updateMany: async () => {
+        pass++;
+        polls = 0;
+        return { count: 1 };
+      },
+      findMany: async () => poll(),
+      count: async ({ where }) =>
+        poll().filter(
+          (row) =>
+            !row.orderReconciliationCursor &&
+            row.orderReconciliationSince >= where.orderReconciliationSince.gte,
+        ).length,
+    },
+    pricingRule: { upsert: async ({ create }) => create },
+    session: { upsert: async () => {} },
+    webhookDelivery: { groupBy: async () => [] },
+    order: {
+      findMany: async () => {
+        financialChecks.push({ pass, polls });
+        return Array.from({ length: 20 }, (_, n) => order(n + 1));
+      },
+    },
+    protectionPurchase: { count: async () => 10 },
+    protectionRefund: { count: async () => 2 },
+    $transaction: async (run) => run(db),
+  };
+  const report = { run: "two-passes" };
+  let failure;
+  try {
+    const pending = runCampaign(
+      db,
+      {
+        ...campaignConfig("burst", env),
+        mode: "reconcile",
+        shops: 1,
+        timeoutSeconds: 30,
+      },
+      report,
+    ).catch((error) => {
+      failure = error;
+    });
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(failure).toBeUndefined();
+    expect(financialChecks).toEqual([
+      { pass: 1, polls: 2 },
+      { pass: 2, polls: 2 },
+      { pass: 2, polls: 2 },
+    ]);
+    expect(report.passes.map((entry) => entry.totals)).toEqual([
+      { orders: 20, purchases: 10, purchaseAud: 20, refunds: 2, refundAud: 4 },
+      { orders: 20, purchases: 10, purchaseAud: 20, refunds: 2, refundAud: 4 },
+    ]);
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });

@@ -1,3 +1,4 @@
+import { runVerification } from "./verification.js";
 import assert from "node:assert/strict";
 import prisma from "../app/db.server.js";
 import { persistNormalizedOrder } from "../app/order-ingestion.server.js";
@@ -105,6 +106,7 @@ function normalizedOrder({ id, name, protectedOrder }) {
   };
 }
 
+await runVerification({ database: prisma, verify: async () => {
 try {
   await prisma.$transaction(async (transaction) => {
     const shop = await transaction.shop.create({
@@ -324,6 +326,19 @@ try {
       subtotalAmount: "100.0000", totalAmount: "100.2500", totalDiscountsAmount: "0.0000",
       totalShippingAmount: "0.0000", totalTaxAmount: "0.0000",
     } });
+    await transaction.orderLine.create({ data: {
+      shopId: otherShop.id, orderId: expiredOrder.id, shopifyLineItemId: "expired-line",
+      quantity: 1, requiresShipping: true, currencyCode: "AUD", originalUnitAmount: "100.0000",
+      preDiscountAmount: "100.0000", totalDiscountAmount: "0.0000", finalAmount: "100.0000",
+    } });
+    await transaction.protectionRefund.create({ data: {
+      shopId: otherShop.id, orderId: expiredOrder.id, shopifyRefundId: "expired-refund",
+      status: "CONFIRMED", amount: "0.2500", currencyCode: "AUD", succeededAt: expiredAt,
+    } });
+    await transaction.webhookDelivery.create({ data: {
+      shopId: otherShop.id, shopifyOrderId: expiredOrder.shopifyOrderId,
+      webhookId: "expired-delivery", topic: "ORDERS_PAID", status: "PROCESSED",
+    } });
     const expiredPurchase = await transaction.protectionPurchase.create({ data: {
       shopId: otherShop.id, orderId: expiredOrder.id, currencyCode: "AUD", feeAmount: "0.2500",
       attributionStatus: "UNATTRIBUTED", purchasedAt: expiredAt,
@@ -333,8 +348,12 @@ try {
       shopId: otherShop.id, protectionPurchaseId: expiredPurchase.id, type: "LOST",
     } });
     await transaction.claimEvent.create({ data: { shopId: otherShop.id, claimId: expiredClaim.id, type: "SUBMITTED" } });
-    assert.ok(await purgeExpiredOrderBatch(transaction, new Date("2024-06-01T00:00:00.000Z")) >= 1);
+    assert.equal(await purgeExpiredOrderBatch(transaction, new Date("2024-06-01T00:00:00.000Z")), 1);
+    assert.equal(await transaction.claim.count({ where: { id: expiredClaim.id } }), 0);
     assert.equal(await transaction.order.count({ where: { id: expiredOrder.id } }), 0);
+    assert.equal(await transaction.orderLine.count({ where: { orderId: expiredOrder.id } }), 0);
+    assert.equal(await transaction.protectionRefund.count({ where: { orderId: expiredOrder.id } }), 0);
+    assert.equal(await transaction.webhookDelivery.count({ where: { shopId: otherShop.id, webhookId: "expired-delivery" } }), 0);
     assert.equal(await transaction.protectionPurchase.count({ where: { id: expiredPurchase.id } }), 0);
     assert.equal(await transaction.claimEvent.count({ where: { claimId: expiredClaim.id } }), 0);
     assert.equal(await transaction.order.count({ where: { id: otherOrder.id } }), 1);
@@ -368,9 +387,9 @@ try {
     }),
     0,
   );
-} finally {
-  await prisma.$disconnect();
 }
+assert.equal(await prisma.shop.count(), 0);
+} });
 
 console.log(
   "PostgreSQL verification passed: durable purchases, reconciliation, refunds, tenant keys, claims, customer redaction, retention purge, and event redaction.",

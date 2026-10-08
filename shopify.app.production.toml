@@ -54,3 +54,8 @@ redirect_urls = [ "https://insurance-backend-production-82be.up.railway.app/auth
 type = "json"
 name = "Shipping protection configuration"
 description = "Checkout-only shipping protection product and pricing contract"
+
+[shop.metafields.app.shipping_protection_offer]
+type = "json"
+name = "Shipping protection checkout offer"
+description = "Per-store selection preference and customer-facing checkout text"

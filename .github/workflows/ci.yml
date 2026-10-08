@@ -7,12 +7,12 @@ on:
   pull_request:
 
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -34,19 +34,10 @@ jobs:
         with:
           node-version: 22.18.0
           cache: npm
-      # Restoring node_modules is much faster than npm ci, which reinstalls
-      # everything even from npm's download cache. The lockfile is the key.
-      - id: node-modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            extensions/*/node_modules
-          key: node-modules-${{ runner.os }}-node-22.18.0-${{ hashFiles('package-lock.json') }}
-      - if: steps.node-modules.outputs.cache-hit != 'true'
-        run: npm ci
+      - run: npm ci
       - run: npx prisma generate
       - run: npx prisma migrate deploy
+      - run: npm run verify:schema
       - run: npm test
       - run: npm run test:e2e:list
       - run: npm run verify:postgres
@@ -55,7 +46,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
-  # Runs alongside verify. Layers are cached between runs, so only a
+  # Runs alongside checks. Layers are cached between runs, so only a
   # dependency change reinstalls packages inside the image.
   docker:
     runs-on: ubuntu-latest
@@ -67,6 +58,17 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: insurance-ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - run: bash scripts/verify-container.sh insurance-ci
+
+  # Keep the required check name stable and fail closed for either dependency.
+  verify:
+    needs: [checks, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          test "${{ needs.checks.result }}" = success && test "${{ needs.docker.result }}" = success
