@@ -27,6 +27,9 @@ export function createWorkerRuntime({
   const reconcileRetryAt = new Map();
   const behindReportedAt = new Map();
   let retentionDueAt = 0;
+  // Shops whose purge failed this run; skipped until the run completes so one
+  // shop isn't retried (and reported) every turn.
+  let retentionFailedShops = new Set();
   let stopping = false;
 
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,17 +80,23 @@ export function createWorkerRuntime({
 
   // Runs at most once per interval. Each turn is time-boxed; an unfinished purge
   // continues on the next pass, after reconciliation has had its turn. A failure
-  // retries after a backoff rather than every pass.
+  // retries after a backoff rather than every pass. A shop that fails is
+  // reported, skipped for the rest of the run, and retried next run.
   async function retentionPass(now = Date.now()) {
     if (now < retentionDueAt) return false;
     const started = Date.now();
     try {
       const result = await purgeOrders({
         database, shouldStop: () => stopping, onProgress: () => workerHeartbeat("reconciliation"),
+        skipShopIds: [...retentionFailedShops],
+        onShopFailure: (shopId, error) => reportFailure("retention_shop_failed", error, { shopId }),
       });
+      for (const shopId of result.failedShopIds) retentionFailedShops.add(shopId);
+      const shopsFailed = retentionFailedShops.size;
+      if (result.complete) retentionFailedShops = new Set();
       retentionDueAt = result.complete ? now + retentionIntervalMs : now;
       logEvent(result.complete ? "retention_purge_completed" : "retention_purge_paused", {
-        ordersDeleted: result.ordersDeleted, deliveriesDeleted: result.deliveriesDeleted,
+        ordersDeleted: result.ordersDeleted, deliveriesDeleted: result.deliveriesDeleted, shopsFailed,
         cutoff: result.cutoff.toISOString(), durationMs: Date.now() - started,
       });
     } catch (error) {
