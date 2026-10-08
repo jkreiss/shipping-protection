@@ -4,6 +4,7 @@ import {
   cartTransformRun,
   currencyMinorUnits,
 } from "../src/cart_transform_run";
+import currencyFixtures from "../../../test-fixtures/currency-minor-units.json";
 import feeFixtures from "../../../test-fixtures/pricing-fees.json";
 
 const PRODUCT_ID = "gid://shopify/Product/1";
@@ -88,12 +89,12 @@ describe("fee calculation", () => {
     ).toBe(fixture.expected);
   });
 
-  test("uses ISO currency precision", () => {
-    expect(currencyMinorUnits("JPY")).toBe(0);
-    expect(currencyMinorUnits("KWD")).toBe(3);
-    expect(currencyMinorUnits("CLF")).toBe(4);
-    expect(currencyMinorUnits("AUD")).toBe(2);
-  });
+  test.each(currencyFixtures)(
+    "uses ISO currency precision for $currencyCode",
+    ({ currencyCode, minorUnits }) => {
+      expect(currencyMinorUnits(currencyCode)).toBe(minorUnits);
+    },
+  );
 
   test("sums decimal inputs without floating-point drift", () => {
     expect(calculateFee(["0.10", "0.20", "99.70"], 25, 2)).toBe("0.25");
@@ -271,9 +272,9 @@ describe("cart transform", () => {
     ]);
   });
 
-  test("rounds the per-unit fee up when no protection line has a single unit", () => {
-    // The checkout block resets the quantity to 1; until then a 0.25 fee over
-    // 3 units rounds up to 0.09 each, so the total cannot fall below the fee.
+  test("prices every protection line at zero when none has a single unit", () => {
+    // The fee can't be charged exactly across several units, so nothing is
+    // charged and ingestion records the order as not protected.
     const protection = protectionLine("a-protection", 3);
     const other = protectionLine("z-protection", 2);
     const result = cartTransformRun(
@@ -281,36 +282,17 @@ describe("cart transform", () => {
     );
 
     expect(result.operations).toEqual([
-      expectedUpdate(protection.id, "0.09"),
+      expectedUpdate(protection.id, "0"),
       expectedUpdate(other.id, "0"),
     ]);
   });
 
-  test.each([
-    ["USD", "100.00", 2, "0.13"],
-    ["USD", "100.00", 5, "0.05"],
-    ["USD", "100.00", 25, "0.01"],
-    ["USD", "100.00", 100, "0.01"],
-    ["USD", "4.00", 3, "0.01"],
-    ["USD", "1.99", 3, "0.00"],
-    ["JPY", "1000", 2, "2"],
-    ["JPY", "800", 2, "1"],
-    ["JPY", "0", 3, "0"],
-    ["KWD", "100.00", 3, "0.084"],
-    ["KWD", "1.20", 2, "0.002"],
-    ["CLF", "100.00", 3, "0.0834"],
-  ])(
-    "rounds up at %s precision for subtotal %s and quantity %s",
-    (currencyCode, amount, quantity, perUnit) => {
-      const protection = protectionLine("protection", quantity);
-      const result = cartTransformRun(
-        input([
-          line({ id: "physical", amount, currencyCode }),
-          protection,
-        ]),
-      );
+  test("prices a single multi-unit protection line at zero", () => {
+    const protection = protectionLine("protection", 100);
+    const result = cartTransformRun(
+      input([line({ id: "physical", amount: "100.00" }), protection]),
+    );
 
-      expect(result.operations).toEqual([expectedUpdate(protection.id, perUnit)]);
-    },
-  );
+    expect(result.operations).toEqual([expectedUpdate(protection.id, "0")]);
+  });
 });

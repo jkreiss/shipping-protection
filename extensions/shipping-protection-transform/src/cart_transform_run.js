@@ -88,41 +88,26 @@ function parseConfiguration(value) {
 }
 
 /**
- * The amount divided over quantity units, rounded up at the amount's own
- * precision, so the units together are never charged less than the amount.
- * @param {string} amount
- * @param {number} quantity
- */
-function perUnitRoundedUp(amount, quantity) {
-  const [whole, fraction = ""] = amount.split(".");
-  const units = BigInt(quantity);
-  const minor = (BigInt(whole + fraction) + units - 1n) / units;
-  if (fraction.length === 0) return minor.toString();
-  const digits = minor.toString().padStart(fraction.length + 1, "0");
-  return `${digits.slice(0, -fraction.length)}.${digits.slice(-fraction.length)}`;
-}
-
-/**
- * The fee is charged once per cart: on the first single-unit protection line,
- * with every other protection line at zero. Without a single-unit line the
- * first line is charged the fee per unit rounded up, so a raised quantity is
- * never charged less than the fee; the checkout block resets it to one unit.
+ * The fee is charged once per cart, on the first single-unit protection line;
+ * every other protection line is set to zero. A Function can't change a
+ * quantity and one unit price applies to every unit, so without a single-unit
+ * line the fee can't be charged exactly: protection is priced at zero and
+ * order ingestion records the order as not protected (decided 2026-10-08).
+ * The checkout block resets the quantity to one, so this only happens through
+ * paths that skip the block.
  * @param {{ id: string, quantity: number }[]} lines
  * @param {string} amount
  * @returns {CartTransformRunResult}
  */
 function priceLines(lines, amount) {
-  const charged = lines.find((line) => line.quantity === 1) ?? lines[0];
-  const chargedAmount = charged.quantity === 1
-    ? amount
-    : perUnitRoundedUp(amount, charged.quantity);
+  const charged = lines.find((line) => line.quantity === 1);
   return {
     operations: lines.map((line) => ({
       lineUpdate: {
         cartLineId: line.id,
         price: {
           adjustment: {
-            fixedPricePerUnit: { amount: line === charged ? chargedAmount : "0" },
+            fixedPricePerUnit: { amount: line === charged ? amount : "0" },
           },
         },
       },
@@ -201,12 +186,13 @@ export function cartTransformRun(input) {
     return NO_CHANGES;
   }
 
+  const isProtectionLine = (
+    /** @type {CartTransformRunInput["cart"]["lines"][number]} */ line,
+  ) =>
+    line.merchandise.__typename === "ProductVariant" &&
+    line.merchandise.id === configuration.variantId;
   const protectionLines = input.cart.lines
-    .filter(
-      (line) =>
-        line.merchandise.__typename === "ProductVariant" &&
-        line.merchandise.id === configuration.variantId,
-    )
+    .filter(isProtectionLine)
     .sort((left, right) =>
       left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
     );
@@ -215,15 +201,10 @@ export function cartTransformRun(input) {
   // fails, so a line that shouldn't be charged is set to zero explicitly.
   if (!configuration.enabled) return priceLines(protectionLines, "0");
 
-  const eligibleLines = input.cart.lines.filter((line) => {
-    if (
-      line.merchandise.__typename === "ProductVariant" &&
-      line.merchandise.id === configuration.variantId
-    ) {
-      return false;
-    }
-    return line.merchandise.requiresShipping === true;
-  });
+  const eligibleLines = input.cart.lines.filter(
+    (line) =>
+      !isProtectionLine(line) && line.merchandise.requiresShipping === true,
+  );
   if (eligibleLines.length === 0) return priceLines(protectionLines, "0");
 
   const currencyCode = eligibleLines[0].cost.subtotalAmount.currencyCode;

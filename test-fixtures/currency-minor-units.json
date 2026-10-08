@@ -1,0 +1,118 @@
+[
+  {
+    "currencyCode": "BIF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "CLP",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "DJF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "GNF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "ISK",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "JPY",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "KMF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "KRW",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "PYG",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "RWF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "UGX",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "UYI",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "VND",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "VUV",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "XAF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "XOF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "XPF",
+    "minorUnits": 0
+  },
+  {
+    "currencyCode": "BHD",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "IQD",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "JOD",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "KWD",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "LYD",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "OMR",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "TND",
+    "minorUnits": 3
+  },
+  {
+    "currencyCode": "CLF",
+    "minorUnits": 4
+  },
+  {
+    "currencyCode": "UYW",
+    "minorUnits": 4
+  },
+  {
+    "currencyCode": "USD",
+    "minorUnits": 2
+  },
+  {
+    "currencyCode": "AUD",
+    "minorUnits": 2
+  },
+  {
+    "currencyCode": "EUR",
+    "minorUnits": 2
+  }
+]

@@ -375,12 +375,28 @@ describe("live price check", () => {
     expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
   });
 
-  test("marks a fee charged per unit as unmatched", async () => {
+  test("records no purchase when no protection line has a single unit", async () => {
+    const tx = transaction();
+    const order = chargedProtection(normalizedOrder(attributed), "0.0000");
+    Object.assign(order.lines[1], { quantity: 2 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedPurchase()).toBeNull();
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: false, paidProtectionFee: "0.0000" });
+  });
+
+  test("matches the purchase on the single-unit line when another is priced at zero", async () => {
     const tx = transaction();
     const order = normalizedOrder(attributed);
-    Object.assign(order.lines[1], { quantity: 2, preDiscountAmount: "0.5000", finalAmount: "0.5000" });
+    order.lines.push({
+      ...order.lines[1],
+      shopifyLineItemId: "gid://shopify/LineItem/3",
+      quantity: 3,
+      originalUnitAmount: "0.0000", preDiscountAmount: "0.0000", finalAmount: "0.0000",
+    });
     await persistNormalizedOrder(tx, shop, order);
-    expect(tx.storedPurchase().pricingCheck).toBe("UNMATCHED");
+    expect(tx.storedPurchase().pricingCheck).toBe("MATCHED");
   });
 
   test("checks the price in the currency the customer paid in", async () => {
