@@ -35,9 +35,8 @@ describe("analytics database scope", () => {
       }) },
       order: { findMany: vi.fn().mockResolvedValue([]) },
       protectionRefund: { findMany: vi.fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: "r1", succeededAt: new Date("2026-09-03T00:00:00Z"),
-          amount: "0.2500", currencyCode: "AUD", order }]) },
+        .mockImplementation(async ({ where }) => where.status === "CONFIRMED" ? [{ id: "r1", succeededAt: new Date("2026-09-03T00:00:00Z"),
+          amount: "0.2500", currencyCode: "AUD", order }] : []) },
       protectionPurchase: { findMany: vi.fn().mockResolvedValue([
         { id: "p1", purchasedAt: new Date("2026-09-02T00:00:00Z"), feeAmount: "0.5000", currencyCode: "AUD", order },
       ]) },
@@ -45,11 +44,17 @@ describe("analytics database scope", () => {
     const admin = { graphql: async () => ({ json: async () => ({ data: {
       shop: { currencyCode: "AUD", ianaTimezone: "Australia/Sydney" },
     } }) }) };
-    const result = await readOverview({ admin, shopDomain: "one.myshopify.com", database });
+    const result = await readOverview({ admin, shopDomain: "one.myshopify.com", database, now: new Date("2020-01-01T14:00:00Z") });
+    expect(result.range).toMatchObject({ end: "2020-01-02" });
+    expect(database.shop.findUnique).toHaveBeenCalledTimes(1);
+    expect(result.range).toMatchObject({ start: "2019-12-04", end: "2020-01-02" });
+    expect(result.trend[0].date).toBe("2019-12-04");
+    expect(result.trend[29].date).toBe("2020-01-02");
+    expect(database.order.findMany.mock.calls[0][0].where.OR[0].firstPaidAt).toEqual({ gte: new Date("2019-12-03T00:00:00Z"), lt: new Date("2020-01-04T00:00:00Z") });
     expect(result.range.preset).toBe("30");
     expect(result.trend).toHaveLength(30);
     const purchaseWhere = database.protectionPurchase.findMany.mock.calls[0][0].where;
-    const refundWhere = database.protectionRefund.findMany.mock.calls[1][0].where;
+    const refundWhere = database.protectionRefund.findMany.mock.calls.find(([query]) => query.where.status === "CONFIRMED")[0].where;
     expect(purchaseWhere).toMatchObject({ shopId: "shop-1", order: { isTest: false } });
     expect(refundWhere).toMatchObject({ shopId: "shop-1", status: "CONFIRMED", order: { isTest: false } });
     expect(result.recentActivity.map((entry) => entry.kind)).toEqual(["REFUNDED", "PURCHASED"]);
@@ -102,4 +107,34 @@ describe("order sync status", () => {
     expect(events).toEqual([expect.objectContaining({ shopId: "shop-1", orderRows: 0, refundRows: 0 })]);
     expect(events[0].durationMs).toEqual(expect.any(Number));
   });
+});
+
+
+test("Overview starts tenant-scoped activity while Shopify analytics is still pending", async () => {
+  let finishShopify;
+  const response = new Promise((resolve) => { finishShopify = resolve; });
+  const database = {
+    shop: { findUnique: vi.fn().mockResolvedValue({ id: "shop-2", orderHistoryStartAt: null, orderReconciliationSince: null }) },
+    order: { findMany: vi.fn().mockResolvedValue([]) },
+    protectionRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    protectionPurchase: { findMany: vi.fn().mockResolvedValue([]) },
+  };
+  const admin = { graphql: vi.fn(() => response) };
+  const reading = readOverview({ admin, shopDomain: "two.myshopify.com", database });
+  try {
+    await vi.waitFor(() => expect(admin.graphql).toHaveBeenCalled());
+    expect(database.protectionPurchase.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ shopId: "shop-2" }) }));
+    expect(database.order.findMany).not.toHaveBeenCalled();
+  } finally {
+    finishShopify({ json: async () => ({ data: { shop: { currencyCode: "USD", ianaTimezone: "America/New_York" } } }) });
+    await reading;
+  }
+});
+
+test("Overview rejects an unavailable tenant before financial reads", async () => {
+  const admin = { graphql: vi.fn() };
+  const database = { shop: { findUnique: vi.fn().mockResolvedValue(null) }, protectionPurchase: { findMany: vi.fn() } };
+  await expect(readOverview({ admin, shopDomain: "missing.myshopify.com", database })).rejects.toThrow("not installed");
+  expect(admin.graphql).not.toHaveBeenCalled();
+  expect(database.protectionPurchase.findMany).not.toHaveBeenCalled();
 });

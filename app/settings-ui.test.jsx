@@ -1,8 +1,10 @@
 /** @jsxImportSource react */
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const mocks = vi.hoisted(() => ({ state: null, saving: false }));
+const mocks = vi.hoisted(() => ({ state: null, saving: false, phase: undefined, data: undefined, toast: vi.fn() }));
 vi.mock("preact/jsx-runtime", async () => ({
   ...(await vi.importActual("react/jsx-runtime")),
   ...(await vi.importActual("react/jsx-dev-runtime")),
@@ -10,14 +12,16 @@ vi.mock("preact/jsx-runtime", async () => ({
 vi.mock("react-router", () => ({
   useLoaderData: () => mocks.state,
   useFetcher: () => ({
-    state: mocks.saving ? "submitting" : "idle",
+    state: mocks.phase ?? (mocks.saving ? "submitting" : "idle"),
+    data: mocks.data,
     formMethod: "POST",
     Form: "form",
   }),
 }));
-vi.mock("@shopify/app-bridge-react", () => ({
-  useAppBridge: () => ({ toast: { show: vi.fn() } }),
-}));
+vi.mock("@shopify/app-bridge-react", () => {
+  const bridge = { toast: { show: mocks.toast } };
+  return { useAppBridge: () => bridge };
+});
 vi.mock("./shopify.server", () => ({ authenticate: { admin: vi.fn() } }));
 vi.mock("./shipping-protection.server", () => ({
   activatePricingRule: vi.fn(),
@@ -40,6 +44,9 @@ function render() {
 
 beforeEach(() => {
   mocks.saving = false;
+  mocks.data = undefined;
+  mocks.phase = undefined;
+  mocks.toast.mockClear();
   mocks.state = {
     protectionOff: false,
     configuration: {
@@ -179,4 +186,37 @@ describe("settings controls", () => {
       ),
     ).toBe(true);
   });
+});
+
+
+test("shows one toast per completed successful save, including identical messages", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement("div"));
+  const update = () => act(async () => { root.render(<Settings />); });
+  try {
+    await update();
+    mocks.data = { success: "Saved" };
+    await update();
+    await update();
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    mocks.saving = true;
+    await update();
+    mocks.data = { success: "Saved" };
+    await update();
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    mocks.saving = false;
+    mocks.phase = "loading";
+    await update();
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+    mocks.phase = "idle";
+    await update();
+    await update();
+    expect(mocks.toast).toHaveBeenCalledTimes(2);
+    mocks.data = { error: "Couldn't save" };
+    await update();
+    expect(mocks.toast).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => root.unmount());
+    delete globalThis.IS_REACT_ACT_ENVIRONMENT;
+  }
 });

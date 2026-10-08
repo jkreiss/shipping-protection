@@ -4,8 +4,8 @@ import { authenticate } from "../shopify.server";
 import { readClaimsOverview } from "../claims/claims.server";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  return readClaimsOverview(session.shop);
+  const { admin, session } = await authenticate.admin(request);
+  return readClaimsOverview(admin, session.shop);
 };
 
 const CLAIM_TYPE_LABELS = { LOST: "Lost", STOLEN: "Stolen", DAMAGED: "Damaged" };
@@ -21,7 +21,7 @@ const CLAIM_STATUS = {
 };
 
 export default function ClaimsAndReturns() {
-  const { claims, claimIntakeEnabled, returnsEnabled } = useLoaderData();
+  const { claims, claimIntakeEnabled, returnsEnabled, timeZone } = useLoaderData();
 
   return (
     <s-page heading="Claims & Returns">
@@ -56,7 +56,7 @@ export default function ClaimsAndReturns() {
                     </s-table-cell>
                     <s-table-cell>{CLAIM_TYPE_LABELS[claim.type] ?? claim.type}</s-table-cell>
                     <s-table-cell><s-badge tone={tone}>{label}</s-badge></s-table-cell>
-                    <s-table-cell>{new Date(claim.submittedAt).toLocaleDateString()}</s-table-cell>
+                    <s-table-cell>{new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date(claim.submittedAt))}</s-table-cell>
                   </s-table-row>
                 );
               })}

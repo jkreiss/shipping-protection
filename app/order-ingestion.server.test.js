@@ -283,12 +283,16 @@ describe("normalized order persistence", () => {
     paid.lines[1].finalAmount = "0.3000";
     await persistNormalizedOrder(tx, shop, paid);
     expect(tx.storedPurchase()).toMatchObject({ feeAmount: "0.3000", purchasedAt: paid.paidAt });
+    expect(tx.storedPurchase().purchasedAt).toEqual(tx.storedOrder().firstPaidAt);
+    expect(tx.storedPurchase().currencyCode).toBe(tx.storedOrder().currencyCode);
     const edited = normalizedOrder({});
     edited.shopifyUpdatedAt = new Date("2026-09-24T00:00:00Z");
     edited.lines[1].finalAmount = "0.5000";
     await persistNormalizedOrder(tx, shop, edited);
     expect(tx.storedPurchase().feeAmount).toBe("0.3000");
     expect(tx.storedOrder().paidProtectionFee).toBe("0.3000");
+    expect(tx.storedPurchase().purchasedAt).toEqual(tx.storedOrder().firstPaidAt);
+    expect(tx.storedPurchase().currencyCode).toBe(tx.storedOrder().currencyCode);
   });
 
   test("removes an unpaid provisional purchase when the line disappears", async () => {

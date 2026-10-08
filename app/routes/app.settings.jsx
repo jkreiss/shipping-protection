@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -157,11 +157,13 @@ export default function Settings() {
       "Set up shipping protection, then add its block to checkout.";
   }
 
+  const handledResponse = useRef(null);
   useEffect(() => {
-    if (fetcher.data?.success) {
+    if (fetcher.state === "idle" && fetcher.data?.success && handledResponse.current !== fetcher.data) {
+      handledResponse.current = fetcher.data;
       shopify.toast.show(fetcher.data.success);
     }
-  }, [fetcher.data?.success, shopify]);
+  }, [fetcher.state, fetcher.data, shopify]);
 
   const runSetup = () => {
     fetcher.submit({ intent: "setup" }, { method: "POST" });
@@ -369,7 +371,7 @@ export default function Settings() {
                   {offer.checkboxLabel ?? DEFAULT_CHECKBOX_LABEL}
                 </s-text>
                 <s-paragraph>
-                  {offer.supportingText ?? DEFAULT_SUPPORTING_TEXT}{" "}
+                  {offer.supportingText ?? DEFAULT_SUPPORTING_TEXT}
                 </s-paragraph>
                 <s-paragraph>
                   This store&apos;s checkout copy is managed for you.
