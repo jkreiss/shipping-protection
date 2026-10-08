@@ -339,6 +339,40 @@ describe("pricing rule health", () => {
     expect(state.configuration.protectionEnabled).toBe(false);
   });
 
+  test("fails readiness when the active rule's rate differs from the published one", async () => {
+    const core = await mocks.loadCore();
+    mocks.loadCore.mockResolvedValue({
+      ...core,
+      shopConfig: {
+        schemaVersion: 2, enabled: true, productId: "gid://shopify/Product/1",
+        variantId: "gid://shopify/ProductVariant/1", ruleId: "rule-2", ruleVersion: 4,
+        rateBasisPoints: 25, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: "2026-09-02T00:00:00.000Z",
+      },
+    });
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    const state = await readShippingProtectionState({}, "one.myshopify.com");
+    expect(pricingCheck(state).ok).toBe(false);
+    expect(state.ready).toBe(false);
+    // The dashboard shows what checkout charges, not the database's rule.
+    expect(state.pricing).toMatchObject({ ruleId: "rule-2", ruleVersion: 4, rateBasisPoints: 25 });
+  });
+
+  test("passes readiness when a schema 2 rule matches the published one", async () => {
+    const core = await mocks.loadCore();
+    mocks.loadCore.mockResolvedValue({
+      ...core,
+      shopConfig: {
+        schemaVersion: 2, enabled: true, productId: "gid://shopify/Product/1",
+        variantId: "gid://shopify/ProductVariant/1", ruleId: "rule-1", ruleVersion: 3,
+        rateBasisPoints: 40, basis: "SHIPPABLE_PRE_DISCOUNT", effectiveAt: "2026-09-01T00:00:00.000Z",
+      },
+    });
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    const state = await readShippingProtectionState({}, "one.myshopify.com");
+    expect(pricingCheck(state).ok).toBe(true);
+    expect(state.pricing).toMatchObject({ ruleId: "rule-1", rateBasisPoints: 40 });
+  });
+
   test("asks for repair when the rule is on a replaced variant", async () => {
     mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/9"));
     const state = await readShippingProtectionState({}, "one.myshopify.com");
@@ -414,9 +448,15 @@ describe("setup republishing", () => {
 
   test("recovers the rate checkout charges when the published copies differ and no active rule exists", async () => {
     const core = await mocks.loadCore();
-    mocks.loadCore.mockResolvedValue({
+    const recovered = {
       ...core,
       transformConfig: { ...core.shopConfig, rateBasisPoints: 80 },
+    };
+    mocks.loadCore.mockResolvedValue(recovered);
+    // Publishing replaces both published copies, as it does in Shopify.
+    mocks.createAndPublishPricingRule.mockImplementation(async ({ rateBasisPoints }) => {
+      recovered.shopConfig = { ...recovered.shopConfig, rateBasisPoints };
+      recovered.transformConfig = { ...recovered.shopConfig };
     });
     mocks.getShopConfiguration.mockResolvedValue({
       protectionEnabled: true, protectionRateEditable: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",

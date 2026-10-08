@@ -49,12 +49,18 @@ function sameContract(left, right, enabled) {
 // Orders are recognised as protected by the active rule's variant, so the rule
 // must describe the product checkout actually sells. A legacy setup without a
 // rule, or a rule left on a replaced product, needs a setup update to publish one.
+// A published rule (schemaVersion 2) also has to match the rule checkout charges.
 function pricingRuleCheck(seed, activeRule) {
+  const sameRule = (rule) => seed.schemaVersion !== 2 || (
+    rule.ruleId === seed.ruleId && rule.version === seed.ruleVersion &&
+    rule.rateBasisPoints === seed.rateBasisPoints && rule.basis === seed.basis
+  );
   return {
     id: "pricing-rule",
     label: "Pricing is linked to the current protection product",
     ok: !seed || Boolean(activeRule &&
-      activeRule.productId === seed.productId && activeRule.variantId === seed.variantId),
+      activeRule.productId === seed.productId && activeRule.variantId === seed.variantId &&
+      sameRule(activeRule)),
   };
 }
 
@@ -76,7 +82,8 @@ export async function readShippingProtectionState(admin, shopDomain) {
   const product = await findProduct(admin, seed?.productId, {
     recordedProductId: activeRule?.productId,
   });
-  const checks = [...buildChecks(core, product), pricingRuleCheck(seed, activeRule)];
+  const pricingCheck = pricingRuleCheck(seed, activeRule);
+  const checks = [...buildChecks(core, product), pricingCheck];
   const healthReady = checks.every(({ ok }) => ok);
   const settings = await getShopConfiguration(domain);
   const capabilities = observedShopifyCapabilities(core.shop);
@@ -112,7 +119,9 @@ export async function readShippingProtectionState(admin, shopDomain) {
         }
       : null,
     functionHandle: FUNCTION_HANDLE,
-    pricing: activeRule
+    // When the database rule disagrees with the published one, show what
+    // checkout charges.
+    pricing: activeRule && pricingCheck.ok
       ? {
           ruleId: activeRule.ruleId,
           ruleVersion: activeRule.version,
