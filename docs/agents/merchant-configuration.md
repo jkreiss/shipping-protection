@@ -69,7 +69,7 @@ Potential configuration areas include:
 
 ### Protection benefits
 
-Benefits must be things customers do not already have under Australian Consumer Law (see [Legal / Product Boundary](legal-product.md#legal--product-boundary)):
+US stores (the initial release) are set up with stolen, lost, and damaged coverage on. For Australian stores (later), benefits must be things customers do not already have under Australian Consumer Law (see [Legal / Product Boundary](legal-product.md#legal--product-boundary)):
 
 - theft protection (stolen after delivery)
 - free change-of-mind returns
