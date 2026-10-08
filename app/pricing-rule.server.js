@@ -166,7 +166,7 @@ export async function getActivePricingRule(shopDomain, database = prisma) {
       where: { shopDomain },
       include: { activePricingRule: true },
     })
-    .then((shop) => shop?.activePricingRule?.shopId === shop?.id
+    .then((shop) => shop && shop.activePricingRule?.shopId === shop.id
       ? shop.activePricingRule
       : null);
 }

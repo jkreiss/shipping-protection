@@ -274,6 +274,11 @@ describe("pricing rule publication", () => {
     ).toBeNull();
   });
 
+  test("returns no active rule for an unknown shop", async () => {
+    const { database } = inMemoryDatabase();
+    expect(await getActivePricingRule("missing.myshopify.com", database)).toBeNull();
+  });
+
   test("does not return an active rule from another shop", async () => {
     const { database, state } = inMemoryDatabase();
     state.shop.activePricingRule = { id: "other-rule", shopId: "shop-2" };
