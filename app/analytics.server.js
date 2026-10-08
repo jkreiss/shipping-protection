@@ -23,9 +23,13 @@ function databaseRange(range) {
 export async function readAnalytics({ admin, shopDomain, search, database = prisma, now = new Date() }) {
   const shop = await database.shop.findUnique({ where: { shopDomain } });
   if (!shop) throw new Error("The authenticated shop is not installed.");
+  return readShopAnalytics({ admin, shopDomain, shop, search, database, now });
+}
+
+async function readShopAnalytics({ admin, shopDomain, shop, search, database, now }) {
   const data = await adminGraphql(admin, SHOP_QUERY, {}, { shop: shopDomain });
   const { currencyCode, ianaTimezone } = data.shop;
-  const range = analyticsRange(search, ianaTimezone);
+  const range = analyticsRange(search, ianaTimezone, now);
   const includeTest = search.get("test") === "1";
   const dateFilter = databaseRange(range);
   const syncedAt = shop.orderReconciliationSince;
@@ -98,12 +102,16 @@ async function readRecentActivity({ shopId, includeTest, database }) {
 export async function readOverview({ admin, shopDomain, includeTest = false, database = prisma, now = new Date() }) {
   const started = Date.now();
   const search = new URLSearchParams({ range: "30", ...(includeTest ? { test: "1" } : {}) });
-  const analytics = await readAnalytics({ admin, shopDomain, search, database, now });
-  const shop = await database.shop.findUnique({ where: { shopDomain }, select: { id: true } });
+  const shop = await database.shop.findUnique({ where: { shopDomain } });
+  if (!shop) throw new Error("The authenticated shop is not installed.");
+  const [analytics, recentActivity] = await Promise.all([
+    readShopAnalytics({ admin, shopDomain, shop, search, database, now }),
+    readRecentActivity({ shopId: shop.id, includeTest, database }),
+  ]);
   const overview = {
     ...analytics,
     trend: dailyTrend(analytics.trend, analytics.range),
-    recentActivity: await readRecentActivity({ shopId: shop.id, includeTest, database }),
+    recentActivity,
   };
   // The Overview aggregates in memory; this shows when it needs SQL aggregates.
   logEvent("overview_loaded", { shopId: shop.id, orderRows: analytics.rowCounts.orders,

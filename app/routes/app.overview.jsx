@@ -33,7 +33,7 @@ function adminOrderUrl(shopifyOrderId) {
 }
 
 function formatDay(date, withWeekday = false) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     ...(withWeekday ? { weekday: "short" } : {}), month: "short", day: "numeric", timeZone: "UTC",
   }).format(new Date(`${date}T00:00:00Z`));
 }
@@ -181,7 +181,7 @@ export default function Overview() {
   const revalidator = useRevalidator();
   const [params, setParams] = useSearchParams();
 
-  const money = (value, currency = metrics.currencyCode) => new Intl.NumberFormat(undefined, {
+  const money = (value, currency = metrics.currencyCode) => new Intl.NumberFormat("en-US", {
     style: "currency", currency,
   }).format(Number(value));
   const setTestPreview = (enabled) => {
@@ -249,7 +249,7 @@ export default function Overview() {
             value={metrics.attachRate === null ? "—" : `${metrics.attachRate.toFixed(1)}%`}
             caption={`${metrics.eligibleOrders} eligible ${metrics.eligibleOrders === 1 ? "order" : "orders"}`}
           />
-          <MetricTile label="Protected orders" value={metrics.protectedOrders.toLocaleString()} />
+          <MetricTile label="Protected orders" value={metrics.protectedOrders.toLocaleString("en-US")} />
           <MetricTile label="Claims paid" value={money(metrics.claimsPaid)} caption="No claim payouts recorded yet" />
           <MetricTile
             label="Net protection revenue"
@@ -287,7 +287,7 @@ export default function Overview() {
                     {entry.kind === "REFUNDED" ? "−" : ""}{money(entry.amount, entry.currencyCode)}
                   </s-table-cell>
                   <s-table-cell>
-                    {new Intl.DateTimeFormat(undefined, {
+                    {new Intl.DateTimeFormat("en-US", {
                       month: "short", day: "numeric", timeZone: metrics.timeZone,
                     }).format(new Date(entry.at))}
                   </s-table-cell>
@@ -312,7 +312,7 @@ export default function Overview() {
       <s-stack direction="inline" gap="small-200" alignItems="center">
         <s-text color="subdued">
           {metrics.sync.complete
-              ? `Orders synced through ${new Date(metrics.sync.reconciledThrough).toLocaleString()}. Dates use ${metrics.timeZone}.`
+              ? `Orders synced through ${new Intl.DateTimeFormat("en-US", { timeZone: metrics.timeZone, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" }).format(new Date(metrics.sync.reconciledThrough))}. Dates use ${metrics.timeZone}.`
               : "Order history is still syncing, so some numbers may be incomplete."}
         </s-text>
         <s-button variant="tertiary" onClick={() => revalidator.revalidate()} disabled={refreshing}>
