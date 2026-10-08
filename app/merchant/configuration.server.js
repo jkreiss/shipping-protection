@@ -45,7 +45,13 @@ export async function disableShopProtection(shopDomain, database = prisma) {
   if (!shop) throw new Error("Installed shop is unavailable.");
   return database.shopConfiguration.upsert({
     where: { shopId: shop.id },
-    create: { shopId: shop.id, protectionEnabled: false },
-    update: { protectionEnabled: false },
+    // Turning off only ever follows a checkout setup. A shop whose strategy is
+    // still NONE would otherwise never read as deliberately off.
+    create: {
+      shopId: shop.id,
+      protectionEnabled: false,
+      attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    },
+    update: { protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" },
   });
 }

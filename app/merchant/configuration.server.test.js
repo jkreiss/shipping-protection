@@ -69,9 +69,20 @@ describe("shop configuration persistence", () => {
     expect(config).toEqual({ ...existing, protectionEnabled: false });
     expect(db.shopConfiguration.upsert).toHaveBeenCalledWith({
       where: { shopId: "one" },
-      create: { shopId: "one", protectionEnabled: false },
-      update: { protectionEnabled: false },
+      create: { shopId: "one", protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" },
+      update: { protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" },
     });
+  });
+
+  test("turning off a shop whose strategy is still NONE records the checkout strategy", async () => {
+    const existing = { shopId: "one", protectionEnabled: true, attachmentStrategy: "NONE" };
+    const db = database({ id: "one", configuration: existing });
+    db.shopConfiguration.upsert.mockImplementation(async ({ update }) => ({ ...existing, ...update }));
+
+    const config = await disableShopProtection("one.myshopify.com", db);
+
+    // The published offer can only be read as "off" once the strategy is set.
+    expect(config).toMatchObject({ protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" });
   });
 
   test("enables only theft after delivery, never consumer-law remedies", async () => {
