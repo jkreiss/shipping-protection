@@ -155,6 +155,17 @@ describe("turning shipping protection off", () => {
     expect(mocks.disableKnownConfiguration).toHaveBeenCalledWith({}, core, contract);
   });
 
+  test("disables the published copy that matches the active pricing rule, not an older one", async () => {
+    const newer = { ...contract, ruleId: "rule-4", ruleVersion: 4, rateBasisPoints: 55 };
+    core.shopConfig = newer;
+    core.transformConfig = contract;
+    mocks.getActivePricingRule.mockResolvedValue({
+      ...ruleFor(contract.productId, contract.variantId), ruleId: "rule-4", version: 4, rateBasisPoints: 55,
+    });
+    await disableShippingProtection({}, "one.myshopify.com");
+    expect(mocks.disableKnownConfiguration).toHaveBeenCalledWith({}, core, newer);
+  });
+
   test("recovers a missing configuration from the merchant's existing pricing rule", async () => {
     core.shopConfig = null;
     core.transformConfig = null;

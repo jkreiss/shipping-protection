@@ -155,10 +155,17 @@ export function disableShippingProtection(admin, shopDomain) {
     if (shopDomain !== core.shop.myshopifyDomain) {
       throw new Error("Shopify shop identity does not match the session.");
     }
-    let contract = core.transformConfig ?? core.shopConfig;
-    if (!contract) {
-      const rule = await getActivePricingRule(shopDomain);
-      if (rule) contract = pricingContractForRule(rule, rule.productId, rule.variantId, false);
+    const rule = await getActivePricingRule(shopDomain);
+    // Prefer the published copy that matches the active rule, so the disabled
+    // snapshot stays on the current rule. Otherwise use the transform's copy,
+    // which is what checkout charges.
+    let contract =
+      [core.transformConfig, core.shopConfig].find((copy) =>
+        copy && rule && copy.ruleId === rule.ruleId && copy.ruleVersion === rule.version &&
+        copy.rateBasisPoints === rule.rateBasisPoints) ??
+      core.transformConfig ?? core.shopConfig;
+    if (!contract && rule) {
+      contract = pricingContractForRule(rule, rule.productId, rule.variantId, false);
     }
     if (!contract) {
       throw new UserFacingError("Protection configuration is unavailable. Update protection setup, then try turning it off again.");
