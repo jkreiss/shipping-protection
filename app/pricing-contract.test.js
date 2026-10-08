@@ -11,6 +11,7 @@ import {
   pricingContractForRule,
   validateRateBasisPoints,
 } from "./pricing-contract";
+import currencyFixtures from "../test-fixtures/currency-minor-units.json";
 import feeFixtures from "../test-fixtures/pricing-fees.json";
 
 const productId = "gid://shopify/Product/1";
@@ -118,10 +119,10 @@ describe("server fee calculation", () => {
       .toBe(fixture.expected);
   });
 
-  test("uses ISO currency precision", () => {
-    expect(currencyMinorUnits("JPY")).toBe(0);
-    expect(currencyMinorUnits("KWD")).toBe(3);
-    expect(currencyMinorUnits("CLF")).toBe(4);
-    expect(currencyMinorUnits("AUD")).toBe(2);
-  });
+  test.each(currencyFixtures)(
+    "uses ISO currency precision for $currencyCode",
+    ({ currencyCode, minorUnits }) => {
+      expect(currencyMinorUnits(currencyCode)).toBe(minorUnits);
+    },
+  );
 });

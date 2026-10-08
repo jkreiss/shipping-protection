@@ -114,7 +114,11 @@ export async function persistNormalizedOrder(
   const protectedLines = lines.filter((line) => line.isProtection);
   // Shopify skips the Cart Transform when any line has a selling plan, so the
   // protection line is never charged: a subscription order is not protected.
-  const purchasable = protectedLines.length > 0 && !normalized.lines.some((line) => line.hasSellingPlan);
+  // Likewise the Function charges the fee only on a single-unit protection
+  // line and prices the rest at zero, so without one nothing was charged.
+  const purchasable = protectedLines.length > 0 &&
+    protectedLines.some((line) => line.quantity === 1) &&
+    !normalized.lines.some((line) => line.hasSellingPlan);
   const firstPayment = Boolean(normalized.paidAt && !existing?.firstPaidAt);
   const paidFacts = firstPayment ? {
     firstPaidAt: normalized.paidAt,

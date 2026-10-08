@@ -14,11 +14,13 @@ import {
 import {
   actualProtectionTotal,
   calculateRoundedFee,
+  currencyMinorUnits,
   deliveryEligibility,
   protectionAttributes,
   reconstructQuote,
 } from "../src/shipping-protection";
 import { ShippingProtection } from "../src/Checkout";
+import currencyFixtures from "../../../test-fixtures/currency-minor-units.json";
 import feeFixtures from "../../../test-fixtures/pricing-fees.json";
 
 const PRODUCT_ID = "gid://shopify/Product/10";
@@ -915,6 +917,13 @@ describe("shipping protection quote", () => {
 
     expect(quote).toEqual({ amount: 0.25, currencyCode: "USD" });
   });
+
+  test.each(currencyFixtures)(
+    "uses ISO currency precision for $currencyCode",
+    ({ currencyCode, minorUnits }) => {
+      expect(currencyMinorUnits(currencyCode)).toBe(minorUnits);
+    },
+  );
 
   test.each(feeFixtures)("matches Function fixture: $name", (fixture) => {
     expect(
