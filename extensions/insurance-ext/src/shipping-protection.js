@@ -331,24 +331,89 @@ export function eligibleMerchandiseLines(lines, variantId) {
   );
 }
 
-/** @param {CheckoutDiscountAllocation} allocation */
-function discountIdentity(allocation) {
-  return `${allocation.type}:${allocation.code ?? allocation.title ?? ""}`;
+/**
+ * The line's amount before its own discounts. Checkout lists only line-level
+ * discounts on a line, but it also takes the line's share of any order-level
+ * discount off `totalAmount`, so this is exact only without order discounts.
+ * @param {CheckoutLine} line
+ * @returns {string[] | null}
+ */
+function amountsBeforeLineDiscounts(line) {
+  const { currencyCode } = line.cost.totalAmount;
+  if (
+    line.discountAllocations.some(
+      ({ discountedAmount }) => discountedAmount.currencyCode !== currencyCode,
+    )
+  )
+    return null;
+  return [
+    String(line.cost.totalAmount.amount),
+    ...line.discountAllocations.map(({ discountedAmount }) =>
+      String(discountedAmount.amount),
+    ),
+  ];
 }
 
 /**
- * The Function prices from each line's pre-discount subtotal. A line's
- * `totalAmount` has only line-level discounts taken off, so those are added
- * back. Order-level discounts were never taken off, so any share of one that
- * appears on a line is skipped.
+ * @param {string} amount a decimal string
+ * @param {number} quantity
+ */
+function multiplyDecimal(amount, quantity) {
+  const [whole, fraction = ""] = amount.split(".");
+  const digits = (BigInt(whole + fraction) * BigInt(quantity))
+    .toString()
+    .padStart(fraction.length + 1, "0");
+  if (fraction.length === 0) return digits;
+  return `${digits.slice(0, -fraction.length)}.${digits.slice(-fraction.length)}`;
+}
+
+/**
+ * @typedef {Map<string, {amount: string, currencyCode: string}>} VariantPrices
+ * Storefront API unit prices for the buyer's country, keyed by variant ID.
+ */
+
+/**
+ * Reads a Storefront API `nodes` response into unit prices. Variants the
+ * channel cannot see come back as null and are left out.
+ * @param {unknown} data
+ * @returns {VariantPrices}
+ */
+export function readVariantPrices(data) {
+  /** @type {VariantPrices} */
+  const prices = new Map();
+  const nodes = /** @type {{nodes?: unknown}} */ (data ?? {}).nodes;
+  if (!Array.isArray(nodes)) return prices;
+  for (const node of nodes) {
+    const id = node?.id;
+    const amount = node?.price?.amount;
+    const currencyCode = node?.price?.currencyCode;
+    if (
+      typeof id === "string" &&
+      (typeof amount === "string" || typeof amount === "number") &&
+      typeof currencyCode === "string"
+    )
+      prices.set(id, { amount: String(amount), currencyCode });
+  }
+  return prices;
+}
+
+/**
+ * The Function prices from each line's pre-discount subtotal. Without an
+ * order-level discount that is the line total plus its listed discounts.
+ * Checkout does not itemize an order discount's share per line, so with one
+ * the subtotal is the Storefront unit price times quantity instead; until
+ * those prices are available the quote is "pending".
  * @param {CheckoutLine[]} lines
  * @param {ShippingProtectionConfiguration} configuration
  * @param {CheckoutDiscountAllocation[]} [orderDiscountAllocations] the Discounts API's order-level allocations
+ * @param {VariantPrices} [variantPrices]
+ * @returns {CheckoutMoney | null | "pending"}
  */
 export function reconstructQuote(
   lines,
   configuration,
   orderDiscountAllocations = [],
+  variantPrices,
 ) {
   const eligibleLines = eligibleMerchandiseLines(
     lines,
@@ -356,23 +421,33 @@ export function reconstructQuote(
   );
   if (eligibleLines.length === 0) return null;
 
-  const orderDiscounts = new Set(
-    orderDiscountAllocations.map(discountIdentity),
-  );
   const currencyCode = eligibleLines[0].cost.totalAmount.currencyCode;
+  if (
+    eligibleLines.some(
+      (line) => line.cost.totalAmount.currencyCode !== currencyCode,
+    )
+  )
+    return null;
+
   /** @type {string[]} */
   const amounts = [];
-
   for (const line of eligibleLines) {
-    if (line.cost.totalAmount.currencyCode !== currencyCode) return null;
-    amounts.push(String(line.cost.totalAmount.amount));
-
-    for (const allocation of line.discountAllocations) {
-      if (orderDiscounts.has(discountIdentity(allocation))) continue;
-      if (allocation.discountedAmount.currencyCode !== currencyCode)
-        return null;
-      amounts.push(String(allocation.discountedAmount.amount));
+    if (orderDiscountAllocations.length === 0) {
+      const lineAmounts = amountsBeforeLineDiscounts(line);
+      if (!lineAmounts) return null;
+      amounts.push(...lineAmounts);
+      continue;
     }
+    const price = variantPrices?.get(line.merchandise.id);
+    if (
+      !price ||
+      price.currencyCode !== currencyCode ||
+      !/^\d+(?:\.\d+)?$/.test(price.amount) ||
+      !Number.isInteger(line.quantity) ||
+      line.quantity < 1
+    )
+      return "pending";
+    amounts.push(multiplyDecimal(price.amount, line.quantity));
   }
 
   const amount = calculateRoundedFee(
@@ -384,27 +459,62 @@ export function reconstructQuote(
 }
 
 /**
+ * The protection lines' price before discounts, as the order summary shows
+ * it. An order discount takes an unlisted share off the lines, so the price
+ * is then known only as a range; the quote is shown when it falls inside it.
  * @param {CheckoutLine[]} lines
  * @param {string} variantId
+ * @param {CheckoutDiscountAllocation[]} [orderDiscountAllocations]
+ * @param {CheckoutMoney | null | "pending"} [quote]
+ * @returns {CheckoutMoney | null}
  */
-export function actualProtectionTotal(lines, variantId) {
+export function actualProtectionTotal(
+  lines,
+  variantId,
+  orderDiscountAllocations = [],
+  quote = null,
+) {
   const matches = protectionLines(lines, variantId);
   if (matches.length === 0) return null;
 
   const currencyCode = matches[0].cost.totalAmount.currencyCode;
-  if (
-    matches.some((line) => line.cost.totalAmount.currencyCode !== currencyCode)
-  ) {
-    return null;
+  /** @type {string[]} */
+  const amounts = [];
+  for (const line of matches) {
+    const lineAmounts = amountsBeforeLineDiscounts(line);
+    if (line.cost.totalAmount.currencyCode !== currencyCode || !lineAmounts)
+      return null;
+    amounts.push(...lineAmounts);
   }
+  const minorUnits = currencyMinorUnits(currencyCode);
+  // At a 100% rate the fee calculation is an exact decimal sum.
+  const total = calculateRoundedFee(amounts, 10_000, minorUnits);
+  if (total === null) return null;
+  if (orderDiscountAllocations.length === 0)
+    return { amount: total, currencyCode };
 
-  return {
-    amount: matches.reduce(
-      (sum, line) => sum + line.cost.totalAmount.amount,
-      0,
-    ),
-    currencyCode,
-  };
+  if (
+    !quote ||
+    quote === "pending" ||
+    quote.currencyCode !== currencyCode ||
+    orderDiscountAllocations.some(
+      ({ discountedAmount }) => discountedAmount.currencyCode !== currencyCode,
+    )
+  )
+    return null;
+  const maximum = calculateRoundedFee(
+    [
+      String(total),
+      ...orderDiscountAllocations.map(({ discountedAmount }) =>
+        String(discountedAmount.amount),
+      ),
+    ],
+    10_000,
+    minorUnits,
+  );
+  return maximum !== null && quote.amount >= total && quote.amount <= maximum
+    ? quote
+    : null;
 }
 
 /**

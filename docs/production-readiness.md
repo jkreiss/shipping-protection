@@ -82,12 +82,16 @@ acceptance, including v1/v2 contracts, malformed fields, C1/bidi/zero-width/BOM
 and separator rejection, and preservation of Unicode/emoji/plain markup and
 permitted whitespace. Publication validates preserved copy in the merged offer.
 
-Deferred: discount identity still uses type plus code/title. Distinct same-titled
-line and order automatic discounts reproduce a $0.20 quote for a $0.25
-pre-discount fee. `DEFERRED: distinct same-titled line and order discounts preserve
-the pre-discount fee` is an explicitly marked Vitest `test.fails` regression.
-Offer presentation for that collision is unchanged. Other review sections are
-outside this change.
+An order-level discount code made the checkout block show too low a fee, both
+before and after the box was ticked, while the protection line in the order
+summary showed the correct price (live, 2026-10-08, 10% automatic product
+discount plus 10% order code at a 100% rate: block 854.96, line 949.95).
+Checkout takes each line's share of an order discount off `totalAmount` without
+listing it on the line, so the block could not recover the pre-discount basis.
+With an order discount it now reads Storefront variant prices; without one it
+adds every listed line discount back, which also resolves the previously
+deferred same-titled line/order discount case. The logged checkout is a
+regression fixture. A live order-discount E2E fixture is still pending.
 
 Final local verification: `npm test` passed all 558 tests across 35 files,
 including the one explicitly expected failure above. `npm run lint` passed

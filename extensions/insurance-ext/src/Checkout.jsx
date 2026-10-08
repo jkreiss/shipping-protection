@@ -11,9 +11,23 @@ import {
   protectionAttributesMatch,
   readConfiguration,
   readCheckoutOffer,
+  readVariantPrices,
   reconciledProtectionAttributes,
   reconstructQuote,
 } from "./shipping-protection";
+
+const VARIANT_PRICES_QUERY = `query ShippingProtectionPrices($ids: [ID!]!, $country: CountryCode!)
+@inContext(country: $country) {
+  nodes(ids: $ids) {
+    ... on ProductVariant {
+      id
+      price {
+        amount
+        currencyCode
+      }
+    }
+  }
+}`;
 
 export default async () => {
   render(<ShippingProtection />, document.body);
@@ -25,17 +39,7 @@ export function ShippingProtection() {
   const orderDiscountAllocations = shopify.discountAllocations.value;
   const instructions = shopify.instructions.value.lines;
   const appMetafields = shopify.appMetafields.value;
-  console.log(
-  "PROTECTION_DISCOUNT_CHECK",
-  JSON.stringify({
-    lines: lines.map((line) => ({
-      variantId: line.merchandise.id,
-      total: line.cost.totalAmount,
-      discounts: line.discountAllocations,
-    })),
-    cartDiscounts: orderDiscountAllocations,
-  }, null, 2),
-);
+  const country = shopify.localization.country.value?.isoCode;
   const configuration = useMemo(
     () => readConfiguration(appMetafields),
     [appMetafields],
@@ -71,30 +75,80 @@ export function ShippingProtection() {
         : [],
     [configuration, lines],
   );
+  // Checkout hides each line's share of an order-level discount, so only then
+  // are pre-discount prices read from the Storefront API.
+  const priceRequest =
+    orderDiscountAllocations.length > 0 && country && eligibleLines.length > 0
+      ? JSON.stringify([
+          country,
+          [...new Set(eligibleLines.map(({ merchandise }) => merchandise.id))],
+        ])
+      : null;
+  const [loadedPrices, setLoadedPrices] = useState(
+    /** @type {{request: string, prices: import("./shipping-protection").VariantPrices} | null} */ (
+      null
+    ),
+  );
+  useEffect(() => {
+    if (!priceRequest) return;
+    const [requestCountry, ids] = JSON.parse(priceRequest);
+    let current = true;
+    shopify
+      .query(VARIANT_PRICES_QUERY, {
+        variables: { ids, country: requestCountry },
+      })
+      .then(({ data }) => {
+        if (current)
+          setLoadedPrices({
+            request: priceRequest,
+            prices: readVariantPrices(data),
+          });
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [priceRequest]);
   const quote = configuration
-    ? reconstructQuote(lines, configuration, orderDiscountAllocations)
+    ? reconstructQuote(
+        lines,
+        configuration,
+        orderDiscountAllocations,
+        loadedPrices?.request === priceRequest
+          ? loadedPrices.prices
+          : undefined,
+      )
     : null;
   const delivery = deliveryEligibility(
     deliveryGroups,
     new Set(eligibleLines.map(({ id }) => id)),
   );
   // Eligibility is independent of the permissions for individual cart mutations.
-  // Missing rates preserve a buyer's eligible selection, while other exclusions
-  // still require removal before delivery has loaded.
+  // Missing rates or prices preserve a buyer's eligible selection, while other
+  // exclusions still require removal before delivery has loaded.
   const eligible = Boolean(
     configuration?.enabled &&
     !containsSellingPlan(lines) &&
     eligibleLines.length > 0 &&
     delivery !== "ineligible" &&
-    quote &&
-    quote.amount > 0,
+    (quote === "pending" || (quote && quote.amount > 0)),
   );
   const checked = currentProtectionLines.length > 0;
-  const shouldOffer = eligible && instructions.canAddCartLine;
+  const shouldOffer =
+    eligible && quote !== "pending" && instructions.canAddCartLine;
   const currentTotal = configuration
-    ? actualProtectionTotal(lines, configuration.variantId)
+    ? actualProtectionTotal(
+        lines,
+        configuration.variantId,
+        orderDiscountAllocations,
+        quote,
+      )
     : null;
-  const displayedFee = checked ? currentTotal : quote;
+  const displayedFee = checked
+    ? currentTotal
+    : quote === "pending"
+      ? null
+      : quote;
   const removeAll = !eligible || desiredSelection === false;
   const action =
     checked && (removeAll || currentProtectionLines.length > 1)
