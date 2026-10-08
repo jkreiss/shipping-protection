@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import prisma from "./db.server";
+import { retrySerializationFailures } from "./serializable-retry.server";
 import {
   PRICING_BASIS,
   pricingContractForRule,
@@ -15,28 +16,47 @@ function sanitizeFailure(error) {
     .slice(0, 500);
 }
 
-async function finalizeRule(database, shopId, ruleId, now = new Date()) {
-  return database.$transaction(async (transaction) => {
-    await transaction.pricingRule.updateMany({
-      where: { shopId, state: "ACTIVE", id: { not: ruleId } },
-      data: { state: "SUPERSEDED" },
-    });
-    const active = await transaction.pricingRule.update({
-      where: { id_shopId: { id: ruleId, shopId } },
-      data: {
-        state: "ACTIVE",
-        publishedAt: now,
-        activatedAt: now,
-        failedAt: null,
-        failureReason: null,
+// With onlyIfNewer, a rule that a newer one has already replaced is left alone
+// and null is returned, so a late reconcile cannot roll the database back.
+async function finalizeRule(
+  database,
+  shopId,
+  rule,
+  { now = new Date(), onlyIfNewer = false } = {},
+) {
+  return retrySerializationFailures(() =>
+    database.$transaction(
+      async (transaction) => {
+        if (onlyIfNewer) {
+          const shop = await transaction.shop.findUnique({
+            where: { id: shopId },
+            include: { activePricingRule: true },
+          });
+          if (shop?.activePricingRule?.version > rule.version) return null;
+        }
+        await transaction.pricingRule.updateMany({
+          where: { shopId, state: "ACTIVE", id: { not: rule.id } },
+          data: { state: "SUPERSEDED" },
+        });
+        const active = await transaction.pricingRule.update({
+          where: { id_shopId: { id: rule.id, shopId } },
+          data: {
+            state: "ACTIVE",
+            publishedAt: now,
+            activatedAt: now,
+            failedAt: null,
+            failureReason: null,
+          },
+        });
+        await transaction.shop.update({
+          where: { id: shopId },
+          data: { activePricingRuleId: rule.id, activePricingRuleShopId: shopId },
+        });
+        return active;
       },
-    });
-    await transaction.shop.update({
-      where: { id: shopId },
-      data: { activePricingRuleId: ruleId, activePricingRuleShopId: shopId },
-    });
-    return active;
-  });
+      { isolationLevel: "Serializable" },
+    ),
+  );
 }
 
 export async function createAndPublishPricingRule({
@@ -92,7 +112,9 @@ export async function createAndPublishPricingRule({
   try {
     await publishSnapshot(admin, snapshot);
     published = true;
-    const active = await finalizeRule(database, pending.shopId, pending.id, now());
+    const active = await finalizeRule(database, pending.shopId, pending, {
+      now: now(),
+    });
     return { rule: active, snapshot };
   } catch (error) {
     if (!published) {
@@ -135,7 +157,7 @@ export async function reconcilePublishedPricingRule(
   // Shopify's live config is authoritative, so a FAILED rule it uses is active.
   if (rule.state === "SUPERSEDED") return null;
 
-  return finalizeRule(database, shop.id, rule.id);
+  return finalizeRule(database, shop.id, rule, { onlyIfNewer: true });
 }
 
 export async function getActivePricingRule(shopDomain, database = prisma) {
