@@ -45,7 +45,12 @@ Treat all external input as untrusted.
 `session-storage.server.js` verifies each supplied token against Shopify's shop
 identity and current installation before saving. The generation is captured
 before that request; persistence locks the shop row and checks the generation
-inside a short transaction using the Shopify Prisma storage delegate. Token
+inside a short transaction, upserting the row the Shopify Prisma storage
+delegate builds. If verification fails transiently (not an access-lost answer)
+for an installed shop, the session is still saved, because an SDK token refresh
+has already consumed the old refresh token; the same lock and generation checks
+apply. A concurrent exchange that read the shop as uninstalled accepts a
+reinstall that completed exactly one generation ahead. Token
 invalidation by the SDK can save a loaded session without a token, but cannot
 create or reactivate an installation. Refresh-token fields stay with the SDK.
 

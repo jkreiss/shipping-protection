@@ -349,6 +349,10 @@ verified backup before applying them. A stopped worker and a healthy old web
 service are compatible with ordinary additive migrations only if the release
 review establishes that compatibility.
 
+Migration `20261008000000_installation_generation_settings_owner` must be
+applied before the updated web and worker processes. Coordinate their restart so
+no older process saves sessions or settings without the new guards.
+
 If the durable-protection migration is still pending, it changes constraints
 and application code together. Back up and verify the database, pause app and
 webhook traffic, then run `npx prisma migrate deploy` from the matching release.

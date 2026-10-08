@@ -36,3 +36,16 @@ through pricing recovery, and one shared server Admin API version. Seven added
 regression cases bring the full suite to 810 passing tests. Existing publication
 recovery remains supported when the snapshot was fetched in the current
 installation generation.
+
+### PR #21 code-review follow-up
+
+- Session storage keeps a refreshed token when verification fails transiently for an installed shop; access-lost answers, non-installed shops, and generation changes still refuse the save.
+- Removed the unused `SHOP_CUSTOM_DOMAIN` option (verification only accepts `*.myshopify.com`) from `shopify.server.js`, `.env.example`, and `scripts/load/README.md`.
+- Setup's rollback of a partial enable runs outside the settings lease, so it still disables the offer after the lease is lost.
+- Concurrent token exchanges after one reinstall both succeed: a save one generation ahead of an uninstalled read is accepted without a second increment; any other mismatch still fails.
+- `waitForShop` waits at most 30 seconds per call and only clears a deadline that has passed.
+- `adminGraphql` throws the lease's error instead of a generic AbortError when the lease aborts, without reporting `shopify_graphql_failed`.
+- An uninstall racing the Shopify ID update returns 401 (`InstallationAccessLostError`), not a server error.
+- Session saves upsert directly instead of building a `PrismaSessionStorage` (and its table poll) inside the shop-row lock; the `delegateFactory` option is now `delegate`.
+- The installation-generation migration note moved from `README.md` to `docs/production-readiness.md` section 5.3.
+- Dropped: a settings-lock message after uninstall (uninstall deletes sessions, so merchants cannot reach it); `loadSession` reading the session row twice (deliberate, see its comment).
