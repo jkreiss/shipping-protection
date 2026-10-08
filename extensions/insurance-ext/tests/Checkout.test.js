@@ -12,6 +12,7 @@ import {
   createShippingOption,
 } from "@shopify/ui-extensions-tester/checkout";
 import {
+  actualProtectionTotal,
   calculateRoundedFee,
   deliveryEligibility,
   protectionAttributes,
@@ -136,13 +137,20 @@ function merchandiseLine({
 }
 
 /**
- * @param {{id?: string, amount?: number, quantity?: number, config?: TestConfiguration}} [options]
+ * @param {{
+ *   id?: string,
+ *   amount?: number,
+ *   quantity?: number,
+ *   config?: TestConfiguration,
+ *   discounts?: number[]
+ * }} [options]
  */
 function protectionLine({
   id = "protection",
   amount = 0.25,
   quantity = 1,
   config = configuration(),
+  discounts = [],
 } = {}) {
   const defaults = createCartLine();
   return createCartLine({
@@ -155,7 +163,74 @@ function protectionLine({
       requiresShipping: false,
     },
     cost: { totalAmount: { amount, currencyCode: "USD" } },
+    discountAllocations: discounts.map((discountedAmount) => ({
+      type: "automatic",
+      title: "Automatic discount",
+      discountedAmount: { amount: discountedAmount, currencyCode: "USD" },
+    })),
   });
+}
+
+/** @param {number} amount */
+function orderDiscount(amount) {
+  return /** @type {const} */ ({
+    type: "code",
+    code: "TEST10",
+    discountedAmount: { amount, currencyCode: "USD" },
+  });
+}
+
+/**
+ * The checkout reported on a live store with a 10% automatic product discount
+ * and a 10% order code at a 100% rate: Shopify takes each line's share of the
+ * order code off `totalAmount` without listing it on the line.
+ */
+function liveOrderDiscountCheckout() {
+  const config = configuration({ rateBasisPoints: 10_000 });
+  return {
+    lines: [
+      merchandiseLine({ amount: 769.46, discounts: [94.99] }),
+      protectionLine({ amount: 854.96, config }),
+    ],
+    config,
+    orderDiscounts: [orderDiscount(180.49)],
+    prices: { "gid://shopify/ProductVariant/physical": "949.95" },
+  };
+}
+
+/**
+ * @param {Record<string, string>} prices variant ID to Storefront price
+ * @param {string} [currencyCode]
+ */
+function storefrontPrices(prices, currencyCode = "USD") {
+  return new Map(
+    Object.entries(prices).map(([id, amount]) => [
+      id,
+      { amount, currencyCode },
+    ]),
+  );
+}
+
+/**
+ * @param {Record<string, string>} prices variant ID to Storefront price
+ */
+function mockStorefront(prices) {
+  const query = vi.fn(
+    async (
+      /** @type {string} */ _query,
+      /** @type {{variables?: {ids?: string[]}}} */ options = {},
+    ) => ({
+      data: {
+        nodes: (options.variables?.ids ?? []).map((id) =>
+          prices[id] === undefined
+            ? null
+            : { id, price: { amount: prices[id], currencyCode: "USD" } },
+        ),
+      },
+    }),
+  );
+  extension.shopify.query = /** @type {any} */ (query);
+  return query;
 }
 
 /**
@@ -258,6 +333,7 @@ beforeEach(() => {
   makeReactive(extension.shopify.appMetafields);
   makeReactive(extension.shopify.instructions);
   makeReactive(extension.shopify.deliveryGroups);
+  makeReactive(extension.shopify.discountAllocations);
   extension.shopify.applyCartLinesChange = successfulMutation;
 });
 
@@ -719,24 +795,118 @@ describe("shipping protection quote", () => {
     },
   );
 
-  // Deferred by scope: type/title is not a unique discount identity.
-  test.fails(
-    "DEFERRED: distinct same-titled line and order discounts preserve the pre-discount fee",
-    () => {
-      const orderDiscount = {
-        type: "automatic",
-        title: "Automatic discount",
-        discountedAmount: { amount: 10, currencyCode: "USD" },
-      };
+  test("same-titled line and order discounts preserve the pre-discount fee", () => {
+    const sameTitle = {
+      type: "automatic",
+      title: "Automatic discount",
+      discountedAmount: { amount: 10, currencyCode: "USD" },
+    };
+    expect(
+      reconstructQuote(
+        [merchandiseLine({ amount: 70, discounts: [20] })],
+        configuration(),
+        [sameTitle],
+        storefrontPrices({ "gid://shopify/ProductVariant/physical": "100.00" }),
+      ),
+    ).toEqual({ amount: 0.25, currencyCode: "USD" });
+  });
+
+  test("an order discount prices the live checkout from Storefront prices", () => {
+    const checkout = liveOrderDiscountCheckout();
+    expect(
+      reconstructQuote(
+        checkout.lines,
+        checkout.config,
+        checkout.orderDiscounts,
+        storefrontPrices(checkout.prices),
+      ),
+    ).toEqual({ amount: 949.95, currencyCode: "USD" });
+  });
+
+  test("Storefront prices are multiplied by quantity exactly", () => {
+    const line = createCartLine({
+      ...merchandiseLine({ amount: 90 }),
+      quantity: 3,
+    });
+    expect(
+      reconstructQuote(
+        [line],
+        configuration({ rateBasisPoints: 10_000 }),
+        [orderDiscount(9.99)],
+        storefrontPrices({ "gid://shopify/ProductVariant/physical": "33.33" }),
+      ),
+    ).toEqual({ amount: 99.99, currencyCode: "USD" });
+  });
+
+  test.each([
+    ["not loaded", undefined],
+    ["missing a variant", storefrontPrices({})],
+    [
+      "in another currency",
+      storefrontPrices(
+        { "gid://shopify/ProductVariant/physical": "949.95" },
+        "CAD",
+      ),
+    ],
+    [
+      "malformed",
+      storefrontPrices({ "gid://shopify/ProductVariant/physical": "1e3" }),
+    ],
+  ])(
+    "an order discount leaves the quote pending when Storefront prices are %s",
+    (_name, prices) => {
+      const checkout = liveOrderDiscountCheckout();
       expect(
         reconstructQuote(
-          [merchandiseLine({ amount: 80, discounts: [20] })],
-          configuration(),
-          [orderDiscount],
+          checkout.lines,
+          checkout.config,
+          checkout.orderDiscounts,
+          prices,
         ),
-      ).toEqual({ amount: 0.25, currencyCode: "USD" });
+      ).toBe("pending");
     },
   );
+
+  test("the protection line shows its price before line discounts", () => {
+    expect(
+      actualProtectionTotal(
+        [merchandiseLine(), protectionLine({ amount: 0.2, discounts: [0.05] })],
+        PROTECTION_ID,
+      ),
+    ).toEqual({ amount: 0.25, currencyCode: "USD" });
+  });
+
+  test("an order discount shows the protection line at the quoted fee", () => {
+    const checkout = liveOrderDiscountCheckout();
+    expect(
+      actualProtectionTotal(
+        checkout.lines,
+        PROTECTION_ID,
+        checkout.orderDiscounts,
+        { amount: 949.95, currencyCode: "USD" },
+      ),
+    ).toEqual({ amount: 949.95, currencyCode: "USD" });
+  });
+
+  test.each([
+    ["pending", "pending"],
+    ["below the line total", { amount: 800, currencyCode: "USD" }],
+    ["above what the order discount explains", { amount: 1100, currencyCode: "USD" }],
+  ])(
+    "an order discount leaves the protection fee unknown when the quote is %s",
+    (_name, quote) => {
+      const checkout = liveOrderDiscountCheckout();
+      expect(
+        actualProtectionTotal(
+          checkout.lines,
+          PROTECTION_ID,
+          checkout.orderDiscounts,
+          /** @type {any} */ (quote),
+        ),
+      ).toBeNull();
+    },
+  );
+
   test("reconstructs the pre-discount quote from totals and allocations", () => {
     const quote = reconstructQuote(
       [merchandiseLine({ amount: 80, discounts: [15, 5] })],
@@ -1223,6 +1393,105 @@ describe("shipping protection checkout UI", () => {
         id: protection.id,
         quantity: 1,
       });
+    });
+  });
+
+  describe("order-level discounts", () => {
+    /** @param {ReturnType<typeof liveOrderDiscountCheckout>} checkout */
+    function setOrderDiscountCheckout(checkout) {
+      setCheckout({ lines: checkout.lines, config: checkout.config });
+      extension.shopify.discountAllocations.value = checkout.orderDiscounts;
+    }
+
+    test("the checked fee matches the undiscounted protection line", async () => {
+      const checkout = liveOrderDiscountCheckout();
+      setOrderDiscountCheckout(checkout);
+      const query = mockStorefront(checkout.prices);
+      const formatCurrency = vi.fn((amount) => `$${amount}`);
+      extension.shopify.i18n.formatCurrency = formatCurrency;
+      const applyCartLinesChange = vi.fn(successfulMutation);
+      extension.shopify.applyCartLinesChange = applyCartLinesChange;
+      await renderExtension();
+
+      await waitFor(() =>
+        expect(formatCurrency).toHaveBeenLastCalledWith(949.95, {
+          currency: "USD",
+        }),
+      );
+      expect(formatCurrency).not.toHaveBeenCalledWith(854.96, {
+        currency: "USD",
+      });
+      expect(query).toHaveBeenCalledWith(expect.any(String), {
+        variables: {
+          ids: ["gid://shopify/ProductVariant/physical"],
+          country: "US",
+        },
+      });
+      expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+      expect(applyCartLinesChange).not.toHaveBeenCalled();
+    });
+
+    test("the offer waits for Storefront prices before showing a fee", async () => {
+      const checkout = liveOrderDiscountCheckout();
+      setOrderDiscountCheckout({
+        ...checkout,
+        lines: [checkout.lines[0]],
+      });
+      /** @type {(value: unknown) => void} */
+      let respond = () => {};
+      const query = vi.fn(() => new Promise((resolve) => (respond = resolve)));
+      extension.shopify.query = /** @type {any} */ (query);
+      const formatCurrency = vi.fn((amount) => `$${amount}`);
+      extension.shopify.i18n.formatCurrency = formatCurrency;
+      await renderExtension();
+
+      await waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+      expect(document.body.querySelector("s-checkbox")).toBeNull();
+      await act(async () => {
+        respond({
+          data: {
+            nodes: [
+              {
+                id: "gid://shopify/ProductVariant/physical",
+                price: { amount: "949.95", currencyCode: "USD" },
+              },
+            ],
+          },
+        });
+      });
+      await waitFor(() =>
+        expect(requireCheckbox().hasAttribute("checked")).toBe(false),
+      );
+      expect(formatCurrency).toHaveBeenCalledWith(949.95, { currency: "USD" });
+      expect(formatCurrency).not.toHaveBeenCalledWith(864.45, {
+        currency: "USD",
+      });
+    });
+
+    test("a failed price lookup keeps the buyer's protection without a fee", async () => {
+      setOrderDiscountCheckout(liveOrderDiscountCheckout());
+      extension.shopify.query = /** @type {any} */ (
+        vi.fn().mockRejectedValue(new Error("offline"))
+      );
+      const applyCartLinesChange = vi.fn(successfulMutation);
+      extension.shopify.applyCartLinesChange = applyCartLinesChange;
+      await renderExtension();
+      await act(async () => {});
+
+      expect(requireCheckbox().hasAttribute("checked")).toBe(true);
+      expect(requireCheckbox().getAttribute("label")).toBe("checkboxLabel");
+      expect(applyCartLinesChange).not.toHaveBeenCalled();
+    });
+
+    test("no order discount keeps the price lookup off", async () => {
+      setCheckout({
+        lines: [merchandiseLine({ amount: 80, discounts: [20] })],
+      });
+      const query = mockStorefront({});
+      await renderExtension();
+
+      expect(requireCheckbox().hasAttribute("checked")).toBe(false);
+      expect(query).not.toHaveBeenCalled();
     });
   });
 });

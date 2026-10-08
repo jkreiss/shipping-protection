@@ -20,6 +20,11 @@ module = "./src/Checkout.jsx"
 target = "purchase.checkout.block.render"
 default_placement = "ORDER_SUMMARY4"
 
+# With an order-level discount, checkout hides each line's share of it, so the
+# block reads pre-discount variant prices from the Storefront API.
+[extensions.capabilities]
+api_access = true
+
 # Loads metafields on checkout resources, including the cart,
 # products, customers, and more. Learn more:
 # https://shopify.dev/docs/api/checkout-ui-extensions/latest/configuration#metafields
