@@ -68,6 +68,20 @@ Webhook handlers must:
 6. return quickly
 7. move slow/retryable work to a worker when appropriate
 
+Receipt status codes:
+
+- A delivery that can never be stored (invalid shop domain, missing delivery ID, unsupported topic, no valid order ID, a shop with no installation record, or a delivery ID reused for a different event) throws `PermanentWebhookError`. The route reports `webhook_rejected` and returns 200, because Shopify's retries cannot change the outcome and repeated failures can remove the subscription. Reconciliation backfills 60 days of orders, so a real order dropped this way is recovered.
+- Database and other errors still return 500 so Shopify retries.
+
+Worker retries:
+
+- A claim coalesces every queued delivery for the order, but a delivery still in backoff keeps its attempt count; only due deliveries spend an attempt.
+- A serialization conflict (`P2034`) gives the attempt back once. If the delivery's previous error was also `P2034`, it takes the normal path instead: backoff, a `webhook_retry` report, and `FAILED` with `webhook_terminal` after the attempt budget.
+
+Reconciliation failures: an order Shopify will never return complete (`PermanentOrderError`, including `OrderUnavailableError`) is reported as `reconciliation_order_failed` and counted in `ordersFailed`, but is not queued and does not count toward the three-in-a-row stop, so adjacent bad orders cannot hold back the cursor. Any other error is queued as a `RECONCILE` delivery and counts toward that stop.
+
+Order edits: Shopify's line `quantity` includes refunded and removed units; `currentQuantity` excludes both. Normalization derives `removedQuantity` per line (`quantity - currentQuantity - refunded units`), and ingestion treats removed units as absent when deciding eligibility and whether protection was purchased. A protection line deleted by an order edit before payment records no purchase and no fee. Refunds, removal from a cart before checkout, and purchases already confirmed are unchanged: the confirmed purchase stays immutable.
+
 Never assume a webhook runs exactly once.
 
 Use stable Shopify IDs, event IDs, or equivalent idempotency keys.
