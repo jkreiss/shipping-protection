@@ -15,7 +15,7 @@ import { disableShopProtection, enableShopProtection, getShopConfiguration } fro
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
 import { checkoutOfferForSettings } from "./merchant/checkout-offer.server";
 import {
-  loadCore, loadProduct, findProduct, buildChecks, writeJsonMetafield,
+  loadCore, loadProduct, findProduct, buildChecks, sameContract, writeJsonMetafield,
   disableKnownConfiguration, repairProduct, ensureTransform, activateProduct,
   assertFunctionDeployed, publishSnapshot, productIsPublished, variantIsReady, protectionAdminConstants,
 } from "./shopify/protection-admin.server";
@@ -35,33 +35,37 @@ function legacyContractFor(productId, variantId, enabled) {
   };
 }
 
-function sameContract(left, right, enabled) {
-  return Boolean(
-    left && right && left.productId === right.productId &&
-    left.variantId === right.variantId && left.enabled === enabled &&
-    right.enabled === enabled && left.rateBasisPoints === right.rateBasisPoints &&
-    left.basis === right.basis && left.schemaVersion === right.schemaVersion &&
-    (left.schemaVersion === 1 || (left.ruleId === right.ruleId &&
-      left.ruleVersion === right.ruleVersion && left.effectiveAt === right.effectiveAt)),
-  );
+function assertSessionShop(core, shopDomain) {
+  if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
 }
 
 // Orders are recognised as protected by the active rule's variant, so the rule
 // must describe the product checkout actually sells. A legacy setup without a
 // rule, or a rule left on a replaced product, needs a setup update to publish one.
+// A published rule (schemaVersion 2) also has to match the rule checkout charges.
 function pricingRuleCheck(seed, activeRule) {
+  const sameRule = (rule) => seed.schemaVersion !== 2 || (
+    rule.ruleId === seed.ruleId && rule.version === seed.ruleVersion &&
+    rule.rateBasisPoints === seed.rateBasisPoints && rule.basis === seed.basis
+  );
   return {
     id: "pricing-rule",
     label: "Pricing is linked to the current protection product",
     ok: !seed || Boolean(activeRule &&
-      activeRule.productId === seed.productId && activeRule.variantId === seed.variantId),
+      activeRule.productId === seed.productId && activeRule.variantId === seed.variantId &&
+      sameRule(activeRule)),
   };
 }
 
 export async function readShippingProtectionState(admin, shopDomain) {
-  const core = await loadCore(admin);
+  return (await loadShippingProtectionState(admin, shopDomain, await loadCore(admin))).state;
+}
+
+// Builds the state from an already loaded core and also returns the product it
+// found, so callers that need either don't load them again.
+async function loadShippingProtectionState(admin, shopDomain, core) {
   const domain = shopDomain ?? core.shop.myshopifyDomain;
-  if (domain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
+  assertSessionShop(core, domain);
   await ensureInstalledShop(domain, core.shop.id);
   if (
     core.shopConfig?.schemaVersion === 2 &&
@@ -72,9 +76,12 @@ export async function readShippingProtectionState(admin, shopDomain) {
     await reconcilePublishedPricingRule(domain, core.shopConfig);
   }
   const seed = core.shopConfig ?? core.transformConfig;
-  const product = await findProduct(admin, seed?.productId);
   const activeRule = await getActivePricingRule(domain);
-  const checks = [...buildChecks(core, product), pricingRuleCheck(seed, activeRule)];
+  const product = await findProduct(admin, seed?.productId, {
+    recordedProductId: activeRule?.productId,
+  });
+  const pricingCheck = pricingRuleCheck(seed, activeRule);
+  const checks = [...buildChecks(core, product), pricingCheck];
   const healthReady = checks.every(({ ok }) => ok);
   const settings = await getShopConfiguration(domain);
   const capabilities = observedShopifyCapabilities(core.shop);
@@ -92,7 +99,7 @@ export async function readShippingProtectionState(admin, shopDomain) {
     healthReady,
   );
 
-  return {
+  const state = {
     shopName: core.shop.name,
     ready: healthReady,
     protectionOff,
@@ -110,7 +117,9 @@ export async function readShippingProtectionState(admin, shopDomain) {
         }
       : null,
     functionHandle: FUNCTION_HANDLE,
-    pricing: activeRule
+    // When the database rule disagrees with the published one, show what
+    // checkout charges.
+    pricing: activeRule && pricingCheck.ok
       ? {
           ruleId: activeRule.ruleId,
           ruleVersion: activeRule.version,
@@ -126,6 +135,7 @@ export async function readShippingProtectionState(admin, shopDomain) {
           }
         : null,
   };
+  return { state, product };
 }
 
 // Setup, rate changes, and turning off protection each publish to Shopify
@@ -141,13 +151,18 @@ export function setupShippingProtection(admin, shopDomain) {
 export function disableShippingProtection(admin, shopDomain) {
   return withShopSettingsLock(shopDomain, async () => {
     const core = await loadCore(admin);
-    if (shopDomain !== core.shop.myshopifyDomain) {
-      throw new Error("Shopify shop identity does not match the session.");
-    }
-    let contract = core.transformConfig ?? core.shopConfig;
-    if (!contract) {
-      const rule = await getActivePricingRule(shopDomain);
-      if (rule) contract = pricingContractForRule(rule, rule.productId, rule.variantId, false);
+    assertSessionShop(core, shopDomain);
+    const rule = await getActivePricingRule(shopDomain);
+    // Prefer the published copy that matches the active rule, so the disabled
+    // snapshot stays on the current rule. Otherwise use the transform's copy,
+    // which is what checkout charges.
+    let contract =
+      [core.transformConfig, core.shopConfig].find((copy) =>
+        copy && rule && copy.ruleId === rule.ruleId && copy.ruleVersion === rule.version &&
+        copy.rateBasisPoints === rule.rateBasisPoints) ??
+      core.transformConfig ?? core.shopConfig;
+    if (!contract && rule) {
+      contract = pricingContractForRule(rule, rule.productId, rule.variantId, false);
     }
     if (!contract) {
       throw new UserFacingError("Protection configuration is unavailable. Update protection setup, then try turning it off again.");
@@ -175,19 +190,15 @@ async function publishRate(
     throw new UserFacingError("This store's protection rate is managed by the app operator.");
   }
   const core = await loadCore(admin);
-  if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
+  assertSessionShop(core, shopDomain);
   const capabilities = observedShopifyCapabilities(core.shop);
   if (!capabilities.checkoutUiSupported || !capabilities.cartTransformUpdateSupported) {
     throw new UserFacingError("This store's Shopify plan doesn't support the checkout protection offer.");
   }
-  const current = await readShippingProtectionState(admin, shopDomain);
+  const { state: current, product } = await loadShippingProtectionState(admin, shopDomain, core);
   if (!current.configuration.protectionEnabled) {
     throw new UserFacingError("Set up protection before changing the rate.");
   }
-  const product = await findProduct(
-    admin,
-    core.shopConfig?.productId ?? core.transformConfig?.productId,
-  );
   const variant = product?.variants.nodes.find(
     ({ id }) =>
       id === (core.shopConfig?.variantId ?? core.transformConfig?.variantId),
@@ -215,7 +226,7 @@ async function publishRate(
 async function runSetup(admin, shopDomain) {
   const core = await loadCore(admin);
   const domain = shopDomain ?? core.shop.myshopifyDomain;
-  if (domain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
+  assertSessionShop(core, domain);
   const capabilities = observedShopifyCapabilities(core.shop);
   if (!capabilities.checkoutUiSupported || !capabilities.cartTransformUpdateSupported) {
     throw new UserFacingError("This store's Shopify plan doesn't support the checkout protection offer.");
@@ -240,9 +251,11 @@ async function runSetup(admin, shopDomain) {
   try {
     if (!liveContract) await disableKnownConfiguration(admin, core, existingContract);
 
+    const activeRule = await getActivePricingRule(domain);
     const existingProduct = await findProduct(
       admin,
       existingContract?.productId,
+      { recordedProductId: activeRule?.productId },
     );
     const repaired = await repairProduct(
       admin,
@@ -286,7 +299,6 @@ async function runSetup(admin, shopDomain) {
       throw new Error("Product activation did not pass its health checks.");
     }
 
-    const activeRule = await getActivePricingRule(domain);
     // A rule is tied to one variant; if repair replaced the product or
     // variant, publish a new version at the same rate instead.
     if (activeRule && activeRule.productId === repaired.product.id &&

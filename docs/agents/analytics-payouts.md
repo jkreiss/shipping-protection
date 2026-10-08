@@ -56,6 +56,12 @@ Total completed protection fees.
 
 Protection fees refunded.
 
+A refund counts once its money has settled (successful refund transactions cover the refund's total) and has no unsettled refund transaction. Attribution:
+
+- A restock-only refund that moved no money is ignored.
+- If protection is the only refunded line, the amount is the smaller of the protection line subtotal and the money refunded.
+- If other lines were refunded too, the full protection subtotal counts only when the money refunded covers every refunded line. A smaller refund can't be split between lines, so it is left unattributed rather than prorated.
+
 ### Claims Paid
 
 Total covered payouts (theft, and free-return shipping/handling). Always zero until payouts are recorded (see [Payouts](#payouts)).

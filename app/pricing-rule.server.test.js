@@ -28,9 +28,20 @@ function inMemoryDatabase() {
       Object.assign(state.shop, data);
       return state.shop;
     }),
-    findUnique: vi.fn(async ({ where }) =>
-      where.shopDomain === state.shop.shopDomain ? state.shop : null,
-    ),
+    findUnique: vi.fn(async ({ where, include }) => {
+      const found = where.shopDomain
+        ? where.shopDomain === state.shop.shopDomain
+        : where.id === state.shop.id;
+      if (!found) return null;
+      if (!include?.activePricingRule) return state.shop;
+      return {
+        ...state.shop,
+        activePricingRule:
+          state.rules.find(({ id }) => id === state.shop.activePricingRuleId) ??
+          state.shop.activePricingRule ??
+          null,
+      };
+    }),
   };
   const pricingRule = {
     findFirst: vi.fn(async ({ where, orderBy }) => {
@@ -75,6 +86,7 @@ function inMemoryDatabase() {
     $transaction: vi.fn(async (callback) => {
       const isFinalization = state.rules.length > 0 && state.rules.some((rule) => rule.state === "PENDING");
       if (state.failFinalization && isFinalization) {
+        state.failFinalization = false;
         throw new Error("database finalization interrupted");
       }
       return callback({ shop, pricingRule });
@@ -178,6 +190,59 @@ describe("pricing rule publication", () => {
     expect(state.shop.activePricingRuleId).toBe(reconciled.id);
   });
 
+  test("does not roll the database back to an older interrupted rule", async () => {
+    const { database, state } = inMemoryDatabase();
+    state.failFinalization = true;
+    let firstSnapshot;
+    await expect(
+      createAndPublishPricingRule(
+        activationOptions(database, async (_admin, snapshot) => {
+          firstSnapshot = snapshot;
+        }),
+      ),
+    ).rejects.toThrow("database finalization interrupted");
+    expect(state.rules[0].state).toBe("PENDING");
+
+    const second = await createAndPublishPricingRule({
+      ...activationOptions(database, async () => {}),
+      rateBasisPoints: 40,
+      createRuleId: () => "rule-2",
+    });
+    expect(second.rule.version).toBe(2);
+
+    expect(
+      await reconcilePublishedPricingRule(shopDomain, firstSnapshot, database),
+    ).toBeNull();
+    expect(state.shop.activePricingRuleId).toBe(second.rule.id);
+    expect(state.rules[1].state).toBe("ACTIVE");
+  });
+
+  test("does not roll the database back to an older rule marked failed", async () => {
+    const { database, state } = inMemoryDatabase();
+    let firstSnapshot;
+    await expect(
+      createAndPublishPricingRule(
+        activationOptions(database, async (_admin, snapshot) => {
+          firstSnapshot = snapshot;
+          throw new Error("request timed out");
+        }),
+      ),
+    ).rejects.toThrow("request timed out");
+    expect(state.rules[0].state).toBe("FAILED");
+
+    const second = await createAndPublishPricingRule({
+      ...activationOptions(database, async () => {}),
+      rateBasisPoints: 40,
+      createRuleId: () => "rule-2",
+    });
+
+    expect(
+      await reconcilePublishedPricingRule(shopDomain, firstSnapshot, database),
+    ).toBeNull();
+    expect(state.shop.activePricingRuleId).toBe(second.rule.id);
+    expect(state.rules[0].state).toBe("FAILED");
+  });
+
   test("does not reactivate a superseded rule", async () => {
     const { database, state } = inMemoryDatabase();
     let publishedSnapshot;
@@ -207,6 +272,11 @@ describe("pricing rule publication", () => {
         database,
       ),
     ).toBeNull();
+  });
+
+  test("returns no active rule for an unknown shop", async () => {
+    const { database } = inMemoryDatabase();
+    expect(await getActivePricingRule("missing.myshopify.com", database)).toBeNull();
   });
 
   test("does not return an active rule from another shop", async () => {

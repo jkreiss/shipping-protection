@@ -69,18 +69,29 @@ describe("shop configuration persistence", () => {
     expect(config).toEqual({ ...existing, protectionEnabled: false });
     expect(db.shopConfiguration.upsert).toHaveBeenCalledWith({
       where: { shopId: "one" },
-      create: { shopId: "one", protectionEnabled: false },
-      update: { protectionEnabled: false },
+      create: { shopId: "one", protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" },
+      update: { protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" },
     });
   });
 
-  test("enables only theft after delivery, never consumer-law remedies", async () => {
+  test("turning off a shop whose strategy is still NONE records the checkout strategy", async () => {
+    const existing = { shopId: "one", protectionEnabled: true, attachmentStrategy: "NONE" };
+    const db = database({ id: "one", configuration: existing });
+    db.shopConfiguration.upsert.mockImplementation(async ({ update }) => ({ ...existing, ...update }));
+
+    const config = await disableShopProtection("one.myshopify.com", db);
+
+    // The published offer can only be read as "off" once the strategy is set.
+    expect(config).toMatchObject({ protectionEnabled: false, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM" });
+  });
+
+  test("setup turns on the stolen, lost, and damaged flags the US copy names", async () => {
     const db = database({ id: "one" });
     await enableShopProtection("one.myshopify.com", db);
     const { create, update } = db.shopConfiguration.upsert.mock.calls[0][0];
     for (const flags of [create, update]) {
       expect(flags).toMatchObject({
-        stolenCoverageEnabled: true, lostCoverageEnabled: false, damagedCoverageEnabled: false,
+        stolenCoverageEnabled: true, lostCoverageEnabled: true, damagedCoverageEnabled: true,
       });
     }
   });

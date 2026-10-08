@@ -42,7 +42,7 @@ The initial release is for US stores (product owner decision, 2026-10-07; no leg
 
 Australian stores come later and need their own wording and settings before launch there. The Australian Consumer Law rules below apply to them. They don't restrict US copy.
 
-Setup still turns on only theft coverage (`stolenCoverageEnabled`); `lostCoverageEnabled` and `damagedCoverageEnabled` default off. Those flags don't change anything customers see yet. Align them with the copy before claims are built.
+Setup turns on `stolenCoverageEnabled`, `lostCoverageEnabled`, and `damagedCoverageEnabled`, matching the US copy; a migration turned them on for shops that had already finished setup. Those flags don't change anything customers see yet. Australian stores will need their own settings, and setup must not turn these on for them.
 
 ## Australian stores (later)
 
