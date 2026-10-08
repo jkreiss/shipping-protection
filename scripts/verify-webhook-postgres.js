@@ -110,6 +110,7 @@ async function verifyCoalescing() {
   });
   const coalesced = await claimDelivery();
   assert.equal(coalesced.deliveries.length, 2);
+  assert.deepEqual(coalesced.deliveries.map(({ charged }) => charged).sort(), [false, true]);
   assert.deepEqual((await statuses(backoff.id)).map(({ webhookId, attempts }) => [webhookId, attempts]), [["k-1", 1], ["k-2", 2]]);
   await prisma.webhookDelivery.updateMany({ where: { leaseToken: coalesced.leaseToken }, data: { status: "PROCESSED", leaseToken: null, leaseUntil: null } });
 

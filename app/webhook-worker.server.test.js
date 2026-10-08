@@ -20,6 +20,7 @@ function worker({
   adminForShop,
   shopifyOrder = order,
   graphqlError,
+  updateCount = 1,
   deliveries = [
     { id: "d-1", topic: "ORDERS_PAID", attempts: MAX_DELIVERY_ATTEMPTS },
     { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2 },
@@ -29,7 +30,7 @@ function worker({
   const database = {
     shop: { findUnique: async () => ({ id: "shop-1", shopDomain: "one.myshopify.com", installationState }) },
     $transaction: async () => { throw transactionError; },
-    webhookDelivery: { updateMany: async (args) => { updates.push(args); return { count: 1 }; } },
+    webhookDelivery: { updateMany: async (args) => { updates.push(args); return { count: updateCount }; } },
   };
   const admin = { graphql: async (query) => {
     if (!query.replace(/#[^\n]*/g, "").trim()) throw new Error("syntax error, unexpected end of file");
@@ -113,6 +114,14 @@ describe("worker failure handling", () => {
   });
 });
 
+describe("a delivery deleted while it is being processed", () => {
+  test("is not retried or alerted on, such as one removed by customers/redact", async () => {
+    const { run } = worker({ transactionError: new Error("Webhook lease expired."), updateCount: 0 });
+    const { stderr } = await run();
+    expect(stderr.filter(({ event }) => event?.startsWith("webhook_"))).toEqual([]);
+  });
+});
+
 describe("worker conflict handling", () => {
   test("requeues a batch that kept losing serialization conflicts without spending attempts", async () => {
     const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
@@ -164,6 +173,21 @@ describe("worker conflict handling", () => {
     expect(givenBack).toHaveLength(1);
     expect(givenBack[0].where.id).toEqual({ in: ["d-2"] });
     expect(updates.filter(({ data }) => !data.attempts).map(({ where }) => where.id)).toEqual(["d-1"]);
+  });
+
+  test("returns a delivery that rode along from backoff unchanged, without giving back an attempt it never spent", async () => {
+    const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
+    const { run, updates } = worker({ transactionError: conflict, deliveries: [
+      { id: "d-1", topic: "ORDERS_PAID", attempts: 3, errorMessage: null, charged: true },
+      { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2, errorMessage: "PROCESSING_ERROR", charged: false },
+    ] });
+    await run();
+
+    const rodeAlong = updates.find(({ where }) => where.id.in.includes("d-2"));
+    expect(rodeAlong.where.id).toEqual({ in: ["d-2"] });
+    expect(rodeAlong.data).toEqual({ status: "PENDING", leaseToken: null, leaseUntil: null });
+    const spent = updates.find(({ where }) => where.id.in.includes("d-1"));
+    expect(spent.data.attempts).toEqual({ decrement: 1 });
   });
 
   test("still fails a delivery on its last attempt for other errors", async () => {

@@ -75,12 +75,12 @@ Receipt status codes:
 
 Worker retries:
 
-- A claim coalesces every queued delivery for the order, but a delivery still in backoff keeps its attempt count; only due deliveries spend an attempt.
-- A serialization conflict (`P2034`) gives the attempt back once. If the delivery's previous error was also `P2034`, it takes the normal path instead: backoff, a `webhook_retry` report, and `FAILED` with `webhook_terminal` after the attempt budget.
+- A claim coalesces every queued delivery for the order, but a delivery still in backoff keeps its attempt count; only due deliveries spend an attempt. If that batch then loses a serialization conflict, a delivery that rode along from backoff returns unchanged.
+- A serialization conflict (`P2034`) gives back the attempt the claim spent, once. If the delivery's previous error was also `P2034`, it takes the normal path instead: backoff, a `webhook_retry` report, and `FAILED` with `webhook_terminal` after the attempt budget.
 
 Reconciliation failures: an order Shopify will never return complete (`PermanentOrderError`, including `OrderUnavailableError`) is reported as `reconciliation_order_failed` and counted in `ordersFailed`, but is not queued and does not count toward the three-in-a-row stop, so adjacent bad orders cannot hold back the cursor. Any other error is queued as a `RECONCILE` delivery and counts toward that stop.
 
-Order edits: Shopify's line `quantity` includes refunded and removed units; `currentQuantity` excludes both. Normalization derives `removedQuantity` per line (`quantity - currentQuantity - refunded units`), and ingestion treats removed units as absent when deciding eligibility and whether protection was purchased. A protection line deleted by an order edit before payment records no purchase and no fee. Refunds, removal from a cart before checkout, and purchases already confirmed are unchanged: the confirmed purchase stays immutable.
+Order edits: Shopify's line `quantity` includes refunded and removed units; `currentQuantity` excludes both. Normalization derives `removedQuantity` per line (`quantity - currentQuantity - refunded units`), and ingestion treats removed units as absent when deciding eligibility and whether protection was purchased, and leaves a fully removed merchandise line out of the covered amounts. The single-unit test and the charge check stay on the original quantities, because the Cart Transform priced the cart as it was at checkout. A protection line deleted by an order edit before payment records no purchase and no fee. Refunds, removal from a cart before checkout, and purchases already confirmed are unchanged: the confirmed purchase stays immutable.
 
 Never assume a webhook runs exactly once.
 

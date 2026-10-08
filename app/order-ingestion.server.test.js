@@ -330,6 +330,30 @@ describe("normalized order persistence", () => {
     expect(tx.storedOrder()).toMatchObject({ paidEligible: false });
   });
 
+  test("leaves merchandise deleted by an order edit out of the covered amounts", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    order.lines.push({
+      ...order.lines[0], shopifyLineItemId: "gid://shopify/LineItem/3", removedQuantity: 1,
+      originalUnitAmount: "50.0000", preDiscountAmount: "50.0000", finalAmount: "50.0000",
+    });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidEligible: true, paidMerchandiseAmount: "100.0000" });
+    expect(tx.storedPurchase()).toMatchObject({ eligibleSubtotalAmount: "100.0000", coveredMerchandiseAmount: "100.0000" });
+  });
+
+  test("does not record a purchase when an edit leaves one unit of a multi-unit protection line", async () => {
+    const tx = transaction();
+    const order = chargedProtection(normalizedOrder(attributed), "0.0000");
+    // Checked out with two units, so the Function charged nothing; an edit then removed one.
+    Object.assign(order.lines[1], { quantity: 2, removedQuantity: 1 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: false });
+  });
+
   test("refetches once when a copy from the same second differs", async () => {
     const tx = transaction();
     await persistNormalizedOrder(tx, shop, normalizedOrder());

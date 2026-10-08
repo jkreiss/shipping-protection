@@ -874,7 +874,7 @@ Behavior changes worth knowing before release:
   tombstone is kept; see Privacy and Data Minimization in
   [data-security](agents/data-security.md).
 
-Local verification: 756 tests passed across 42 files. Lint, typecheck, and build
+Local verification: 760 tests passed across 42 files. Lint, typecheck, and build
 passed. `verify:postgres` and `verify:webhook-postgres` passed against a disposable
 PostgreSQL 17, including new cases for a delivery in backoff joining a batch with
 its attempts unchanged and for redaction before an order is stored. Staging

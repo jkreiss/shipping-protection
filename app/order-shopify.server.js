@@ -1,3 +1,4 @@
+import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { adminGraphql } from "./shopify/admin-graphql.server.js";
 
 // Selections shared by the order query and the queries that page its connections.
@@ -127,6 +128,15 @@ export function assertCompleteOrder(order) {
     throw new Error("Shopify order data is incomplete.");
   }
   return order;
+}
+
+// Data Shopify returned that can't be normalized won't change on a retry.
+export function normalizeFetchedOrder(order) {
+  try {
+    return normalizeGraphqlOrder(order);
+  } catch (error) {
+    throw new PermanentOrderError("Shopify order could not be normalized.", { cause: error });
+  }
 }
 
 // Pass `shop` so the calls share that shop's API budget (see adminGraphql).
