@@ -65,6 +65,13 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
   return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee, chargedFee: scaledToMoney(charged), currencyCode };
 }
 
+// A line's amounts still include units an order edit deleted, so take the
+// surviving units' share of them.
+function survivingShare(line, amount) {
+  if (line.liveQuantity <= 0 || line.quantity <= 0) return 0n;
+  return moneyToScaled(amount) * BigInt(line.liveQuantity) / BigInt(line.quantity);
+}
+
 function orderContentHash(normalized) {
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
@@ -90,7 +97,7 @@ export async function persistNormalizedOrder(
   // protection line to its rule; they never make a line protection.
   const protectionVariants = new Set(rules.map(({ variantId }) => variantId));
   // Units an order edit deleted still sit in the line's quantity and amounts, so
-  // a fully deleted line is left out of what protection covers. The charge check
+  // what protection covers counts only the surviving units. The charge check
   // and the single-unit test stay on the original lines: the Cart Transform
   // priced the cart as it was at checkout.
   const lines = normalized.lines.map((line) => ({
@@ -115,8 +122,8 @@ export async function persistNormalizedOrder(
   }
   const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.liveQuantity > 0);
   const coveredMerchandise = scaledToMoney(lines
-    .filter((line) => !line.isProtection && line.requiresShipping && line.liveQuantity > 0)
-    .reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n));
+    .filter((line) => !line.isProtection && line.requiresShipping)
+    .reduce((sum, line) => sum + survivingShare(line, line.finalAmount), 0n));
   const protectedLines = lines.filter((line) => line.isProtection && line.liveQuantity > 0);
   // Shopify skips the Cart Transform when any line has a selling plan, so the
   // protection line is never charged: a subscription order is not protected.
@@ -207,8 +214,8 @@ export async function persistNormalizedOrder(
       ...firstAttribution, rule: null, status: "UNATTRIBUTED",
     };
     const eligibleSubtotal = lines
-      .filter((line) => !line.isProtection && line.requiresShipping && line.liveQuantity > 0)
-      .reduce((sum, line) => sum + moneyToScaled(line.preDiscountAmount), 0n);
+      .filter((line) => !line.isProtection && line.requiresShipping)
+      .reduce((sum, line) => sum + survivingShare(line, line.preDiscountAmount), 0n);
     const fee = protectedLines.reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n);
     const { pricingCheck, expectedFee, chargedFee, currencyCode: checkedCurrency } = livePriceCheck(
       normalized,

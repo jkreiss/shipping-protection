@@ -114,6 +114,20 @@ describe("worker failure handling", () => {
   });
 });
 
+describe("a delivery that rode along from backoff", () => {
+  test("keeps its own retry time when the batch fails for another reason", async () => {
+    const { run, updates } = worker({ graphqlError: new Error("fetch failed"), deliveries: [
+      { id: "d-1", topic: "ORDERS_PAID", attempts: 2, charged: true },
+      { id: "d-2", topic: "ORDERS_UPDATED", attempts: 5, charged: false },
+    ] });
+    await run();
+
+    const rodeAlong = updates.find(({ where }) => where.id === "d-2");
+    expect(rodeAlong.data).toEqual({ status: "PENDING", leaseToken: null, leaseUntil: null });
+    expect(updates.find(({ where }) => where.id === "d-1").data.nextAttemptAt).toBeInstanceOf(Date);
+  });
+});
+
 describe("a delivery deleted while it is being processed", () => {
   test("is not retried or alerted on, such as one removed by customers/redact", async () => {
     const { run } = worker({ transactionError: new Error("Webhook lease expired."), updateCount: 0 });

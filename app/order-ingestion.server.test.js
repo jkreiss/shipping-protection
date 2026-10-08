@@ -343,6 +343,20 @@ describe("normalized order persistence", () => {
     expect(tx.storedPurchase()).toMatchObject({ eligibleSubtotalAmount: "100.0000", coveredMerchandiseAmount: "100.0000" });
   });
 
+  test("counts only the surviving units of a partly deleted discounted line as covered", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    // Two units at $10 with $2 off; an edit deleted one before payment.
+    Object.assign(order.lines[0], {
+      quantity: 2, removedQuantity: 1, originalUnitAmount: "10.0000",
+      preDiscountAmount: "20.0000", totalDiscountAmount: "2.0000", finalAmount: "18.0000",
+    });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidMerchandiseAmount: "9.0000" });
+    expect(tx.storedPurchase()).toMatchObject({ eligibleSubtotalAmount: "10.0000", coveredMerchandiseAmount: "9.0000" });
+  });
+
   test("does not record a purchase when an edit leaves one unit of a multi-unit protection line", async () => {
     const tx = transaction();
     const order = chargedProtection(normalizedOrder(attributed), "0.0000");

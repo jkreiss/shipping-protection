@@ -39,7 +39,7 @@ function isUninstalled(error) {
 
 // Claims every queued delivery for one order under a single lease, so one
 // Shopify fetch covers them all. A delivery still in backoff rides along
-// without spending an attempt. Orders that already have a live lease are
+// without spending an attempt, after the due ones when the batch is full. Orders that already have a live lease are
 // skipped. SKIP LOCKED keeps concurrent workers from blocking or deadlocking;
 // if two workers still pick the same order, persistence is idempotent.
 export async function claimDelivery(database = prisma) {
@@ -76,7 +76,8 @@ export async function claimDelivery(database = prisma) {
       WHERE d."attempts" < ${MAX_DELIVERY_ATTEMPTS}
         AND (d."status" = 'PENDING'::"WebhookProcessingStatus"
           OR (d."status" = 'PROCESSING'::"WebhookProcessingStatus" AND d."leaseUntil" <= NOW()))
-      ORDER BY d."receivedAt", d.id
+      ORDER BY (d."status" = 'PENDING'::"WebhookProcessingStatus" AND d."nextAttemptAt" > NOW()),
+        d."receivedAt", d.id
       LIMIT ${MAX_BATCH_DELIVERIES}
       FOR UPDATE OF d SKIP LOCKED
     )
@@ -177,6 +178,15 @@ export async function processNextDelivery({
     const permanent = error instanceof PermanentOrderError;
     // Each delivery keeps its own attempt count, so reschedule them one by one.
     for (const delivery of failed) {
+      // A delivery that rode along from backoff spent no attempt: keep its own
+      // retry time instead of pushing it back each time a newer webhook arrives.
+      if (delivery.charged === false && !permanent) {
+        await database.webhookDelivery.updateMany({
+          where: { id: delivery.id, shopId, leaseToken, status: "PROCESSING" },
+          data: { status: "PENDING", leaseToken: null, leaseUntil: null },
+        });
+        continue;
+      }
       const terminal = permanent || delivery.attempts >= MAX_DELIVERY_ATTEMPTS;
       const { count } = await database.webhookDelivery.updateMany({
         where: { id: delivery.id, shopId, leaseToken, status: "PROCESSING" },

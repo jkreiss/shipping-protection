@@ -159,6 +159,12 @@ async function verifyCoalescing() {
 async function verifyRedactionBeforeStore() {
   // customers/redact for an order the worker has not stored yet removes its
   // queued deliveries, so the order is never stored afterwards.
+  // Earlier fixtures can leave deliveries that fall due while this runs; settle
+  // them so the worker claims this shop's.
+  await prisma.webhookDelivery.updateMany({
+    where: { status: { in: ["PENDING", "PROCESSING"] } },
+    data: { status: "PROCESSED", leaseToken: null, leaseUntil: null },
+  });
   const redacted = await newShop();
   await receiveOrderWebhook({ shopDomain: redacted.shopDomain, topic: "ORDERS_CREATE", webhookId: "r-1", payload: { id: 9601 } });
   await receiveOrderWebhook({ shopDomain: redacted.shopDomain, topic: "ORDERS_PAID", webhookId: "r-2", payload: { id: 9601 } });

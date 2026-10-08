@@ -100,8 +100,9 @@ export function normalizeGraphqlOrder(order) {
   }
   const lines = order.lineItems.nodes.map((line) => {
     const quantity = Number(line.quantity);
-    const removedQuantity = line.currentQuantity == null ? 0
-      : Math.max(0, quantity - Number(line.currentQuantity) - (refundedUnits.get(line.id) ?? 0));
+    const hasCurrent = line.currentQuantity !== undefined && line.currentQuantity !== null;
+    const removedQuantity = hasCurrent
+      ? Math.max(0, quantity - Number(line.currentQuantity) - (refundedUnits.get(line.id) ?? 0)) : 0;
     const presentment = line.originalUnitPriceSet?.presentmentMoney;
     if (!line.originalUnitPriceSet?.shopMoney || !line.discountedTotalSet?.shopMoney ||
       line.originalUnitPriceSet.shopMoney.currencyCode !== currencyCode ||
