@@ -26,3 +26,13 @@ The source worktree and its notes/CI changes are preserved.
 - NIT admin-graphql.server.js:64 — loadAdminConfig re-parsed per call.
   → NO CHANGE: production returns before URL parsing; parsing only occurs for synthetic load configuration.
 
+
+
+### PR #21 OCR follow-up
+
+All three findings were confirmed and corrected: bounded PostgreSQL barrier
+waits with guaranteed release/drain, pre-fetch installation generation carried
+through pricing recovery, and one shared server Admin API version. Seven added
+regression cases bring the full suite to 810 passing tests. Existing publication
+recovery remains supported when the snapshot was fetched in the current
+installation generation.

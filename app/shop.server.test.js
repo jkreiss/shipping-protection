@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  ensureInstalledShop,
   recordGrantedScopes,
   redactCustomerOrders,
   withShopSettingsLock,
@@ -348,4 +349,14 @@ describe("customer redaction", () => {
     );
     expect(db.shop.findUnique).not.toHaveBeenCalled();
   });
+});
+
+
+test("a pre-reinstall read cannot update the current Shopify identity", async () => {
+  const transaction = vi.fn();
+  await expect(ensureInstalledShop("one.myshopify.com", "gid://shopify/Shop/2", {
+    shop: { findUnique: async () => ({ id: "shop-1", installationState: "INSTALLED", installationGeneration: 2, shopGid: "gid://shopify/Shop/1" }) },
+    $transaction: transaction,
+  }, 0)).rejects.toThrow(/access|installation/i);
+  expect(transaction).not.toHaveBeenCalled();
 });

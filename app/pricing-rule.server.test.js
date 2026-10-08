@@ -222,36 +222,42 @@ describe("pricing rule publication", () => {
       shopDomain,
       publishedSnapshot,
       database,
+      0,
     );
     expect(reconciled.state).toBe("ACTIVE");
     expect(state.shop.activePricingRuleId).toBe(reconciled.id);
   });
 
-  test("recovers a rule marked failed when Shopify applied it anyway", async () => {
-    const { database, state } = inMemoryDatabase();
-    let publishedSnapshot;
-    await expect(
-      createAndPublishPricingRule(
-        activationOptions(database, async (_admin, snapshot) => {
-          publishedSnapshot = snapshot;
-          throw new Error("request timed out");
-        }),
-      ),
-    ).rejects.toThrow("request timed out");
-    expect(state.rules[0].state).toBe("FAILED");
+  test.each([0, 2])(
+    "recovers a rule marked failed from a fresh generation %i snapshot",
+    async (generation) => {
+      const { database, state } = inMemoryDatabase();
+      let publishedSnapshot;
+      await expect(
+        createAndPublishPricingRule(
+          activationOptions(database, async (_admin, snapshot) => {
+            publishedSnapshot = snapshot;
+            throw new Error("request timed out");
+          }),
+        ),
+      ).rejects.toThrow("request timed out");
+      expect(state.rules[0].state).toBe("FAILED");
 
-    const reconciled = await reconcilePublishedPricingRule(
-      shopDomain,
-      publishedSnapshot,
-      database,
-    );
-    expect(reconciled).toMatchObject({
-      state: "ACTIVE",
-      failedAt: null,
-      failureReason: null,
-    });
-    expect(state.shop.activePricingRuleId).toBe(reconciled.id);
-  });
+      state.shop.installationGeneration = generation;
+      const reconciled = await reconcilePublishedPricingRule(
+        shopDomain,
+        publishedSnapshot,
+        database,
+        generation,
+      );
+      expect(reconciled).toMatchObject({
+        state: "ACTIVE",
+        failedAt: null,
+        failureReason: null,
+      });
+      expect(state.shop.activePricingRuleId).toBe(reconciled.id);
+    },
+  );
 
   test("does not roll the database back to an older interrupted rule", async () => {
     const { database, state } = inMemoryDatabase();
@@ -274,7 +280,12 @@ describe("pricing rule publication", () => {
     expect(second.rule.version).toBe(2);
 
     expect(
-      await reconcilePublishedPricingRule(shopDomain, firstSnapshot, database),
+      await reconcilePublishedPricingRule(
+        shopDomain,
+        firstSnapshot,
+        database,
+        0,
+      ),
     ).toBeNull();
     expect(state.shop.activePricingRuleId).toBe(second.rule.id);
     expect(state.rules[1].state).toBe("ACTIVE");
@@ -300,10 +311,38 @@ describe("pricing rule publication", () => {
     });
 
     expect(
-      await reconcilePublishedPricingRule(shopDomain, firstSnapshot, database),
+      await reconcilePublishedPricingRule(
+        shopDomain,
+        firstSnapshot,
+        database,
+        0,
+      ),
     ).toBeNull();
     expect(state.shop.activePricingRuleId).toBe(second.rule.id);
     expect(state.rules[0].state).toBe("FAILED");
+  });
+
+  test("does not reconcile a pre-reinstall snapshot into the new generation", async () => {
+    const { database, state } = inMemoryDatabase();
+    state.failFinalization = true;
+    let snapshot;
+    await expect(
+      createAndPublishPricingRule(
+        activationOptions(database, async (_admin, published) => {
+          snapshot = published;
+        }),
+      ),
+    ).rejects.toThrow("database finalization interrupted");
+    state.shop.installationGeneration = 2;
+    const reconciled = await reconcilePublishedPricingRule(
+      shopDomain,
+      snapshot,
+      database,
+      0,
+    );
+    expect(reconciled).toBeNull();
+    expect(state.rules[0].state).toBe("PENDING");
+    expect(state.shop.activePricingRuleId).toBeNull();
   });
 
   test("does not reactivate a superseded rule", async () => {
@@ -320,6 +359,7 @@ describe("pricing rule publication", () => {
         shopDomain,
         publishedSnapshot,
         database,
+        0,
       ),
     ).toBeNull();
   });
@@ -337,6 +377,7 @@ describe("pricing rule publication", () => {
           basis: "SHIPPABLE_PRE_DISCOUNT",
         },
         database,
+        0,
       ),
     ).toBeNull();
   });

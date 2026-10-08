@@ -927,3 +927,18 @@ both existing-refresh and first-install orderings, and rollback after lease loss
 Shared throttle deadlines intentionally remain in-process, as scoped in the
 plan; separate processes retain independent pacing. Finding dispositions are in
 [the section 5 review](reviews/2026-10-merchant-auth-bugs.md).
+
+
+OCR follow-up (2026-10-08, PR #21): all three reported findings were validated
+and fixed. Protection reads now capture the installation generation before the
+Shopify request and carry it into pricing reconciliation, including its final
+transaction guard. Regression tests reject pre-reinstall snapshots and still
+recover accepted publications from fresh current-generation reads. The
+PostgreSQL verifier races each entry barrier against its operation and a
+five-second deadline, always releases the associated gate, and drains operations
+before cleanup; acquisition failure and timeout regressions cover the failure
+paths. Session verification and the Shopify SDK now share one Admin API version
+constant. The follow-up passes **810 tests across 44 suites**, with disposable
+PostgreSQL integration, lint, generated typecheck, and production build. All
+three explicit PostgreSQL verifiers passed, and schema comparison reported no
+difference. The staging rehearsal gate above remains pending.

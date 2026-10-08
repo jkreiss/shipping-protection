@@ -36,9 +36,13 @@ export async function ensureInstalledShop(
   shopDomain,
   shopGid = undefined,
   database = prisma,
+  expectedGeneration = undefined,
 ) {
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (!shop || shop.installationState !== "INSTALLED")
+  if (
+    !shop || shop.installationState !== "INSTALLED" ||
+    (expectedGeneration !== undefined && shop.installationGeneration !== expectedGeneration)
+  )
     throw new InstallationAccessLostError();
   if (!shopGid || shop.shopGid === shopGid) return shop;
   return database.$transaction(async (transaction) => {

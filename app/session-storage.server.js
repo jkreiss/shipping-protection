@@ -1,5 +1,6 @@
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import { InstallationAccessLostError, lockShopRow } from "./shop.server.js";
+import { adminApiVersion } from "./shopify/api-version.server.js";
 import { adminGraphql } from "./shopify/admin-graphql.server.js";
 
 export const SESSION_INSTALLATION_QUERY = `#graphql
@@ -17,7 +18,7 @@ async function verifyInstallation(session) {
       graphql: async (query, options) => {
         const timeout = AbortSignal.timeout(30_000);
         const response = await fetch(
-          `https://${session.shop}/admin/api/2026-07/graphql.json`,
+          `https://${session.shop}/admin/api/${adminApiVersion}/graphql.json`,
           {
             method: "POST",
             headers: {

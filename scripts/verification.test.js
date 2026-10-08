@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { expect, test } from "vitest";
-import { runVerification } from "./verification.js";
+import { expect, test, vi } from "vitest";
+import { runVerification, waitForVerificationBarrier } from "./verification.js";
 
 function database(count = 0) {
   const events = [];
@@ -103,4 +103,46 @@ test("cleanup failure fails an otherwise successful verification", async () => {
     }),
   ).rejects.toBe(cleanup);
   expect(db.events).toEqual(["count", "later", "disconnect"]);
+});
+
+test("a failed operation before its barrier preserves the error and reaches cleanup", async () => {
+  const db = database();
+  const failure = new Error("lock acquisition failed");
+  await expect(
+    runVerification({
+      database: db,
+      env: { VERIFY_ISOLATED_DB: "1" },
+      verify: () =>
+        waitForVerificationBarrier(
+          new Promise(() => {}),
+          Promise.reject(failure),
+        ),
+      cleanup: [async () => db.events.push("cleanup")],
+    }),
+  ).rejects.toBe(failure);
+  expect(db.events).toEqual(["count", "cleanup", "disconnect"]);
+});
+
+test("a barrier that is never reached times out", async () => {
+  vi.useFakeTimers();
+  try {
+    const waiting = waitForVerificationBarrier(
+      new Promise(() => {}),
+      new Promise(() => {}),
+      { label: "owner", timeoutMs: 50 },
+    );
+    const rejected = expect(waiting).rejects.toThrow(/owner.*timed out/);
+    await vi.advanceTimersByTimeAsync(50);
+    await rejected;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("an operation completing without reaching its barrier fails promptly", async () => {
+  await expect(
+    waitForVerificationBarrier(new Promise(() => {}), Promise.resolve(), {
+      label: "owner",
+    }),
+  ).rejects.toThrow(/owner.*completed/);
 });

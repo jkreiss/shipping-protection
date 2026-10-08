@@ -177,11 +177,22 @@ export async function reconcilePublishedPricingRule(
   shopDomain,
   snapshot,
   database = prisma,
+  installationGeneration,
 ) {
-  if (snapshot?.schemaVersion !== 2) return null;
+  if (
+    snapshot?.schemaVersion !== 2 ||
+    !Number.isInteger(installationGeneration) ||
+    installationGeneration < 0
+  )
+    return null;
 
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (!shop || shop.installationState !== "INSTALLED") return null;
+  if (
+    !shop ||
+    shop.installationState !== "INSTALLED" ||
+    shop.installationGeneration !== installationGeneration
+  )
+    return null;
   const rule = await database.pricingRule.findFirst({
     where: {
       shopId: shop.id,
@@ -201,7 +212,7 @@ export async function reconcilePublishedPricingRule(
 
   return finalizeRule(database, shop.id, rule, {
     onlyIfNewer: true,
-    installationGeneration: shop.installationGeneration,
+    installationGeneration,
   });
 }
 

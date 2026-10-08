@@ -1,3 +1,4 @@
+import { adminApiVersion } from "./shopify/api-version.server.js";
 // @vitest-environment node
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ShopAwareSessionStorage } from "./session-storage.server.js";
@@ -252,7 +253,7 @@ test("server transport verifies the supplied token and current installation", as
   vi.stubGlobal("fetch", fetch);
   await f.storage.storeSession(f.session);
   expect(fetch.mock.calls[0][0]).toBe(
-    `https://${domain}/admin/api/2026-07/graphql.json`,
+    `https://${domain}/admin/api/${adminApiVersion}/graphql.json`,
   );
 });
 

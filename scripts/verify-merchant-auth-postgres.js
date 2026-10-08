@@ -8,7 +8,7 @@ import {
   withShopSettingsLock,
 } from "../app/shop.server.js";
 import { withInstalledShopWrite } from "../app/settings-lease-context.server.js";
-import { runVerification } from "./verification.js";
+import { runVerification, waitForVerificationBarrier } from "./verification.js";
 
 const other = new PrismaClient();
 const domain = "merchant-auth-verification.myshopify.com";
@@ -155,31 +155,45 @@ await runVerification({
         firstWriter === "session"
           ? storage(blockingDb).storeSession(session())
           : markShopUninstalled(domain, blockingDb);
-      await entered.promise;
-      const trailing =
-        firstWriter === "session"
-          ? markShopUninstalled(domain, contenderDb)
-          : storage(contenderDb).storeSession(session());
-      const outcome = trailing.then(
-        () => null,
-        (error) => error,
-      );
+      let trailing;
       try {
-        await waitUntilBlocked(await contender.promise);
+        await waitForVerificationBarrier(entered.promise, leading, {
+          label: "Leading transaction",
+        });
+        trailing =
+          firstWriter === "session"
+            ? markShopUninstalled(domain, contenderDb)
+            : storage(contenderDb).storeSession(session());
+        const outcome = trailing.then(
+          () => null,
+          (error) => error,
+        );
+        const pid = await waitForVerificationBarrier(
+          contender.promise,
+          trailing,
+          { label: "Contending transaction" },
+        );
+        await waitUntilBlocked(pid);
+        release.resolve();
+        await leading;
+        const error = await outcome;
+        if (firstWriter === "uninstall")
+          assert.equal(error?.response?.code, 401);
+        else assert.equal(error, null);
+        assert.equal(
+          await prisma.session.count({ where: { shop: domain } }),
+          0,
+        );
+        assert.equal(
+          (await prisma.shop.findUnique({ where: { shopDomain: domain } }))
+            .installationState,
+          "UNINSTALLED",
+        );
+        await reset();
       } finally {
         release.resolve();
+        await Promise.allSettled([leading, trailing]);
       }
-      await leading;
-      const error = await outcome;
-      if (firstWriter === "uninstall") assert.equal(error?.response?.code, 401);
-      else assert.equal(error, null);
-      assert.equal(await prisma.session.count({ where: { shop: domain } }), 0);
-      assert.equal(
-        (await prisma.shop.findUnique({ where: { shopDomain: domain } }))
-          .installationState,
-        "UNINSTALLED",
-      );
-      await reset();
     }
 
     await first.storeSession(session());
@@ -191,15 +205,22 @@ await runVerification({
       return identity;
     }).storeSession(session("old-token"));
     const staleOutcome = stale.catch((error) => error);
-    await verified.promise;
-    await markShopUninstalled(domain, prisma);
-    await first.storeSession(session("new-token"));
-    resume.resolve();
-    assert.equal((await staleOutcome).response.code, 401);
-    assert.equal(
-      (await first.loadSession(session().id)).accessToken,
-      "new-token",
-    );
+    try {
+      await waitForVerificationBarrier(verified.promise, stale, {
+        label: "Session verification",
+      });
+      await markShopUninstalled(domain, prisma);
+      await first.storeSession(session("new-token"));
+      resume.resolve();
+      assert.equal((await staleOutcome).response.code, 401);
+      assert.equal(
+        (await first.loadSession(session().id)).accessToken,
+        "new-token",
+      );
+    } finally {
+      resume.resolve();
+      await staleOutcome;
+    }
 
     const held = deferred(),
       finish = deferred();
@@ -211,39 +232,48 @@ await runVerification({
       return "old";
     });
     const ownerOutcome = owner.catch((error) => error);
-    await held.promise;
-    await assert.rejects(
-      withShopSettingsLock(domain, async () => "overlap", { database: other }),
-    );
-    await other.shop.update({
-      where: { shopDomain: domain },
-      data: { settingsLockedUntil: new Date(0) },
-    });
-    await withShopSettingsLock(
-      domain,
-      async () => {
-        await assert.rejects(lease.assertHeld());
-        finish.resolve();
-        assert.match((await ownerOutcome).message, /interrupted/);
-        const current = await other.shop.findUnique({
-          where: { shopDomain: domain },
-        });
-        assert.ok(current.settingsLockToken);
-        await withInstalledShopWrite(other, domain, (tx, shop) =>
-          tx.shopConfiguration.upsert({
-            where: { shopId: shop.id },
-            create: { shopId: shop.id },
-            update: { protectionRateEditable: true },
-          }),
-        );
-      },
-      { database: other },
-    );
-    assert.equal(
-      (await prisma.shop.findUnique({ where: { shopDomain: domain } }))
-        .settingsLockToken,
-      null,
-    );
+    try {
+      await waitForVerificationBarrier(held.promise, owner, {
+        label: "Settings lock owner",
+      });
+      await assert.rejects(
+        withShopSettingsLock(domain, async () => "overlap", {
+          database: other,
+        }),
+      );
+      await other.shop.update({
+        where: { shopDomain: domain },
+        data: { settingsLockedUntil: new Date(0) },
+      });
+      await withShopSettingsLock(
+        domain,
+        async () => {
+          await assert.rejects(lease.assertHeld());
+          finish.resolve();
+          assert.match((await ownerOutcome).message, /interrupted/);
+          const current = await other.shop.findUnique({
+            where: { shopDomain: domain },
+          });
+          assert.ok(current.settingsLockToken);
+          await withInstalledShopWrite(other, domain, (tx, shop) =>
+            tx.shopConfiguration.upsert({
+              where: { shopId: shop.id },
+              create: { shopId: shop.id },
+              update: { protectionRateEditable: true },
+            }),
+          );
+        },
+        { database: other },
+      );
+      assert.equal(
+        (await prisma.shop.findUnique({ where: { shopDomain: domain } }))
+          .settingsLockToken,
+        null,
+      );
+    } finally {
+      finish.resolve();
+      await ownerOutcome;
+    }
     await assert.rejects(
       withShopSettingsLock(domain, async (lease) => {
         await withInstalledShopWrite(prisma, domain, async (tx, shop) => {
