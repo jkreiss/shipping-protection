@@ -72,7 +72,12 @@ updates. Six additional regressions reproduced and verified that publication rac
 BigInt decimal fixtures cover long fractional inputs, large subtotals, half-up
 boundaries and four-decimal currencies across the server, checkout and Function.
 Checkout only converts the final fee to a number when its minor units survive
-the conversion. Shared copy/configuration fixtures check server/checkout
+the conversion. A follow-up regression reproduced a browser crash in the ES6
+checkout bundle: Shopify CLI lowers BigInt exponentiation to `Math.pow`, which
+rejects BigInt values. Checkout now constructs decimal powers from integer
+strings. Pricing fixtures also execute the ES6-transformed code, covering normal
+fees, long decimals, currency precision and unsafe final-fee rejection.
+Shared copy/configuration fixtures check server/checkout
 acceptance, including v1/v2 contracts, malformed fields, C1/bidi/zero-width/BOM
 and separator rejection, and preservation of Unicode/emoji/plain markup and
 permitted whitespace. Publication validates preserved copy in the merged offer.

@@ -25,6 +25,17 @@ export function ShippingProtection() {
   const orderDiscountAllocations = shopify.discountAllocations.value;
   const instructions = shopify.instructions.value.lines;
   const appMetafields = shopify.appMetafields.value;
+  console.log(
+  "PROTECTION_DISCOUNT_CHECK",
+  JSON.stringify({
+    lines: lines.map((line) => ({
+      variantId: line.merchandise.id,
+      total: line.cost.totalAmount,
+      discounts: line.discountAllocations,
+    })),
+    cartDiscounts: orderDiscountAllocations,
+  }, null, 2),
+);
   const configuration = useMemo(
     () => readConfiguration(appMetafields),
     [appMetafields],
@@ -268,7 +279,7 @@ export function ShippingProtection() {
           !eligible
             ? shopify.i18n.translate("removeProtection", { fee: formattedFee })
             : offer.checkboxLabel
-              ? `${offer.checkboxLabel} — ${formattedFee}`
+              ? `${offer.checkboxLabel} ${formattedFee}`
               : shopify.i18n.translate("checkboxLabel", { fee: formattedFee })
         }
         onChange={onCheckboxChange}
