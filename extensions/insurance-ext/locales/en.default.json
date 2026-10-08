@@ -5,6 +5,6 @@
   "removeProtection": "Shipping protection — {{fee}} (uncheck to remove)",
   "protectionUnavailable": "Shipping protection is unavailable for this cart. Any existing protection still needs to be removed.",
   "removalUnavailable": "Shopify does not currently allow shipping protection to be removed in this checkout.",
-  "feeUnavailable": "Fee unavailable",
+  "feeUnavailable": "Shipping protection unavailable",
   "retry": "Retry"
 }

@@ -28,6 +28,8 @@ const VARIANT_PRICES_QUERY = `query ShippingProtectionPrices($ids: [ID!]!, $coun
     }
   }
 }`;
+// Delays before the second and third price lookups, matching cart mutations.
+const PRICE_RETRY_DELAYS = [250, 1000];
 
 export default async () => {
   render(<ShippingProtection />, document.body);
@@ -93,20 +95,30 @@ export function ShippingProtection() {
     if (!priceRequest) return;
     const [requestCountry, ids] = JSON.parse(priceRequest);
     let current = true;
-    shopify
-      .query(VARIANT_PRICES_QUERY, {
-        variables: { ids, country: requestCountry },
-      })
-      .then(({ data }) => {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    /** @param {number} attempt */
+    const lookUp = async (attempt) => {
+      try {
+        const { data, errors } = await shopify.query(VARIANT_PRICES_QUERY, {
+          variables: { ids, country: requestCountry },
+        });
+        if (!data || errors?.length) throw new Error("Price lookup failed");
         if (current)
           setLoadedPrices({
             request: priceRequest,
             prices: readVariantPrices(data),
           });
-      })
-      .catch(() => {});
+      } catch {
+        const delay = PRICE_RETRY_DELAYS[attempt];
+        if (current && delay !== undefined)
+          timer = setTimeout(() => void lookUp(attempt + 1), delay);
+      }
+    };
+    void lookUp(0);
     return () => {
       current = false;
+      clearTimeout(timer);
     };
   }, [priceRequest]);
   const quote = configuration
@@ -308,11 +320,11 @@ export function ShippingProtection() {
   ]);
 
   if (!configuration || (!checked && !shouldOffer)) return null;
-  const formattedFee = displayedFee
-    ? shopify.i18n.formatCurrency(displayedFee.amount, {
-        currency: displayedFee.currencyCode,
-      })
-    : shopify.i18n.translate("feeUnavailable");
+  const formattedFee =
+    displayedFee &&
+    shopify.i18n.formatCurrency(displayedFee.amount, {
+      currency: displayedFee.currencyCode,
+    });
 
   return (
     <s-stack direction="block" gap="small-200">
@@ -330,11 +342,15 @@ export function ShippingProtection() {
             : !instructions.canAddCartLine)
         }
         label={
-          !eligible
-            ? shopify.i18n.translate("removeProtection", { fee: formattedFee })
-            : offer.checkboxLabel
-              ? `${offer.checkboxLabel} ${formattedFee}`
-              : shopify.i18n.translate("checkboxLabel", { fee: formattedFee })
+          !formattedFee
+            ? shopify.i18n.translate("feeUnavailable")
+            : !eligible
+              ? shopify.i18n.translate("removeProtection", {
+                  fee: formattedFee,
+                })
+              : offer.checkboxLabel
+                ? `${offer.checkboxLabel} ${formattedFee}`
+                : shopify.i18n.translate("checkboxLabel", { fee: formattedFee })
         }
         onChange={onCheckboxChange}
       />

@@ -1468,19 +1468,92 @@ describe("shipping protection checkout UI", () => {
       });
     });
 
-    test("a failed price lookup keeps the buyer's protection without a fee", async () => {
+    /** @param {number} milliseconds */
+    async function advance(milliseconds) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(milliseconds);
+      });
+    }
+
+    const priceResponse = {
+      data: {
+        nodes: [
+          {
+            id: "gid://shopify/ProductVariant/physical",
+            price: { amount: "949.95", currencyCode: "USD" },
+          },
+        ],
+      },
+    };
+
+    test("a failed price lookup keeps the buyer's protection and says it is unavailable", async () => {
+      vi.useFakeTimers();
       setOrderDiscountCheckout(liveOrderDiscountCheckout());
-      extension.shopify.query = /** @type {any} */ (
-        vi.fn().mockRejectedValue(new Error("offline"))
-      );
+      const query = vi.fn().mockRejectedValue(new Error("offline"));
+      extension.shopify.query = /** @type {any} */ (query);
       const applyCartLinesChange = vi.fn(successfulMutation);
       extension.shopify.applyCartLinesChange = applyCartLinesChange;
-      await renderExtension();
-      await act(async () => {});
+      await act(async () => {
+        await renderExtension();
+      });
+      await advance(5_000);
 
+      expect(query).toHaveBeenCalledTimes(3);
       expect(requireCheckbox().hasAttribute("checked")).toBe(true);
-      expect(requireCheckbox().getAttribute("label")).toBe("checkboxLabel");
+      expect(requireCheckbox().getAttribute("label")).toBe("feeUnavailable");
       expect(applyCartLinesChange).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["a rejected request", () => Promise.reject(new Error("offline"))],
+      [
+        "a response with only errors",
+        () => Promise.resolve({ errors: [{ message: "Throttled" }] }),
+      ],
+    ])("retries the price lookup after %s", async (_name, failure) => {
+      vi.useFakeTimers();
+      const checkout = liveOrderDiscountCheckout();
+      setOrderDiscountCheckout({ ...checkout, lines: [checkout.lines[0]] });
+      const query = vi
+        .fn()
+        .mockImplementationOnce(failure)
+        .mockImplementationOnce(failure)
+        .mockResolvedValue(priceResponse);
+      extension.shopify.query = /** @type {any} */ (query);
+      const formatCurrency = vi.fn((amount) => `$${amount}`);
+      extension.shopify.i18n.formatCurrency = formatCurrency;
+      await act(async () => {
+        await renderExtension();
+      });
+      await advance(0);
+      expect(document.body.querySelector("s-checkbox")).toBeNull();
+
+      await advance(250);
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(document.body.querySelector("s-checkbox")).toBeNull();
+
+      await advance(1_000);
+      expect(query).toHaveBeenCalledTimes(3);
+      expect(requireCheckbox().hasAttribute("checked")).toBe(false);
+      expect(formatCurrency).toHaveBeenCalledWith(949.95, { currency: "USD" });
+    });
+
+    test("unmount cancels a scheduled price lookup retry", async () => {
+      vi.useFakeTimers();
+      setOrderDiscountCheckout(liveOrderDiscountCheckout());
+      const query = vi.fn().mockRejectedValue(new Error("offline"));
+      extension.shopify.query = /** @type {any} */ (query);
+      await act(async () => {
+        await renderExtension();
+      });
+      await advance(0);
+      expect(query).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        render(null, document.body);
+      });
+      await advance(5_000);
+      expect(query).toHaveBeenCalledTimes(1);
     });
 
     test("no order discount keeps the price lookup off", async () => {
