@@ -1,31 +1,77 @@
+import { randomUUID } from "node:crypto";
+import {
+  assertSettingsLease,
+  settingsLeaseContext,
+} from "./settings-lease-context.server.js";
+import { reportFailure } from "./observability.server.js";
 import prisma from "./db.server.js";
 import { UserFacingError } from "./user-facing-error.js";
 
-export async function ensureInstalledShop(shopDomain, shopGid = undefined) {
-  return prisma.shop.upsert({
-    where: { shopDomain },
-    create: {
-      shopDomain,
-      ...(shopGid ? { shopGid } : {}),
-    },
-    update: {
-      installationState: "INSTALLED",
-      uninstalledAt: null,
-      ...(shopGid ? { shopGid } : {}),
-    },
+// Session persistence and uninstall take this row lock before changing state.
+// Creating the tombstone also serializes uninstall before the first session save.
+export async function lockShopRow(transaction, shopDomain) {
+  let [shop] =
+    await transaction.$queryRaw`SELECT * FROM "Shop" WHERE "shopDomain" = ${shopDomain} FOR UPDATE`;
+  if (!shop) {
+    await transaction.shop.createMany({
+      data: { shopDomain },
+      skipDuplicates: true,
+    });
+    [shop] =
+      await transaction.$queryRaw`SELECT * FROM "Shop" WHERE "shopDomain" = ${shopDomain} FOR UPDATE`;
+  }
+  return shop;
+}
+
+export class InstallationAccessLostError extends Error {
+  constructor() {
+    super(
+      "Installed shop access is unavailable. Reload to authenticate again.",
+    );
+    this.response = { code: 401 };
+  }
+}
+
+export async function ensureInstalledShop(
+  shopDomain,
+  shopGid = undefined,
+  database = prisma,
+) {
+  const shop = await database.shop.findUnique({ where: { shopDomain } });
+  if (!shop || shop.installationState !== "INSTALLED")
+    throw new InstallationAccessLostError();
+  if (!shopGid || shop.shopGid === shopGid) return shop;
+  return database.$transaction(async (transaction) => {
+    await assertSettingsLease(transaction, shopDomain);
+    const updated = await transaction.shop.update({
+      where: {
+        id: shop.id,
+        installationState: "INSTALLED",
+        installationGeneration: shop.installationGeneration,
+      },
+      data: { shopGid },
+    });
+    await assertSettingsLease(transaction, shopDomain);
+    return updated;
   });
 }
 
-export async function markShopUninstalled(shopDomain) {
-  await prisma.$transaction(async (transaction) => {
-    await transaction.session.deleteMany({ where: { shop: shopDomain } });
-    await transaction.shop.updateMany({
-      where: { shopDomain },
+export async function markShopUninstalled(shopDomain, database = prisma) {
+  await database.$transaction(async (transaction) => {
+    const shop = await lockShopRow(transaction, shopDomain);
+    await transaction.shop.update({
+      where: { id: shop.id },
       data: {
         installationState: "UNINSTALLED",
-        uninstalledAt: new Date(),
+        installationGeneration: {
+          increment: shop.installationState === "INSTALLED" ? 1 : 0,
+        },
+        uninstalledAt: shop.uninstalledAt ?? new Date(),
+        settingsLockedUntil: null,
+        settingsLockToken: null,
       },
     });
+    await transaction.session.deleteMany({ where: { shop: shopDomain } });
   });
 }
 
@@ -115,29 +161,110 @@ export async function recordGrantedScopes({ shopDomain, sessionId, scopes, datab
 }
 
 const SETTINGS_LOCK_MS = 5 * 60_000;
+const SETTINGS_RENEW_MS = 60_000;
 
-// Runs one protection setup, rate change, or turn-off at a time per shop. These publish
-// pricing to Shopify and then record it locally; interleaved, the rate Shopify
-// charges and the rate Settings shows can disagree. The lease expires on its
-// own if the process dies mid-change.
-export async function withShopSettingsLock(shopDomain, run, { database = prisma } = {}) {
-  // An undefined domain would drop the filter and lock every shop.
-  if (typeof shopDomain !== "string" || !shopDomain) throw new Error("A shop domain is required.");
+export async function withShopSettingsLock(
+  shopDomain,
+  run,
+  { database = prisma } = {},
+) {
+  if (typeof shopDomain !== "string" || !shopDomain)
+    throw new Error("A shop domain is required.");
+  const token = randomUUID();
   const now = new Date();
-  const until = new Date(now.getTime() + SETTINGS_LOCK_MS);
   const { count } = await database.shop.updateMany({
-    where: { shopDomain, OR: [{ settingsLockedUntil: null }, { settingsLockedUntil: { lte: now } }] },
-    data: { settingsLockedUntil: until },
+    where: {
+      shopDomain,
+      installationState: "INSTALLED",
+      OR: [
+        { settingsLockedUntil: null },
+        { settingsLockedUntil: { lte: now } },
+      ],
+    },
+    data: {
+      settingsLockedUntil: new Date(now.getTime() + SETTINGS_LOCK_MS),
+      settingsLockToken: token,
+    },
   });
-  if (count === 0) {
-    throw new UserFacingError("Another settings change is still saving. Try again in a moment.");
-  }
-  try {
-    return await run();
-  } finally {
-    await database.shop.updateMany({
-      where: { shopDomain, settingsLockedUntil: until },
-      data: { settingsLockedUntil: null },
+  if (count !== 1)
+    throw new UserFacingError(
+      "Another settings change is still saving. Try again in a moment.",
+    );
+
+  const controller = new AbortController();
+  let lost;
+  let stopped = false;
+  let renewal = Promise.resolve();
+  const interrupt = (cause) => {
+    if (!lost) {
+      lost = new UserFacingError(
+        "This settings change was interrupted. Refresh to check its status, then try again.",
+      );
+      controller.abort(lost);
+      if (cause) reportFailure("settings_lease_lost", cause);
+    }
+    return lost;
+  };
+  const ownedWhere = () => ({
+    shopDomain,
+    installationState: "INSTALLED",
+    settingsLockToken: token,
+    settingsLockedUntil: { gt: new Date() },
+  });
+  const assertHeld = async (target = database) => {
+    if (lost) throw lost;
+    try {
+      const { count } = await target.shop.updateMany({
+        where: ownedWhere(),
+        data: { settingsLockToken: token },
+      });
+      if (lost) throw lost;
+      if (count !== 1) throw interrupt();
+    } catch (error) {
+      // A rolled-back Serializable transaction can retry with the same owner.
+      // Renewal failures are handled separately and still revoke the lease.
+      if (error?.code === "P2034") throw error;
+      throw interrupt(error);
+    }
+  };
+  const timer = setInterval(() => {
+    renewal = renewal.then(async () => {
+      if (stopped || lost) return;
+      try {
+        const { count } = await database.shop.updateMany({
+          where: ownedWhere(),
+          data: {
+            settingsLockedUntil: new Date(Date.now() + SETTINGS_LOCK_MS),
+          },
+        });
+        if (count !== 1) interrupt();
+      } catch (error) {
+        interrupt(error);
+      }
     });
+  }, SETTINGS_RENEW_MS);
+  timer.unref?.();
+  const lease = { shopDomain, signal: controller.signal, assertHeld };
+  try {
+    return await settingsLeaseContext.run(lease, async () => {
+      const result = await run(lease);
+      stopped = true;
+      clearInterval(timer);
+      await renewal;
+      await assertHeld();
+      return result;
+    });
+  } finally {
+    stopped = true;
+    clearInterval(timer);
+    await renewal;
+    try {
+      await database.shop.updateMany({
+        where: { shopDomain, settingsLockToken: token },
+        data: { settingsLockedUntil: null, settingsLockToken: null },
+      });
+    } catch (error) {
+      reportFailure("settings_lease_release_failed", error);
+    }
   }
 }

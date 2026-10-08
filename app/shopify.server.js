@@ -4,51 +4,12 @@ import {
   AppDistribution,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
-import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
+import { ShopAwareSessionStorage } from "./session-storage.server.js";
 import prisma from "./db.server.js";
 import { loadAdminConfig } from "./shopify/load-admin.server.js";
 
 // Reject a misconfigured load/production deployment before serving requests.
 loadAdminConfig();
-
-class ShopAwareSessionStorage {
-  constructor(database) {
-    this.database = database;
-    this.delegate = new PrismaSessionStorage(database);
-  }
-
-  async storeSession(session) {
-    await this.database.shop.upsert({
-      where: { shopDomain: session.shop },
-      create: { shopDomain: session.shop },
-      update: {
-        installationState: "INSTALLED",
-        uninstalledAt: null,
-      },
-    });
-    return this.delegate.storeSession(session);
-  }
-
-  loadSession(id) {
-    return this.delegate.loadSession(id);
-  }
-
-  deleteSession(id) {
-    return this.delegate.deleteSession(id);
-  }
-
-  deleteSessions(ids) {
-    return this.delegate.deleteSessions(ids);
-  }
-
-  findSessionsByShop(shop) {
-    return this.delegate.findSessionsByShop(shop);
-  }
-
-  isReady() {
-    return this.delegate.isReady();
-  }
-}
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,

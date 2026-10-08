@@ -42,6 +42,7 @@ function windowBounds(query) {
 
 function execute(query, variables, shop, config) {
   const operation = typeof query === "string" && query.replace(/#[^\n]*/g, "").match(/^\s*query\s+(\w+)/)?.[1];
+  if (operation === "VerifySessionInstallation") return { shop: { id: `gid://shopify/Shop/${shop.match(/load-(\d+)/)?.[1]}`, myshopifyDomain: shop }, currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } };
   if (operation === "AnalyticsShop") return { shop: { currencyCode: "AUD", ianaTimezone: "Australia/Sydney" } };
   if (["AnalyticsOrder", "OrderVersion"].includes(operation)) {
     const match = typeof variables.id === "string" && variables.id.match(/^gid:\/\/shopify\/Order\/([1-9]\d*)$/);

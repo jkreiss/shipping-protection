@@ -41,6 +41,7 @@ jobs:
       - run: npm test
       - run: npm run test:e2e:list
       - run: npm run verify:postgres
+      - run: npm run verify:merchant-auth-postgres
       - run: npm run verify:webhook-postgres
       - run: npm run lint
       - run: npm run typecheck

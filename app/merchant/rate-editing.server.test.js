@@ -31,13 +31,15 @@ function database() {
       { shopId: "two", protectionEnabled: true, protectionRateEditable: true },
     ],
   ]);
-  return {
+  const db = {
     shops,
     configurations,
     shop: {
       findUnique: async ({ where }) => shops.get(where.shopDomain) ?? null,
       updateMany: async ({ where, data }) => {
-        const shop = shops.get(where.shopDomain);
+        const shop =
+          shops.get(where.shopDomain) ??
+          [...shops.values()].find((row) => row.id === where.id);
         if (!shop) return { count: 0 };
         if (
           where.OR &&
@@ -46,7 +48,8 @@ function database() {
           return { count: 0 };
         if (
           where.settingsLockedUntil &&
-          shop.settingsLockedUntil !== where.settingsLockedUntil
+          where.settingsLockedUntil.gt &&
+          !(shop.settingsLockedUntil > where.settingsLockedUntil.gt)
         )
           return { count: 0 };
         Object.assign(shop, data);
@@ -64,6 +67,8 @@ function database() {
       },
     },
   };
+  db.$transaction = async (run) => run(db);
+  return db;
 }
 
 describe("operator rate editing configuration", () => {

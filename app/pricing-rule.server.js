@@ -1,3 +1,9 @@
+import {
+  assertSettingsLease,
+  guardInstalledShopWrite,
+  withInstalledShopWrite,
+} from "./settings-lease-context.server.js";
+import { reportFailure } from "./observability.server.js";
 import { randomUUID } from "node:crypto";
 import prisma from "./db.server";
 import { retrySerializationFailures } from "./serializable-retry.server";
@@ -22,18 +28,26 @@ async function finalizeRule(
   database,
   shopId,
   rule,
-  { now = new Date(), onlyIfNewer = false } = {},
+  { now = new Date(), onlyIfNewer = false, installationGeneration } = {},
 ) {
   return retrySerializationFailures(() =>
     database.$transaction(
       async (transaction) => {
-        if (onlyIfNewer) {
-          const shop = await transaction.shop.findUnique({
-            where: { id: shopId },
-            include: { activePricingRule: true },
-          });
-          if (shop?.activePricingRule?.version > rule.version) return null;
+        const shop = await transaction.shop.findUnique({
+          where: { id: shopId },
+          include: { activePricingRule: true },
+        });
+        if (
+          !shop ||
+          shop.installationState !== "INSTALLED" ||
+          (installationGeneration !== undefined &&
+            shop.installationGeneration !== installationGeneration)
+        ) {
+          throw new Error("Installed shop changed during pricing publication.");
         }
+        await guardInstalledShopWrite(transaction, shop);
+        if (onlyIfNewer && shop.activePricingRule?.version > rule.version)
+          return null;
         await transaction.pricingRule.updateMany({
           where: { shopId, state: "ACTIVE", id: { not: rule.id } },
           data: { state: "SUPERSEDED" },
@@ -50,8 +64,12 @@ async function finalizeRule(
         });
         await transaction.shop.update({
           where: { id: shopId },
-          data: { activePricingRuleId: rule.id, activePricingRuleShopId: shopId },
+          data: {
+            activePricingRuleId: rule.id,
+            activePricingRuleShopId: shopId,
+          },
         });
+        await assertSettingsLease(transaction, shop.shopDomain);
         return active;
       },
       { isolationLevel: "Serializable" },
@@ -72,60 +90,84 @@ export async function createAndPublishPricingRule({
 }) {
   validateRateBasisPoints(rateBasisPoints);
 
-  const pending = await database.$transaction(
-    async (transaction) => {
-      const shop = await transaction.shop.upsert({
-        where: { shopDomain },
-        create: { shopDomain },
-        update: { installationState: "INSTALLED", uninstalledAt: null },
-      });
-      const newest = await transaction.pricingRule.findFirst({
-        where: { shopId: shop.id },
-        orderBy: { version: "desc" },
-        select: { version: true },
-      });
-      return transaction.pricingRule.create({
-        data: {
-          shopId: shop.id,
-          ruleId: createRuleId(),
-          version: (newest?.version ?? 0) + 1,
-          productId,
-          variantId,
-          rateBasisPoints,
-          basis: PRICING_BASIS,
-          state: "PENDING",
-          effectiveAt: now(),
-        },
-      });
-    },
-    { isolationLevel: "Serializable" },
+  let installationGeneration;
+  const pending = await retrySerializationFailures(() =>
+    database.$transaction(
+      async (transaction) => {
+        const shop = await transaction.shop.findUnique({
+          where: { shopDomain },
+        });
+        if (!shop) throw new Error("Installed shop is unavailable.");
+        await guardInstalledShopWrite(transaction, shop);
+        installationGeneration = shop.installationGeneration;
+        const newest = await transaction.pricingRule.findFirst({
+          where: { shopId: shop.id },
+          orderBy: { version: "desc" },
+          select: { version: true },
+        });
+        const rule = await transaction.pricingRule.create({
+          data: {
+            shopId: shop.id,
+            ruleId: createRuleId(),
+            version: (newest?.version ?? 0) + 1,
+            productId,
+            variantId,
+            rateBasisPoints,
+            basis: PRICING_BASIS,
+            state: "PENDING",
+            effectiveAt: now(),
+          },
+        });
+        await assertSettingsLease(transaction, shopDomain);
+        return rule;
+      },
+      { isolationLevel: "Serializable" },
+    ),
   );
 
-  const snapshot = pricingContractForRule(
-    pending,
-    productId,
-    variantId,
-    true,
-  );
+  const snapshot = pricingContractForRule(pending, productId, variantId, true);
   let published = false;
 
   try {
+    await assertSettingsLease(database, shopDomain);
+    const shop = await database.shop.findUnique({ where: { shopDomain } });
+    if (
+      !shop ||
+      shop.installationState !== "INSTALLED" ||
+      shop.installationGeneration !== installationGeneration
+    )
+      throw new Error("Installed shop changed during pricing publication.");
     await publishSnapshot(admin, snapshot);
     published = true;
     const active = await finalizeRule(database, pending.shopId, pending, {
       now: now(),
+      installationGeneration,
     });
     return { rule: active, snapshot };
   } catch (error) {
     if (!published) {
-      await database.pricingRule.update({
-        where: { id: pending.id },
-        data: {
-          state: "FAILED",
-          failedAt: now(),
-          failureReason: sanitizeFailure(error),
-        },
-      });
+      try {
+        await withInstalledShopWrite(
+          database,
+          shopDomain,
+          async (transaction, shop) => {
+            if (shop.installationGeneration !== installationGeneration)
+              throw new Error(
+                "Installed shop changed during pricing publication.",
+              );
+            await transaction.pricingRule.update({
+              where: { id_shopId: { id: pending.id, shopId: pending.shopId } },
+              data: {
+                state: "FAILED",
+                failedAt: now(),
+                failureReason: sanitizeFailure(error),
+              },
+            });
+          },
+        );
+      } catch (cleanupError) {
+        reportFailure("pricing_failure_record_interrupted", cleanupError);
+      }
     }
     throw error;
   }
@@ -139,7 +181,7 @@ export async function reconcilePublishedPricingRule(
   if (snapshot?.schemaVersion !== 2) return null;
 
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (!shop) return null;
+  if (!shop || shop.installationState !== "INSTALLED") return null;
   const rule = await database.pricingRule.findFirst({
     where: {
       shopId: shop.id,
@@ -157,7 +199,10 @@ export async function reconcilePublishedPricingRule(
   // Shopify's live config is authoritative, so a FAILED rule it uses is active.
   if (rule.state === "SUPERSEDED") return null;
 
-  return finalizeRule(database, shop.id, rule, { onlyIfNewer: true });
+  return finalizeRule(database, shop.id, rule, {
+    onlyIfNewer: true,
+    installationGeneration: shop.installationGeneration,
+  });
 }
 
 export async function getActivePricingRule(shopDomain, database = prisma) {
@@ -166,7 +211,9 @@ export async function getActivePricingRule(shopDomain, database = prisma) {
       where: { shopDomain },
       include: { activePricingRule: true },
     })
-    .then((shop) => shop && shop.activePricingRule?.shopId === shop.id
-      ? shop.activePricingRule
-      : null);
+    .then((shop) =>
+      shop && shop.activePricingRule?.shopId === shop.id
+        ? shop.activePricingRule
+        : null,
+    );
 }

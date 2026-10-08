@@ -17,6 +17,7 @@ function inMemoryDatabase() {
       shopDomain,
       activePricingRuleId: null,
       installationState: "INSTALLED",
+      installationGeneration: 0,
     },
     rules: [],
     failFinalization: false,
@@ -24,6 +25,13 @@ function inMemoryDatabase() {
 
   const shop = {
     upsert: vi.fn(async () => state.shop),
+    updateMany: vi.fn(async ({ where }) => ({
+      count:
+        state.shop.installationState === where.installationState &&
+        state.shop.installationGeneration === where.installationGeneration
+          ? 1
+          : 0,
+    })),
     update: vi.fn(async ({ data }) => {
       Object.assign(state.shop, data);
       return state.shop;
@@ -46,10 +54,14 @@ function inMemoryDatabase() {
   const pricingRule = {
     findFirst: vi.fn(async ({ where, orderBy }) => {
       const matches = state.rules.filter((rule) =>
-        Object.entries(where ?? {}).every(([key, value]) => rule[key] === value),
+        Object.entries(where ?? {}).every(
+          ([key, value]) => rule[key] === value,
+        ),
       );
       if (orderBy?.version === "desc") {
-        return matches.sort((left, right) => right.version - left.version)[0] ?? null;
+        return (
+          matches.sort((left, right) => right.version - left.version)[0] ?? null
+        );
       }
       return matches[0] ?? null;
     }),
@@ -74,7 +86,8 @@ function inMemoryDatabase() {
       const rule = state.rules.find(({ id, shopId }) =>
         where.id_shopId
           ? id === where.id_shopId.id && shopId === where.id_shopId.shopId
-          : id === where.id);
+          : id === where.id,
+      );
       if (!rule) throw new Error("missing rule");
       Object.assign(rule, data);
       return rule;
@@ -84,7 +97,9 @@ function inMemoryDatabase() {
     shop,
     pricingRule,
     $transaction: vi.fn(async (callback) => {
-      const isFinalization = state.rules.length > 0 && state.rules.some((rule) => rule.state === "PENDING");
+      const isFinalization =
+        state.rules.length > 0 &&
+        state.rules.some((rule) => rule.state === "PENDING");
       if (state.failFinalization && isFinalization) {
         state.failFinalization = false;
         throw new Error("database finalization interrupted");
@@ -110,6 +125,50 @@ function activationOptions(database, publishSnapshot) {
 }
 
 describe("pricing rule publication", () => {
+  test("does not publish for an uninstalled shop", async () => {
+    const { database, state } = inMemoryDatabase();
+    state.shop.installationState = "UNINSTALLED";
+    const publish = vi.fn(async () => {});
+    await expect(
+      createAndPublishPricingRule(activationOptions(database, publish)),
+    ).rejects.toThrow();
+    expect(state.rules).toHaveLength(0);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  test.each(["uninstall", "reinstall"])(
+    "cannot finalize after %s during publication",
+    async (transition) => {
+      const { database, state } = inMemoryDatabase();
+      await expect(
+        createAndPublishPricingRule(
+          activationOptions(database, async () => {
+            state.shop.installationGeneration +=
+              transition === "reinstall" ? 2 : 1;
+            state.shop.installationState =
+              transition === "reinstall" ? "INSTALLED" : "UNINSTALLED";
+          }),
+        ),
+      ).rejects.toThrow();
+      expect(state.rules[0].state).toBe("PENDING");
+      expect(state.shop.activePricingRuleId).toBeNull();
+    },
+  );
+
+  test("retries a serialization conflict while creating a pending rule", async () => {
+    const { database, state } = inMemoryDatabase();
+    database.$transaction.mockRejectedValueOnce(
+      Object.assign(new Error("conflict"), { code: "P2034" }),
+    );
+    const publish = vi.fn(async () => {});
+    const result = await createAndPublishPricingRule(
+      activationOptions(database, publish),
+    );
+    expect(result.rule.state).toBe("ACTIVE");
+    expect(state.rules).toHaveLength(1);
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   test("publishes before making the rule active locally", async () => {
     const { database, state } = inMemoryDatabase();
     const publishSnapshot = vi.fn(async (_admin, snapshot) => {
@@ -186,7 +245,11 @@ describe("pricing rule publication", () => {
       publishedSnapshot,
       database,
     );
-    expect(reconciled).toMatchObject({ state: "ACTIVE", failedAt: null, failureReason: null });
+    expect(reconciled).toMatchObject({
+      state: "ACTIVE",
+      failedAt: null,
+      failureReason: null,
+    });
     expect(state.shop.activePricingRuleId).toBe(reconciled.id);
   });
 
@@ -253,7 +316,11 @@ describe("pricing rule publication", () => {
     );
     state.rules[0].state = "SUPERSEDED";
     expect(
-      await reconcilePublishedPricingRule(shopDomain, publishedSnapshot, database),
+      await reconcilePublishedPricingRule(
+        shopDomain,
+        publishedSnapshot,
+        database,
+      ),
     ).toBeNull();
   });
 
@@ -276,7 +343,9 @@ describe("pricing rule publication", () => {
 
   test("returns no active rule for an unknown shop", async () => {
     const { database } = inMemoryDatabase();
-    expect(await getActivePricingRule("missing.myshopify.com", database)).toBeNull();
+    expect(
+      await getActivePricingRule("missing.myshopify.com", database),
+    ).toBeNull();
   });
 
   test("does not return an active rule from another shop", async () => {

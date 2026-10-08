@@ -17,7 +17,7 @@ function database() {
     protectionOfferLabel: "Saved wording",
   };
   let disconnects = 0;
-  return {
+  const db = {
     saved: () => saved,
     disconnects: () => disconnects,
     shop: {
@@ -35,6 +35,8 @@ function database() {
       disconnects++;
     },
   };
+  db.$transaction = async (run) => run(db);
+  return db;
 }
 async function command(args, legacy = false, db = database()) {
   const output = [],

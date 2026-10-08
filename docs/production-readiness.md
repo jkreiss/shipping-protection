@@ -879,3 +879,51 @@ passed. `verify:postgres` and `verify:webhook-postgres` passed against a disposa
 PostgreSQL 17, including new cases for a delivery in backoff joining a batch with
 its attempts unchanged and for redaction before an order is stored. Staging
 behavior has not been exercised.
+
+
+## Merchant authentication and settings guards
+
+Section 5 implementation uses additive migration
+`20261008000000_installation_generation_settings_owner` for
+`Shop.installationGeneration` and nullable `Shop.settingsLockToken`.
+Deploy that migration before updating web/worker processes, and coordinate
+their restart. Older processes can bypass the new guards, so mixed-version
+operation is unsuitable for validating the fix.
+
+Disposable local PostgreSQL 17 verification reproduced a concurrent
+first-authentication uniqueness race with an empty-update Prisma upsert.
+The fix inserts with `skipDuplicates` before locking the shop row. The
+merchant-authentication verifier then passed concurrent first install, both
+existing-refresh and first-install save/uninstall transaction orderings with
+observed lock waits, uninstall before
+the first save, late save after reinstall, retained configuration/refresh-token
+fields, successor lease protection, and rollback of local changes after lease loss. It uses the existing isolation flag and
+empty-Shop preflight and cleans its fixtures. No production operations were run.
+
+Staging rehearsal remains a release gate: uninstall/reinstall only the agreed
+staging installation, check generation/session transitions and preserved merchant
+history, then interrupt setup after accepted publication and confirm a later read
+recovers it. Confirm an interrupted lease cannot issue another publication or
+commit, and that separate merchants can save independently. The owner selected
+`protection-staging-llcbogxp.myshopify.com`. Read-only inspection found an installed
+record and one session. After the owner updated `.env`, its app key matched
+staging's app identity and the saved browser login could access that store.
+The database still lacks the new columns, the local app URL differs from the
+staging TOML URL, and no Railway CLI/token deployment connection is configured.
+The reviewed branch and migration still need a coordinated staging rollout before
+the live rehearsal; no staging uninstall/setup mutation has been performed.
+
+
+Final local evidence (2026-10-08): `npm test` passed all **803 tests** in **44
+suites** with disposable PostgreSQL integration enabled. The three explicit
+PostgreSQL verifiers passed, and `verify:schema` reported no difference. `npm run
+lint`, `npm run typecheck`, and `npm run build` passed. Independent review found
+two lease races: a transaction conflict incorrectly revoked valid ownership, and
+a pending ownership check could complete after renewal loss. Both were
+reproduced with failing regressions and corrected; local transaction commits also
+recheck ownership to roll back after a loss during a query. PostgreSQL covers
+both existing-refresh and first-install orderings, and rollback after lease loss.
+
+Shared throttle deadlines intentionally remain in-process, as scoped in the
+plan; separate processes retain independent pacing. Finding dispositions are in
+[the section 5 review](reviews/2026-10-merchant-auth-bugs.md).

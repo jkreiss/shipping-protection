@@ -15,6 +15,8 @@ function fixture(settings = {}) {
   const shop = {
     id: "one",
     installationState: "INSTALLED",
+    shopDomain: "one.myshopify.com",
+    installationGeneration: 0,
     settingsLockedUntil: null,
     configuration,
   };
@@ -40,6 +42,7 @@ function fixture(settings = {}) {
       },
     },
   };
+  database.$transaction = async (run) => run(database);
   const writes = [];
   const liveShop = {
     id: "gid://shopify/Shop/1",
