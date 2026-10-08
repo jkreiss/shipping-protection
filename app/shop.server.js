@@ -137,19 +137,21 @@ export async function redactCustomerOrders(transaction, shopDomain, orderIds) {
 
 // Deletes one shop's orders and everything recorded against them, including
 // webhook deliveries for those Shopify order IDs. Customer redaction and the
-// retention purge share it.
+// retention purge share it. Returns the number of orders deleted.
 export async function deleteOrderRecords(transaction, shopId, orderIds, shopifyOrderIds) {
   const ids = { in: orderIds };
-  // Confirmed purchases and claim events reject ordinary deletes; this
-  // transaction-local setting permits privacy deletion only.
+  // Confirmed purchases and claim events reject ordinary deletes. Despite its
+  // name, this transaction-local setting covers every privacy deletion: shop
+  // redaction, customer redaction, and the 24-month retention purge.
   await transaction.$executeRawUnsafe("SET LOCAL app.allow_shop_redaction = 'on'");
   await transaction.claimEvent.deleteMany({ where: { shopId, claim: { protectionPurchase: { orderId: ids } } } });
   await transaction.claim.deleteMany({ where: { shopId, protectionPurchase: { orderId: ids } } });
   await transaction.protectionRefund.deleteMany({ where: { shopId, orderId: ids } });
   await transaction.protectionPurchase.deleteMany({ where: { shopId, orderId: ids } });
   await transaction.orderLine.deleteMany({ where: { shopId, orderId: ids } });
-  await transaction.order.deleteMany({ where: { shopId, id: ids } });
+  const { count } = await transaction.order.deleteMany({ where: { shopId, id: ids } });
   await transaction.webhookDelivery.deleteMany({ where: { shopId, shopifyOrderId: { in: shopifyOrderIds } } });
+  return count;
 }
 
 // Records the scopes Shopify reports for an installation (app/scopes_update).
