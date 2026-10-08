@@ -55,14 +55,6 @@ function multiplyMoney(value, quantity) {
   return scaledToMoney(moneyToScaled(value) * BigInt(quantity));
 }
 
-function gid(type, value) {
-  if (value === null || value === undefined || value === "") return null;
-  const text = String(value);
-  return text.startsWith("gid://shopify/")
-    ? text
-    : `gid://shopify/${type}/${text}`;
-}
-
 function allowListedAttributes(attributes) {
   const allowed = new Set(PROTECTION_ATTRIBUTE_NAMES);
   return Object.fromEntries(
@@ -77,63 +69,6 @@ function allowListedAttributes(attributes) {
       )
       .map(({ key, value }) => [key, value]),
   );
-}
-
-export function normalizeWebhookOrder(payload) {
-  if (!payload || typeof payload !== "object" || !Array.isArray(payload.line_items)) {
-    throw new Error("Malformed orders/create payload.");
-  }
-  const currencyCode = requiredString(payload.currency, "currency");
-  const lines = payload.line_items.map((line) => {
-    const quantity = Number(line.quantity);
-    const preDiscountAmount = multiplyMoney(line.price, quantity);
-    const discount = scaledToMoney(moneyToScaled(line.total_discount ?? "0"));
-    return {
-      shopifyLineItemId: requiredString(
-        gid("LineItem", line.admin_graphql_api_id ?? line.id),
-        "line item id",
-      ),
-      productId: gid("Product", line.product_id),
-      variantId: gid("ProductVariant", line.variant_id),
-      quantity,
-      requiresShipping: line.requires_shipping === true,
-      currencyCode,
-      originalUnitAmount: scaledToMoney(moneyToScaled(line.price)),
-      preDiscountAmount,
-      totalDiscountAmount: discount,
-      finalAmount: scaledToMoney(
-        moneyToScaled(preDiscountAmount) - moneyToScaled(discount),
-      ),
-      protectionAttributes: allowListedAttributes(line.properties),
-    };
-  });
-
-  return {
-    shopifyOrderId: requiredString(
-      gid("Order", payload.admin_graphql_api_id ?? payload.id),
-      "id",
-    ),
-    name: requiredString(payload.name, "name"),
-    shopifyCreatedAt: requiredDate(payload.created_at, "created_at"),
-    shopifyUpdatedAt: requiredDate(payload.updated_at, "updated_at"),
-    processedAt: payload.processed_at
-      ? requiredDate(payload.processed_at, "processed_at")
-      : null,
-    isTest: payload.test === true,
-    cancelledAt: payload.cancelled_at ? requiredDate(payload.cancelled_at, "cancelled_at") : null,
-    financialStatus: payload.financial_status ?? null,
-    currencyCode,
-    subtotalAmount: scaledToMoney(moneyToScaled(payload.subtotal_price ?? "0")),
-    totalAmount: scaledToMoney(moneyToScaled(payload.total_price ?? "0")),
-    totalDiscountsAmount: scaledToMoney(
-      moneyToScaled(payload.total_discounts ?? "0"),
-    ),
-    totalShippingAmount: scaledToMoney(
-      moneyToScaled(payload.total_shipping_price_set?.shop_money?.amount ?? "0"),
-    ),
-    totalTaxAmount: scaledToMoney(moneyToScaled(payload.total_tax ?? "0")),
-    lines,
-  };
 }
 
 function shopMoney(moneySet, fallback = "0") {
@@ -153,8 +88,21 @@ export function normalizeGraphqlOrder(order) {
   }
   const presentmentCurrencyCode = typeof order.presentmentCurrencyCode === "string"
     ? order.presentmentCurrencyCode : null;
+  // Shopify's `quantity` counts refunded and removed units; `currentQuantity`
+  // leaves out both. Removed units (an order edit) have no refund, so subtract
+  // the refunded units to find them.
+  const refundedUnits = new Map();
+  for (const refund of order.refunds ?? []) {
+    for (const item of refund.refundLineItems?.nodes ?? []) {
+      const lineId = item.lineItem?.id;
+      if (lineId) refundedUnits.set(lineId, (refundedUnits.get(lineId) ?? 0) + Number(item.quantity ?? 0));
+    }
+  }
   const lines = order.lineItems.nodes.map((line) => {
     const quantity = Number(line.quantity);
+    const hasCurrent = line.currentQuantity !== undefined && line.currentQuantity !== null;
+    const removedQuantity = hasCurrent
+      ? Math.max(0, quantity - Number(line.currentQuantity) - (refundedUnits.get(line.id) ?? 0)) : 0;
     const presentment = line.originalUnitPriceSet?.presentmentMoney;
     if (!line.originalUnitPriceSet?.shopMoney || !line.discountedTotalSet?.shopMoney ||
       line.originalUnitPriceSet.shopMoney.currencyCode !== currencyCode ||
@@ -169,6 +117,7 @@ export function normalizeGraphqlOrder(order) {
       productId: line.product?.id ?? null,
       variantId: line.variant?.id ?? null,
       quantity,
+      removedQuantity,
       requiresShipping: line.requiresShipping === true,
       currencyCode,
       originalUnitAmount: scaledToMoney(moneyToScaled(unit)),

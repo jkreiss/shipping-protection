@@ -4,29 +4,36 @@ export const ORDER_TOPICS = new Set([
   "ORDERS_CREATE", "ORDERS_PAID", "ORDERS_UPDATED", "ORDERS_CANCELLED", "REFUNDS_CREATE",
 ]);
 
+// A delivery that can never be stored, however often Shopify resends it. The
+// route acknowledges these instead of asking for a retry; reconciliation
+// backfills the order if it is real. Database and other errors stay plain Errors.
+export class PermanentWebhookError extends Error {
+  name = "PermanentWebhookError";
+}
+
 export function orderIdFromWebhook(topic, payload) {
-  if (!ORDER_TOPICS.has(topic)) throw new Error("Unsupported order webhook topic.");
+  if (!ORDER_TOPICS.has(topic)) throw new PermanentWebhookError("Unsupported order webhook topic.");
   const value = topic === "REFUNDS_CREATE" ? payload?.order_id : payload?.admin_graphql_api_id ?? payload?.id;
   if (typeof value === "number" && !Number.isSafeInteger(value)) {
-    throw new Error("Order webhook ID cannot be represented safely.");
+    throw new PermanentWebhookError("Order webhook ID cannot be represented safely.");
   }
   const id = String(value ?? "");
   if (/^[1-9]\d*$/.test(id)) return `gid://shopify/Order/${id}`;
   if (/^gid:\/\/shopify\/Order\/[1-9]\d*$/.test(id)) return id;
-  throw new Error("Order webhook has no valid Shopify order ID.");
+  throw new PermanentWebhookError("Order webhook has no valid Shopify order ID.");
 }
 
 export async function receiveOrderWebhook({ shopDomain, topic, payload, webhookId, eventId, database = prisma }) {
   if (!/^[a-z0-9][a-z0-9.-]*\.myshopify\.com$/.test(shopDomain ?? "")) {
-    throw new Error("Invalid Shopify shop domain.");
+    throw new PermanentWebhookError("Invalid Shopify shop domain.");
   }
   if (typeof webhookId !== "string" || webhookId.length < 1 || webhookId.length > 255) {
-    throw new Error("Missing Shopify webhook delivery ID.");
+    throw new PermanentWebhookError("Missing Shopify webhook delivery ID.");
   }
   const shopifyOrderId = orderIdFromWebhook(topic, payload);
   const shop = await database.shop.findUnique({ where: { shopDomain }, select: { id: true } });
   if (!shop) {
-    throw new Error("Webhook shop has no installation record.");
+    throw new PermanentWebhookError("Webhook shop has no installation record.");
   }
   const key = { shopId: shop.id, webhookId };
   let delivery;
@@ -45,7 +52,7 @@ export async function receiveOrderWebhook({ shopDomain, topic, payload, webhookI
     if (!delivery) throw error;
   }
   if (delivery.shopifyOrderId !== shopifyOrderId || delivery.topic !== topic) {
-    throw new Error("Webhook delivery ID was reused for a different event.");
+    throw new PermanentWebhookError("Webhook delivery ID was reused for a different event.");
   }
   return delivery.id;
 }

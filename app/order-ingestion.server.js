@@ -45,7 +45,7 @@ function protectionAttribution(line, rules) {
 // currency, so compare there when Shopify returned those amounts. A mismatch
 // usually means the Function failed and the variant's fallback price applied.
 export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) {
-  if (!rule) return { pricingCheck: null, expectedFee: null };
+  if (!rule) return { pricingCheck: null, expectedFee: null, chargedFee: null, currencyCode: null };
   const relevant = [...eligibleLines, ...protectedLines];
   const presentment = normalized.presentmentCurrencyCode &&
     relevant.every((line) => line.presentmentUnitAmount != null);
@@ -61,7 +61,15 @@ export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) 
     (sum, line) => sum + moneyToScaled(unitAmount(line)) * BigInt(line.quantity), 0n,
   );
   const matched = expectedFee !== null && charged === moneyToScaled(expectedFee);
-  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee };
+  // Charged and expected share one basis, so an alert can show them together.
+  return { pricingCheck: matched ? "MATCHED" : "UNMATCHED", expectedFee, chargedFee: scaledToMoney(charged), currencyCode };
+}
+
+// A line's amounts still include units an order edit deleted, so take the
+// surviving units' share of them.
+function survivingShare(line, amount) {
+  if (line.liveQuantity <= 0 || line.quantity <= 0) return 0n;
+  return moneyToScaled(amount) * BigInt(line.liveQuantity) / BigInt(line.quantity);
 }
 
 function orderContentHash(normalized) {
@@ -88,8 +96,13 @@ export async function persistNormalizedOrder(
   // does. Line properties are customer-editable, so they only attribute a
   // protection line to its rule; they never make a line protection.
   const protectionVariants = new Set(rules.map(({ variantId }) => variantId));
+  // Units an order edit deleted still sit in the line's quantity and amounts, so
+  // what protection covers counts only the surviving units. The charge check
+  // and the single-unit test stay on the original lines: the Cart Transform
+  // priced the cart as it was at checkout.
   const lines = normalized.lines.map((line) => ({
     ...line,
+    liveQuantity: line.quantity - (line.removedQuantity ?? 0),
     isProtection: Boolean(line.variantId && protectionVariants.has(line.variantId)),
   }));
   const existing = await transaction.order.findUnique({
@@ -107,11 +120,11 @@ export async function persistNormalizedOrder(
       version: normalized.shopifyUpdatedAt.toISOString(), reason: "same-second", database: transaction,
     });
   }
-  const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.quantity > 0);
+  const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.liveQuantity > 0);
   const coveredMerchandise = scaledToMoney(lines
     .filter((line) => !line.isProtection && line.requiresShipping)
-    .reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n));
-  const protectedLines = lines.filter((line) => line.isProtection);
+    .reduce((sum, line) => sum + survivingShare(line, line.finalAmount), 0n));
+  const protectedLines = lines.filter((line) => line.isProtection && line.liveQuantity > 0);
   // Shopify skips the Cart Transform when any line has a selling plan, so the
   // protection line is never charged: a subscription order is not protected.
   // Likewise the Function charges the fee only on a single-unit protection
@@ -202,9 +215,9 @@ export async function persistNormalizedOrder(
     };
     const eligibleSubtotal = lines
       .filter((line) => !line.isProtection && line.requiresShipping)
-      .reduce((sum, line) => sum + moneyToScaled(line.preDiscountAmount), 0n);
+      .reduce((sum, line) => sum + survivingShare(line, line.preDiscountAmount), 0n);
     const fee = protectedLines.reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n);
-    const { pricingCheck, expectedFee } = livePriceCheck(
+    const { pricingCheck, expectedFee, chargedFee, currencyCode: checkedCurrency } = livePriceCheck(
       normalized,
       lines.filter((line) => !line.isProtection && line.requiresShipping),
       protectedLines,
@@ -236,7 +249,7 @@ export async function persistNormalizedOrder(
       afterCommit.push(() => reportFailure("protection_price_unmatched",
         new Error("Protection was not charged the live price."), {
           shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId,
-          feeAmount: purchase.feeAmount, expectedFeeAmount: expectedFee,
+          chargedFeeAmount: chargedFee, expectedFeeAmount: expectedFee, currencyCode: checkedCurrency,
         }));
     }
   } else if (!confirmedPurchase && (!purchasable || existing?.firstPaidAt)) {

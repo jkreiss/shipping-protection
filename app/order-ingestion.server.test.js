@@ -300,6 +300,74 @@ describe("normalized order persistence", () => {
     expect(tx.storedPurchase()).toBeNull();
   });
 
+  test("protection removed by an order edit before payment records no purchase", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    // The edit deleted the protection line; Shopify still prices it in the totals.
+    Object.assign(order.lines[1], { removedQuantity: 1 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedPurchase()).toBeNull();
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: false, paidProtectionFee: "0.0000" });
+  });
+
+  test("a refunded protection line still records the paid purchase", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    Object.assign(order.lines[1], { removedQuantity: 0 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: true, paidProtectionFee: "0.2500" });
+  });
+
+  test("does not count merchandise removed by an order edit as eligible", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    Object.assign(order.lines[0], { removedQuantity: 1 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidEligible: false });
+  });
+
+  test("leaves merchandise deleted by an order edit out of the covered amounts", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    order.lines.push({
+      ...order.lines[0], shopifyLineItemId: "gid://shopify/LineItem/3", removedQuantity: 1,
+      originalUnitAmount: "50.0000", preDiscountAmount: "50.0000", finalAmount: "50.0000",
+    });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidEligible: true, paidMerchandiseAmount: "100.0000" });
+    expect(tx.storedPurchase()).toMatchObject({ eligibleSubtotalAmount: "100.0000", coveredMerchandiseAmount: "100.0000" });
+  });
+
+  test("counts only the surviving units of a partly deleted discounted line as covered", async () => {
+    const tx = transaction();
+    const order = normalizedOrder({});
+    // Two units at $10 with $2 off; an edit deleted one before payment.
+    Object.assign(order.lines[0], {
+      quantity: 2, removedQuantity: 1, originalUnitAmount: "10.0000",
+      preDiscountAmount: "20.0000", totalDiscountAmount: "2.0000", finalAmount: "18.0000",
+    });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.storedOrder()).toMatchObject({ paidMerchandiseAmount: "9.0000" });
+    expect(tx.storedPurchase()).toMatchObject({ eligibleSubtotalAmount: "10.0000", coveredMerchandiseAmount: "9.0000" });
+  });
+
+  test("does not record a purchase when an edit leaves one unit of a multi-unit protection line", async () => {
+    const tx = transaction();
+    const order = chargedProtection(normalizedOrder(attributed), "0.0000");
+    // Checked out with two units, so the Function charged nothing; an edit then removed one.
+    Object.assign(order.lines[1], { quantity: 2, removedQuantity: 1 });
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.purchaseUpsert).not.toHaveBeenCalled();
+    expect(tx.storedOrder()).toMatchObject({ paidProtected: false });
+  });
+
   test("refetches once when a copy from the same second differs", async () => {
     const tx = transaction();
     await persistNormalizedOrder(tx, shop, normalizedOrder());
@@ -436,8 +504,31 @@ describe("live price check", () => {
 
       expect(events.named("protection_price_unmatched")).toEqual([expect.objectContaining({
         shopId: "shop-1", shopifyOrderId: "gid://shopify/Order/1",
-        feeAmount: "5.0000", expectedFeeAmount: "0.25",
+        chargedFeeAmount: "5.0000", expectedFeeAmount: "0.25", currencyCode: "AUD",
       })]);
+    } finally {
+      events.restore();
+    }
+  });
+
+  test("reports the charged and expected fee in one currency when the customer paid in another", async () => {
+    const events = stderrEvents();
+    try {
+      const tx = transaction();
+      const paid = chargedProtection(normalizedOrder(attributed), "0.2400");
+      paid.presentmentCurrencyCode = "USD";
+      paid.lines[0].presentmentUnitAmount = "65.00";
+      paid.lines[1].presentmentUnitAmount = "0.30";
+      paid.paidAt = new Date("2026-09-23T00:02:00Z");
+      const afterCommit = [];
+      await persistNormalizedOrder(tx, shop, paid, afterCommit);
+      for (const report of afterCommit) report();
+
+      // 0.25% of 65.00 USD is 0.16 USD; 0.30 USD was charged. The shop-currency fee (0.2400) is not comparable.
+      expect(events.named("protection_price_unmatched")).toEqual([expect.objectContaining({
+        chargedFeeAmount: "0.3000", expectedFeeAmount: "0.16", currencyCode: "USD",
+      })]);
+      expect(events.named("protection_price_unmatched")[0]).not.toHaveProperty("feeAmount");
     } finally {
       events.restore();
     }

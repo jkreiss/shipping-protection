@@ -77,7 +77,7 @@ Prefer Shopify references over duplicated customer profiles where practical.
 
 The app uses Level 1 protected customer data only: order records keyed by order ID, with no customer names, emails, phones, addresses, or customer IDs. Requesting any of those fields needs a Level 2 access request first. Compliance webhooks (`app/routes/webhooks.privacy.jsx`):
 
-- `customers/redact` deletes the listed orders and their purchases, refunds, lines, claims, and webhook deliveries in that shop.
+- `customers/redact` deletes the listed orders and their purchases, refunds, lines, claims, and webhook deliveries in that shop. Queued deliveries for a listed order are deleted even when the order is not stored yet, so the worker cannot store it afterwards. No tombstone is kept: the app reads only the last 60 days of orders (`read_orders` without `read_all_orders`), and Shopify sends the request at least 10 days after it is made (holding it up to 6 months when the customer has recent orders), so a redacted order is normally outside what reconciliation or the worker can fetch.
 - `shop/redact` deletes all of the shop's data.
 - `customers/data_request` is acknowledged; stored order records hold no customer details to return.
 

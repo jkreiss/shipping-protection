@@ -71,7 +71,15 @@ export async function redactCustomerOrders(transaction, shopDomain, orderIds) {
   const orders = await transaction.order.findMany({
     where: { shopId: shop.id, shopifyOrderId: { in: shopifyOrderIds } }, select: { id: true },
   });
-  if (orders.length === 0) return 0;
+  if (orders.length === 0) {
+    // The order may still be queued, so the worker would store it after the
+    // redaction. A redacted order that is not queued yet is normally older than
+    // the 60 days of orders this app can read (read_orders without
+    // read_all_orders), and Shopify sends the request well after that, so
+    // nothing later re-fetches it and no tombstone is kept.
+    await transaction.webhookDelivery.deleteMany({ where: { shopId: shop.id, shopifyOrderId: { in: shopifyOrderIds } } });
+    return 0;
+  }
 
   await deleteOrderRecords(transaction, shop.id, orders.map((order) => order.id), shopifyOrderIds);
   return orders.length;

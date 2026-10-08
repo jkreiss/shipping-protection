@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { orderIdFromWebhook, receiveOrderWebhook } from "./webhook-inbox.server.js";
+import { orderIdFromWebhook, PermanentWebhookError, receiveOrderWebhook } from "./webhook-inbox.server.js";
 
 function memoryDatabase() {
   const rows = new Map();
@@ -41,10 +41,40 @@ describe("durable order webhook receipt", () => {
     expect(rows.size).toBe(2);
   });
 
+  test.each([
+    ["an invalid shop domain", { shopDomain: "not-a-shop" }],
+    ["a missing delivery ID", { webhookId: undefined }],
+    ["an unsupported topic", { topic: "ORDERS_DELETE" }],
+    ["a payload without an order ID", { payload: {} }],
+  ])("rejects %s as a permanent error", async (_name, overrides) => {
+    const { database } = memoryDatabase();
+    const input = { shopDomain: "one.myshopify.com", topic: "ORDERS_CREATE", webhookId: "delivery-1",
+      payload: { id: 123 }, database, ...overrides };
+    await expect(receiveOrderWebhook(input)).rejects.toBeInstanceOf(PermanentWebhookError);
+    expect(database.webhookDelivery.upsert).not.toHaveBeenCalled();
+  });
+
+  test("rejects a shop with no installation record as a permanent error", async () => {
+    const { database } = memoryDatabase();
+    database.shop.findUnique.mockResolvedValue(null);
+    await expect(receiveOrderWebhook({ shopDomain: "one.myshopify.com", topic: "ORDERS_CREATE",
+      webhookId: "delivery-1", payload: { id: 123 }, database })).rejects.toBeInstanceOf(PermanentWebhookError);
+  });
+
+  test("rejects a reused delivery ID as a permanent error", async () => {
+    const { database } = memoryDatabase();
+    const input = { shopDomain: "one.myshopify.com", webhookId: "delivery-1", database };
+    await receiveOrderWebhook({ ...input, topic: "ORDERS_CREATE", payload: { id: 123 } });
+    await expect(receiveOrderWebhook({ ...input, topic: "ORDERS_CREATE", payload: { id: 456 } }))
+      .rejects.toBeInstanceOf(PermanentWebhookError);
+  });
+
   test("database failure rejects receipt so Shopify can retry", async () => {
     const { database } = memoryDatabase();
     database.webhookDelivery.upsert.mockRejectedValueOnce(new Error("database down"));
     await expect(receiveOrderWebhook({ shopDomain: "one.myshopify.com", topic: "ORDERS_CREATE",
       webhookId: "delivery-1", payload: { id: 123 }, database })).rejects.toThrow("database down");
+    await expect(receiveOrderWebhook({ shopDomain: "one.myshopify.com", topic: "ORDERS_CREATE",
+      webhookId: "delivery-2", payload: { id: 123 }, database })).resolves.toBeTruthy();
   });
 });

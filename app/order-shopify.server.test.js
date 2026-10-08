@@ -1,6 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import process from "node:process";
-import { adminGraphql, fetchShopifyOrder } from "./order-shopify.server";
+import {
+  adminGraphql, fetchShopifyOrder, LINE_FIELDS, REFUND_LINE_FIELDS, TRANSACTION_FIELDS,
+} from "./order-shopify.server";
 
 describe("Admin GraphQL response handling", () => {
   test("rejects search warnings before a reconciliation scan can advance", async () => {
@@ -34,9 +36,11 @@ describe("large order pagination", () => {
         transactions: { nodes: [{ id: "tx-1" }], pageInfo: { hasNextPage: true, endCursor: "tx-cursor" } },
       }],
     };
+    const queries = [];
     const admin = { graphql: async (query, { variables }) => {
       // GraphQL comments run to end of line, as Shopify parses them.
       if (!query.replace(/#[^\n]*/g, "").trim()) throw new Error("syntax error, unexpected end of file");
+      queries.push(query.replace(/\s+/g, " "));
       let data;
       if (query.includes("query AnalyticsOrder")) data = { order };
       else if (query.includes("query OrderLinePage")) {
@@ -61,6 +65,17 @@ describe("large order pagination", () => {
     expect(result.lineItems.nodes.map(({ id }) => id)).toEqual(["line-1", "line-2"]);
     expect(result.refunds[0].refundLineItems.nodes).toHaveLength(2);
     expect(result.refunds[0].transactions.nodes).toHaveLength(2);
+
+    // Every page must select what the first response did, or paged rows would lack fields.
+    const flat = (text) => text.replace(/\s+/g, " ");
+    const queryNamed = (name) => queries.find((query) => query.includes(`query ${name}`));
+    const orderQuery = queryNamed("AnalyticsOrder");
+    expect(orderQuery).toContain(flat(LINE_FIELDS));
+    expect(orderQuery).toContain(flat(REFUND_LINE_FIELDS));
+    expect(orderQuery).toContain(flat(TRANSACTION_FIELDS));
+    expect(queryNamed("OrderLinePage")).toContain(flat(LINE_FIELDS));
+    expect(queryNamed("RefundLinePage")).toContain(flat(REFUND_LINE_FIELDS));
+    expect(queryNamed("RefundTransactionPage")).toContain(flat(TRANSACTION_FIELDS));
   });
 });
 

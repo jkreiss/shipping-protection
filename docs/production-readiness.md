@@ -42,7 +42,7 @@ the offer takes real customer money.
 | Runtime | [Dockerfile](../Dockerfile) supports the web service and private worker from the same source. Migration/start/health settings are documented in README rather than a checked-in Railway deployment file. | Needs live verification on both Railway services. |
 | Checkout failure behavior | [Protection setup](../app/shopify/protection-admin.server.js) creates transforms with `blockOnFailure: false`, requires that value for health, and replaces an existing blocking transform during setup. | Confirmed in repository. Deploying code alone does not replace a store's existing transform; verify the installed resource after setup. |
 | Pricing failure detection | [Order ingestion](../app/order-ingestion.server.js) records `pricingCheck` and emits `protection_price_unmatched` for a detected mismatch on a newly confirmed payment. | Confirmed in repository. Verify delivery of the alert. A missing or null check is not proof of correct pricing. |
-| Webhook processing | [Worker](../app/webhook-worker.server.js) coalesces up to 100 queued deliveries for one order, has 4 loops by default, 15-minute leases, and at most 16 attempts (about 6.4 hours of backoff) for temporary errors. An order Shopify won't return (deleted, or past the 60 days the app can read) fails at once as `ORDER_UNAVAILABLE` without an alert, since protection is non-refundable once shipped; one that can't be normalized or is too large to snapshot fails at once with an alert; a shop the app has no access to keeps its deliveries retrying without alerts, so a reinstall processes them, and they fail as `SHOP_UNINSTALLED` after the same budget. | Confirmed in repository. Measure real throughput and restart recovery in staging. |
+| Webhook processing | [Worker](../app/webhook-worker.server.js) coalesces up to 100 queued deliveries for one order, has 4 loops by default, 15-minute leases, and at most 16 attempts (about 6.4 hours of backoff) for temporary errors. An order Shopify won't return (deleted, or past the 60 days the app can read) fails at once as `ORDER_UNAVAILABLE` without an alert, since protection is non-refundable once shipped; one that can't be normalized or is too large to snapshot fails at once with an alert; a shop the app has no access to keeps its deliveries retrying without alerts, so a reinstall processes them, and they fail as `SHOP_UNINSTALLED` after the same budget. A delivery in backoff joins a batch without spending an attempt, and a repeated serialization conflict spends attempts and alerts instead of requeuing forever. A receipt that can never be stored is acknowledged with 200 and reported as `webhook_rejected`; database errors still return 500. | Confirmed in repository. Measure real throughput and restart recovery in staging. |
 | Reconciliation | [Reconciliation](../app/order-reconciliation.server.js) backfills a 60-day window, lists up to 250 orders per page, fetches missing/newer orders, and overlaps successive windows by 10 minutes. | Confirmed in repository. Measure page cost and backfill completion. A 60-second turn is checked between pages; a slow page can take longer. |
 | Dashboard | [Overview reads](../app/analytics.server.js) use stored orders and refunds; they still make a bounded Shopify shop currency/timezone query. `overview_loaded` records duration and row counts. | Confirmed in repository. Measure latency with pilot-sized data. |
 | Health | [/healthz](../app/routes/healthz.jsx) runs `SELECT 1`. | Confirmed in repository. It proves web/database connectivity, not worker progress (the worker has its own Sentry Cron heartbeat), correct schema, webhook subscriptions, or working checkout. |
@@ -637,7 +637,8 @@ is set; informational performance/cost events are JSON logs.
 | Checkout blocked or incorrect fee | Any confirmed app-related occurrence | Immediate response; contain the offer and inspect the Function/version/configuration. This needs merchant reports and checkout smoke checks as well as backend alerts. |
 | `protection_price_unmatched` | Investigate the first new occurrence; urgent at 3 distinct affected orders in an hour | Sentry alert. Repeated events can result from retries, so group by shop/order and verify Shopify amounts. |
 | `webhook_terminal` | Any new terminal failure | Sentry alert; identify affected order and recover/verify it. The merchant is not warned about single-order failures, so this alert is the only signal. |
-| `reconciliation_order_failed`, `refund_recheck_failed` | Same order failing on repeated turns | Sentry alert. Reconciliation queued the order as a `RECONCILE` delivery and moved on; its final failure also raises `webhook_terminal`. |
+| `reconciliation_order_failed`, `refund_recheck_failed` | Same order failing on repeated turns | Sentry alert. Reconciliation queued the order as a `RECONCILE` delivery and moved on; its final failure also raises `webhook_terminal`. An order Shopify will never return complete (deleted, past 60 days, too large) is queued too and fails at once in the worker, without counting toward reconciliation's stop. |
+| `webhook_rejected` | Any new occurrence from a known shop; a burst from one shop | Sentry alert. The route acknowledged a delivery that can never be stored (bad payload, unknown shop, reused delivery ID). Check the shop's installation record; reconciliation recovers real orders within 60 days. |
 | `worker_loop_failed`, `reconciliation_failed`, `shopify_graphql_failed` | Repeated failures over 10 minutes, or immediately if ingestion stops | Sentry/log alerts; inspect access, API costs, and database resources. |
 | Oldest pending/processing delivery | Over 5 minutes normally; over 30 minutes after a peak burst ends | Read-only database polling/manual pilot review. No automatic backlog-age monitor exists in the repo. |
 | Reconciliation freshness | Over 30 minutes after backfill; escalate at 60 minutes | `order_sync_behind` (Sentry alert): the worker reports each installed shop whose last completed window is over 30 minutes old, at most every 10 minutes per shop, with `shopId` and `minutesBehind`. Also `Shop.orderReconciliationSince` and completed-window evidence. Dashboard warns the merchant only when the last completed sync is over 1 hour old. A dead worker sends nothing, so pair this with the worker Cron monitor. |
@@ -850,3 +851,31 @@ passed `checks`, `docker`, and `verify` at `79ec988`. That temporary branch's
 application source matches implementation commit `e78c2c5`; the only difference
 is enabling CI on the disposable branch. No production/staging deployment or
 Railway/GitHub protection setting was changed.
+
+## Orders and webhooks review fixes (2026-10-08)
+
+Ten findings from the October bug review's orders-and-webhooks section were fixed
+(nine) or declined (one: rewriting unchanged orders, which the pending-refund
+recheck queue depends on). No migration, deploy, or live store change is needed.
+Behavior changes worth knowing before release:
+
+- A protection line deleted by an order edit before payment is no longer recorded
+  as a paid purchase. Confirmed purchases, refunds, and removal from a cart
+  before checkout are unchanged.
+- The order query now selects `currentQuantity` and refund line `quantity`. Both
+  validated against Admin API 2026-07 with the Shopify dev MCP.
+- Order webhooks that can never be stored return 200 and raise `webhook_rejected`
+  instead of 500; database errors still return 500.
+- Reconciliation no longer stalls on adjacent orders Shopify will never return
+  complete, and the `protection_price_unmatched` alert now carries
+  `chargedFeeAmount`, `expectedFeeAmount` and `currencyCode` (it no longer sends
+  `feeAmount`), so update any Sentry rule that reads `feeAmount`.
+- `customers/redact` also deletes queued deliveries for orders not stored yet. No
+  tombstone is kept; see Privacy and Data Minimization in
+  [data-security](agents/data-security.md).
+
+Local verification: 762 tests passed across 42 files. Lint, typecheck, and build
+passed. `verify:postgres` and `verify:webhook-postgres` passed against a disposable
+PostgreSQL 17, including new cases for a delivery in backoff joining a batch with
+its attempts unchanged and for redaction before an order is stored. Staging
+behavior has not been exercised.

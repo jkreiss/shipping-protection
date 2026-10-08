@@ -1,4 +1,14 @@
+import { normalizeGraphqlOrder } from "./order-normalization.js";
 import { adminGraphql } from "./shopify/admin-graphql.server.js";
+
+// Selections shared by the order query and the queries that page its connections.
+export const LINE_FIELDS = `id quantity currentQuantity requiresShipping
+  originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
+  discountedTotalSet { shopMoney { amount currencyCode } }
+  product { id } variant { id } customAttributes { key value }
+  sellingPlan { sellingPlanId }`;
+export const REFUND_LINE_FIELDS = `lineItem { id } quantity subtotalSet { shopMoney { amount currencyCode } }`;
+export const TRANSACTION_FIELDS = `id kind status processedAt createdAt amountSet { shopMoney { amount currencyCode } }`;
 
 // Keep this selection shared by direct webhook refreshes and reconciliation.
 export const ORDER_FIELDS = `
@@ -10,27 +20,21 @@ export const ORDER_FIELDS = `
   totalShippingPriceSet { shopMoney { amount currencyCode } }
   totalTaxSet { shopMoney { amount currencyCode } }
   transactions(first: 250) {
-    id kind status createdAt processedAt amountSet { shopMoney { amount currencyCode } }
+    ${TRANSACTION_FIELDS}
   }
   transactionsCount { count }
   lineItems(first: 250) {
-    nodes {
-      id quantity requiresShipping
-      originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
-      discountedTotalSet { shopMoney { amount currencyCode } }
-      product { id } variant { id } customAttributes { key value }
-      sellingPlan { sellingPlanId }
-    }
+    nodes { ${LINE_FIELDS} }
     pageInfo { hasNextPage endCursor }
   }
   refunds(first: 250) {
     id processedAt totalRefundedSet { shopMoney { amount currencyCode } }
     refundLineItems(first: 250) {
-      nodes { lineItem { id } subtotalSet { shopMoney { amount currencyCode } } }
+      nodes { ${REFUND_LINE_FIELDS} }
       pageInfo { hasNextPage endCursor }
     }
     transactions(first: 250) {
-      nodes { id kind status processedAt createdAt amountSet { shopMoney { amount currencyCode } } }
+      nodes { ${TRANSACTION_FIELDS} }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -50,14 +54,6 @@ export const ORDERS_QUERY = `#graphql
 `;
 
 export { adminGraphql };
-
-const LINE_FIELDS = `id quantity requiresShipping
-  originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
-  discountedTotalSet { shopMoney { amount currencyCode } }
-  product { id } variant { id } customAttributes { key value }
-  sellingPlan { sellingPlanId }`;
-const REFUND_LINE_FIELDS = `lineItem { id } subtotalSet { shopMoney { amount currencyCode } }`;
-const TRANSACTION_FIELDS = `id kind status processedAt createdAt amountSet { shopMoney { amount currencyCode } }`;
 
 const LINE_PAGE_QUERY = `#graphql
   query OrderLinePage($id: ID!, $after: String!) {
@@ -113,14 +109,34 @@ export class OrderUnavailableError extends PermanentOrderError {
   name = "OrderUnavailableError";
 }
 
+// An order past what one response can return cannot be snapshotted whole, and
+// asking again won't change that.
+function assertWithinLimits(order) {
+  if ((order.transactionsCount?.count ?? order.transactions?.length ?? 0) > 250) {
+    throw new PermanentOrderError("Shopify order has more payment transactions than this API can return safely.");
+  }
+  if ((order.refunds?.length ?? 0) >= 250) {
+    throw new PermanentOrderError("Shopify order has too many refunds for a complete financial snapshot.");
+  }
+}
+
 export function assertCompleteOrder(order) {
   if (!order) throw new Error("Shopify order is unavailable to this app.");
-  if (order.lineItems?.pageInfo?.hasNextPage || (order.transactionsCount?.count ?? order.transactions?.length ?? 0) > 250 ||
-    (order.refunds?.length ?? 0) >= 250 ||
+  assertWithinLimits(order);
+  if (order.lineItems?.pageInfo?.hasNextPage ||
     order.refunds?.some((refund) => refund.refundLineItems?.pageInfo?.hasNextPage || refund.transactions?.pageInfo?.hasNextPage)) {
     throw new Error("Shopify order data is incomplete.");
   }
   return order;
+}
+
+// Data Shopify returned that can't be normalized won't change on a retry.
+export function normalizeFetchedOrder(order) {
+  try {
+    return normalizeGraphqlOrder(order);
+  } catch (error) {
+    throw new PermanentOrderError("Shopify order could not be normalized.", { cause: error });
+  }
 }
 
 // Pass `shop` so the calls share that shop's API budget (see adminGraphql).
@@ -128,12 +144,7 @@ export async function fetchShopifyOrder(admin, id, options = {}) {
   const data = await adminGraphql(admin, ORDER_QUERY, { id }, options);
   const order = data.order;
   if (!order) throw new OrderUnavailableError("Shopify order is unavailable to this app.");
-  if ((order.transactionsCount?.count ?? order.transactions?.length ?? 0) > 250) {
-    throw new PermanentOrderError("Shopify order has more payment transactions than this API can return safely.");
-  }
-  if ((order.refunds?.length ?? 0) >= 250) {
-    throw new PermanentOrderError("Shopify order has too many refunds for a complete financial snapshot.");
-  }
+  assertWithinLimits(order);
   const connections = [];
   const page = async (initial, query, ownerId, pick) => {
     const { paged, ...connection } = await appendPages(admin, initial, query, ownerId, pick, options);

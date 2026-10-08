@@ -16,7 +16,7 @@ function fullOrder(id, updatedAt) {
 }
 
 // pages: listing pages of { id, updatedAt } returned in order for each cursor.
-function fakeAdmin(pages) {
+function fakeAdmin(pages, { unavailable = [] } = {}) {
   const searches = [];
   const fetched = [];
   const admin = { graphql: async (query, { variables }) => {
@@ -30,7 +30,7 @@ function fakeAdmin(pages) {
     } else {
       fetched.push(variables.id);
       const listed = pages.flat().find(({ id }) => id === variables.id);
-      data = { order: fullOrder(variables.id, listed.updatedAt) };
+      data = { order: unavailable.includes(variables.id) ? null : fullOrder(variables.id, listed.updatedAt) };
     }
     return { json: async () => ({ data }) };
   } };
@@ -163,6 +163,25 @@ describe("order reconciliation", () => {
       webhookId: `reconcile:${id(2)}:2026-09-29T00:01:00Z`,
     })]);
     expect(result).toMatchObject({ complete: true, ordersFetched: 3, ordersFailed: 1, ordersSkipped: 0 });
+    expect(shopUpdates.at(-1)).toMatchObject({ orderReconciliationCursor: null });
+  });
+
+  test("keeps reconciling past adjacent orders Shopify will never return", async () => {
+    const { admin } = fakeAdmin([[
+      { id: id(1), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(2), updatedAt: "2026-09-29T00:01:00Z" },
+      { id: id(3), updatedAt: "2026-09-29T00:02:00Z" },
+      { id: id(4), updatedAt: "2026-09-29T00:03:00Z" },
+    ], [{ id: id(5), updatedAt: "2026-09-29T00:04:00Z" }]], { unavailable: [id(1), id(2), id(3), id(4)] });
+    const { database, shopUpdates, queued } = fakeDatabase();
+    const persist = vi.fn(async () => {});
+
+    const result = await reconcileOrders({ admin, shopDomain, database, persist });
+
+    expect(persist.mock.calls.map(([, , order]) => order.shopifyOrderId)).toEqual([id(5)]);
+    // Queued so the worker fails each at once and leaves a durable record.
+    expect(queued.map(({ shopifyOrderId }) => shopifyOrderId)).toEqual([id(1), id(2), id(3), id(4)]);
+    expect(result).toMatchObject({ complete: true, ordersFetched: 1, ordersFailed: 4 });
     expect(shopUpdates.at(-1)).toMatchObject({ orderReconciliationCursor: null });
   });
 

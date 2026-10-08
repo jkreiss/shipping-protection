@@ -128,11 +128,13 @@ describe("customer redaction", () => {
     });
   });
 
-  test("does nothing when the shop holds none of the named orders", async () => {
+  test("removes queued deliveries for named orders that are not stored yet", async () => {
     const db = redactionDatabase();
     db.order.findMany.mockResolvedValue([]);
     expect(await redactCustomerOrders(db, "one.myshopify.com", [1001])).toBe(0);
-    expect(db.$executeRawUnsafe).not.toHaveBeenCalled();
+    expect(db.webhookDelivery.deleteMany).toHaveBeenCalledWith({
+      where: { shopId: "shop-1", shopifyOrderId: { in: ["gid://shopify/Order/1001"] } },
+    });
     expect(db.order.deleteMany).not.toHaveBeenCalled();
   });
 

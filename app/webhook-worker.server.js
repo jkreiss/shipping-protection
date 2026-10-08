@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import prisma from "./db.server.js";
-import { fetchShopifyOrder, OrderUnavailableError, PermanentOrderError } from "./order-shopify.server.js";
-import { normalizeGraphqlOrder } from "./order-normalization.js";
+import { fetchShopifyOrder, normalizeFetchedOrder, OrderUnavailableError, PermanentOrderError } from "./order-shopify.server.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
 import { failureCode, logEvent, reportFailure } from "./observability.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
@@ -39,7 +38,8 @@ function isUninstalled(error) {
 }
 
 // Claims every queued delivery for one order under a single lease, so one
-// Shopify fetch covers them all. Orders that already have a live lease are
+// Shopify fetch covers them all. A delivery still in backoff rides along
+// without spending an attempt, after the due ones when the batch is full. Orders that already have a live lease are
 // skipped. SKIP LOCKED keeps concurrent workers from blocking or deadlocking;
 // if two workers still pick the same order, persistence is idempotent.
 export async function claimDelivery(database = prisma) {
@@ -69,26 +69,33 @@ export async function claimDelivery(database = prisma) {
       ORDER BY d."nextAttemptAt", d."receivedAt", d.id
       FOR UPDATE SKIP LOCKED LIMIT 1
     ), batch AS (
-      SELECT d.id FROM "WebhookDelivery" d JOIN candidate c
+      SELECT d.id,
+        (d."status" = 'PENDING'::"WebhookProcessingStatus" AND d."nextAttemptAt" > NOW()) AS "inBackoff"
+      FROM "WebhookDelivery" d JOIN candidate c
         ON d."shopId" = c."shopId" AND d."shopifyOrderId" = c."shopifyOrderId"
       WHERE d."attempts" < ${MAX_DELIVERY_ATTEMPTS}
         AND (d."status" = 'PENDING'::"WebhookProcessingStatus"
           OR (d."status" = 'PROCESSING'::"WebhookProcessingStatus" AND d."leaseUntil" <= NOW()))
-      ORDER BY d."receivedAt", d.id
+      ORDER BY (d."status" = 'PENDING'::"WebhookProcessingStatus" AND d."nextAttemptAt" > NOW()),
+        d."receivedAt", d.id
       LIMIT ${MAX_BATCH_DELIVERIES}
       FOR UPDATE OF d SKIP LOCKED
     )
-    UPDATE "WebhookDelivery" SET "status" = 'PROCESSING'::"WebhookProcessingStatus",
-      "attempts" = "attempts" + 1, "leaseToken" = ${leaseToken},
+    UPDATE "WebhookDelivery" w SET "status" = 'PROCESSING'::"WebhookProcessingStatus",
+      "attempts" = w."attempts" + CASE WHEN b."inBackoff" THEN 0 ELSE 1 END,
+      "leaseToken" = ${leaseToken},
       "leaseUntil" = NOW() + INTERVAL '15 minutes', "updatedAt" = NOW()
-    WHERE id IN (SELECT id FROM batch)
-    RETURNING id, "shopId", "shopifyOrderId", topic, attempts`;
+    FROM batch b
+    WHERE w.id = b.id
+    RETURNING w.id, w."shopId", w."shopifyOrderId", w.topic, w.attempts, w."errorMessage", b."inBackoff"`;
   if (rows.length === 0) return null;
   return {
     shopId: rows[0].shopId,
     shopifyOrderId: rows[0].shopifyOrderId,
     leaseToken,
-    deliveries: rows.map(({ id, topic, attempts }) => ({ id, topic, attempts })),
+    deliveries: rows.map(({ id, topic, attempts, errorMessage, inBackoff }) => ({
+      id, topic, attempts, errorMessage, charged: !inBackoff,
+    })),
   };
 }
 
@@ -112,12 +119,7 @@ export async function processNextDelivery({
     }
     const { admin } = await adminForShop(shop.shopDomain);
     const order = await fetchShopifyOrder(admin, batch.shopifyOrderId, { shop: shop.shopDomain });
-    let normalized;
-    try {
-      normalized = normalizeGraphqlOrder(order);
-    } catch (error) {
-      throw new PermanentOrderError("Shopify order could not be normalized.", { cause: error });
-    }
+    const normalized = normalizeFetchedOrder(order);
     // Look rows up by primary key so the Serializable check locks only this batch.
     const ids = context.deliveryIds;
     let afterCommit = [];
@@ -137,19 +139,37 @@ export async function processNextDelivery({
     for (const report of afterCommit) report();
     logEvent("webhook_processed", { ...context, durationMs: Date.now() - started });
   } catch (error) {
+    let failed = batch.deliveries;
     if (error?.code === "P2034") {
       // Concurrent work on the same shop, not a problem with these deliveries:
-      // requeue soon and give back the attempt the claim spent.
-      await database.webhookDelivery.updateMany({
-        where: { shopId, leaseToken, status: "PROCESSING" },
-        data: {
-          status: "PENDING", attempts: { decrement: 1 },
-          nextAttemptAt: new Date(Date.now() + 1_000 + Math.floor(Math.random() * 2_000)),
-          leaseToken: null, leaseUntil: null, errorMessage: "P2034",
-        },
-      });
-      logEvent("webhook_conflict_requeued", { ...context, durationMs: Date.now() - started });
-      return true;
+      // requeue soon and give back the attempt the claim spent. A delivery that
+      // already lost to a conflict last time is not given back, so a conflict
+      // that never clears backs off, alerts, and eventually fails. One that
+      // rode along from backoff spent no attempt, so it returns as it was.
+      const rodeAlong = batch.deliveries.filter(({ charged }) => charged === false);
+      const charged = batch.deliveries.filter(({ charged: spent }) => spent !== false);
+      const fresh = charged.filter(({ errorMessage }) => errorMessage !== "P2034");
+      failed = charged.filter(({ errorMessage }) => errorMessage === "P2034");
+      if (rodeAlong.length > 0) {
+        await database.webhookDelivery.updateMany({
+          where: { id: { in: rodeAlong.map(({ id }) => id) }, shopId, leaseToken, status: "PROCESSING" },
+          data: { status: "PENDING", leaseToken: null, leaseUntil: null },
+        });
+      }
+      if (fresh.length > 0) {
+        await database.webhookDelivery.updateMany({
+          where: { id: { in: fresh.map(({ id }) => id) }, shopId, leaseToken, status: "PROCESSING" },
+          data: {
+            status: "PENDING", attempts: { decrement: 1 },
+            nextAttemptAt: new Date(Date.now() + 1_000 + Math.floor(Math.random() * 2_000)),
+            leaseToken: null, leaseUntil: null, errorMessage: "P2034",
+          },
+        });
+      }
+      if (rodeAlong.length > 0 || fresh.length > 0) {
+        logEvent("webhook_conflict_requeued", { ...context, durationMs: Date.now() - started });
+      }
+      if (failed.length === 0) return true;
     }
     // Without access, keep retrying quietly so a reinstall still processes the
     // queue; after the retry budget the deliveries fail, still without an alert.
@@ -157,9 +177,18 @@ export async function processNextDelivery({
     const unavailable = error instanceof OrderUnavailableError;
     const permanent = error instanceof PermanentOrderError;
     // Each delivery keeps its own attempt count, so reschedule them one by one.
-    for (const delivery of batch.deliveries) {
+    for (const delivery of failed) {
+      // A delivery that rode along from backoff spent no attempt: keep its own
+      // retry time instead of pushing it back each time a newer webhook arrives.
+      if (delivery.charged === false && !permanent) {
+        await database.webhookDelivery.updateMany({
+          where: { id: delivery.id, shopId, leaseToken, status: "PROCESSING" },
+          data: { status: "PENDING", leaseToken: null, leaseUntil: null },
+        });
+        continue;
+      }
       const terminal = permanent || delivery.attempts >= MAX_DELIVERY_ATTEMPTS;
-      await database.webhookDelivery.updateMany({
+      const { count } = await database.webhookDelivery.updateMany({
         where: { id: delivery.id, shopId, leaseToken, status: "PROCESSING" },
         data: {
           status: terminal ? "FAILED" : "PENDING",
@@ -169,6 +198,9 @@ export async function processNextDelivery({
           errorMessage: uninstalled ? "SHOP_UNINSTALLED" : unavailable ? "ORDER_UNAVAILABLE" : failureCode(error),
         },
       });
+      // The row is gone (customers/redact) or the lease moved on, so there is
+      // nothing left to retry or alert about.
+      if (count === 0) continue;
       if (uninstalled) {
         logEvent("webhook_skipped_uninstalled", {
           deliveryId: delivery.id, shopId, topic: delivery.topic, attempts: delivery.attempts, terminal,
