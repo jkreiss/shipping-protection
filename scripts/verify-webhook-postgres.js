@@ -98,6 +98,21 @@ async function verifyCoalescing() {
   assert.equal(await claimDelivery(), null);
   await prisma.webhookDelivery.updateMany({ where: { leaseToken: held.leaseToken }, data: { status: "PROCESSED", leaseToken: null, leaseUntil: null } });
 
+  // A delivery still in backoff joins the batch without spending an attempt.
+  // Settle the earlier shop's waiting delivery so the claim below is this order's.
+  await prisma.webhookDelivery.updateMany({ where: { shopId: leased.id }, data: { status: "PROCESSED", leaseToken: null, leaseUntil: null } });
+  const backoff = await newShop();
+  await receiveOrderWebhook({ shopDomain: backoff.shopDomain, topic: "ORDERS_CREATE", webhookId: "k-1", payload: { id: 9701 } });
+  await receiveOrderWebhook({ shopDomain: backoff.shopDomain, topic: "ORDERS_PAID", webhookId: "k-2", payload: { id: 9701 } });
+  await prisma.webhookDelivery.updateMany({
+    where: { shopId: backoff.id, webhookId: "k-2" },
+    data: { attempts: 2, nextAttemptAt: new Date(Date.now() + 3_600_000) },
+  });
+  const coalesced = await claimDelivery();
+  assert.equal(coalesced.deliveries.length, 2);
+  assert.deepEqual((await statuses(backoff.id)).map(({ webhookId, attempts }) => [webhookId, attempts]), [["k-1", 1], ["k-2", 2]]);
+  await prisma.webhookDelivery.updateMany({ where: { leaseToken: coalesced.leaseToken }, data: { status: "PROCESSED", leaseToken: null, leaseUntil: null } });
+
   // Concurrent loops over many orders store each order exactly once.
   const busy = await newShop();
   const orderIds = [9301, 9302, 9303, 9304, 9305];

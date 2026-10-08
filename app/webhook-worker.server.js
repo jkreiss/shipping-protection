@@ -39,7 +39,8 @@ function isUninstalled(error) {
 }
 
 // Claims every queued delivery for one order under a single lease, so one
-// Shopify fetch covers them all. Orders that already have a live lease are
+// Shopify fetch covers them all. A delivery still in backoff rides along
+// without spending an attempt. Orders that already have a live lease are
 // skipped. SKIP LOCKED keeps concurrent workers from blocking or deadlocking;
 // if two workers still pick the same order, persistence is idempotent.
 export async function claimDelivery(database = prisma) {
@@ -79,7 +80,9 @@ export async function claimDelivery(database = prisma) {
       FOR UPDATE OF d SKIP LOCKED
     )
     UPDATE "WebhookDelivery" SET "status" = 'PROCESSING'::"WebhookProcessingStatus",
-      "attempts" = "attempts" + 1, "leaseToken" = ${leaseToken},
+      "attempts" = "attempts" + CASE WHEN "status" = 'PENDING'::"WebhookProcessingStatus"
+        AND "nextAttemptAt" > NOW() THEN 0 ELSE 1 END,
+      "leaseToken" = ${leaseToken},
       "leaseUntil" = NOW() + INTERVAL '15 minutes', "updatedAt" = NOW()
     WHERE id IN (SELECT id FROM batch)
     RETURNING id, "shopId", "shopifyOrderId", topic, attempts`;
