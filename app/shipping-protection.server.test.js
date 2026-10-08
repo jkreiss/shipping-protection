@@ -218,6 +218,9 @@ describe("turning shipping protection off", () => {
 
     const state = await setupShippingProtection({}, "one.myshopify.com");
 
+    expect(mocks.findProduct).toHaveBeenCalledWith({}, contract.productId, {
+      recordedProductId: contract.productId,
+    });
     expect(state.protectionOff).toBe(false);
     expect(state.configuration.protectionEnabled).toBe(true);
     expect(state.configuration.protectionRateEditable).toBe(false);
@@ -286,6 +289,33 @@ describe("shipping protection shop isolation", () => {
     await expect(setupShippingProtection({}, "one.myshopify.com"))
       .rejects.toThrow("doesn't support the checkout protection offer");
     expect(mocks.ensureInstalledShop).not.toHaveBeenCalled();
+  });
+});
+
+describe("recovering the protection product", () => {
+  const recorded = "gid://shopify/Product/7";
+
+  test("a state read looks for the product the active pricing rule recorded", async () => {
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor(recorded, "gid://shopify/ProductVariant/7"));
+    await readShippingProtectionState({}, "one.myshopify.com");
+    expect(mocks.findProduct).toHaveBeenCalledWith({}, "gid://shopify/Product/1", {
+      recordedProductId: recorded,
+    });
+  });
+
+  test("a rate change looks for the product the active pricing rule recorded", async () => {
+    const core = await mocks.loadCore();
+    mocks.loadCore.mockResolvedValue({ ...core, transform: { id: "transform-1" } });
+    mocks.getActivePricingRule.mockResolvedValue(ruleFor("gid://shopify/Product/1", "gid://shopify/ProductVariant/1"));
+    mocks.findProduct.mockResolvedValue({
+      id: "gid://shopify/Product/1", title: "Shipping Protection",
+      variants: { nodes: [{ id: "gid://shopify/ProductVariant/1" }] },
+    });
+    mocks.createAndPublishPricingRule.mockResolvedValue({ ruleId: "new-rule" });
+    await activatePricingRule({}, "one.myshopify.com", 75);
+    expect(mocks.findProduct).toHaveBeenCalledWith({}, "gid://shopify/Product/1", {
+      recordedProductId: "gid://shopify/Product/1",
+    });
   });
 });
 

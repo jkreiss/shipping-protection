@@ -72,8 +72,10 @@ export async function readShippingProtectionState(admin, shopDomain) {
     await reconcilePublishedPricingRule(domain, core.shopConfig);
   }
   const seed = core.shopConfig ?? core.transformConfig;
-  const product = await findProduct(admin, seed?.productId);
   const activeRule = await getActivePricingRule(domain);
+  const product = await findProduct(admin, seed?.productId, {
+    recordedProductId: activeRule?.productId,
+  });
   const checks = [...buildChecks(core, product), pricingRuleCheck(seed, activeRule)];
   const healthReady = checks.every(({ ok }) => ok);
   const settings = await getShopConfiguration(domain);
@@ -184,9 +186,11 @@ async function publishRate(
   if (!current.configuration.protectionEnabled) {
     throw new UserFacingError("Set up protection before changing the rate.");
   }
+  const activeRule = await getActivePricingRule(shopDomain);
   const product = await findProduct(
     admin,
     core.shopConfig?.productId ?? core.transformConfig?.productId,
+    { recordedProductId: activeRule?.productId },
   );
   const variant = product?.variants.nodes.find(
     ({ id }) =>
@@ -240,9 +244,11 @@ async function runSetup(admin, shopDomain) {
   try {
     if (!liveContract) await disableKnownConfiguration(admin, core, existingContract);
 
+    const activeRule = await getActivePricingRule(domain);
     const existingProduct = await findProduct(
       admin,
       existingContract?.productId,
+      { recordedProductId: activeRule?.productId },
     );
     const repaired = await repairProduct(
       admin,
@@ -286,7 +292,6 @@ async function runSetup(admin, shopDomain) {
       throw new Error("Product activation did not pass its health checks.");
     }
 
-    const activeRule = await getActivePricingRule(domain);
     // A rule is tied to one variant; if repair replaced the product or
     // variant, publish a new version at the same rate instead.
     if (activeRule && activeRule.productId === repaired.product.id &&

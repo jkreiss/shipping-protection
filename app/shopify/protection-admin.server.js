@@ -3,6 +3,9 @@ import { adminGraphql as graphql, assertUserErrors } from "./admin-graphql.serve
 
 const PRODUCT_TITLE = "Shipping Protection";
 const PRODUCT_HANDLE = "shipping-protection";
+// Marks the product this app created, so setup never adopts, edits, or deletes
+// variants on a merchant's own product that merely shares the handle.
+export const PRODUCT_TAG = "yasas-shipping-protection";
 const FUNCTION_HANDLE = "shipping-protection-transform";
 const SHOP_CONFIG_KEY = "shipping_protection_config";
 const FUNCTION_CONFIG_KEY = "function-configuration";
@@ -25,6 +28,7 @@ const PRODUCT_FIELDS = `#graphql
     id
     title
     handle
+    tags
     status
     descriptionHtml
     variantsCount {
@@ -183,13 +187,21 @@ export async function loadProduct(admin, identifier) {
   return data.productByIdentifier;
 }
 
-export async function findProduct(admin, configuredProductId) {
-  if (configuredProductId) {
-    const configured = await loadProduct(admin, { id: configuredProductId });
-    if (configured) return configured;
+// Looks for the configured product, then the one the active pricing rule
+// recorded, then the handle, which only counts when the product carries our tag.
+export async function findProduct(
+  admin,
+  configuredProductId,
+  { recordedProductId } = {},
+) {
+  for (const id of new Set([configuredProductId, recordedProductId])) {
+    if (!id) continue;
+    const product = await loadProduct(admin, { id });
+    if (product) return product;
   }
 
-  return loadProduct(admin, { handle: PRODUCT_HANDLE });
+  const byHandle = await loadProduct(admin, { handle: PRODUCT_HANDLE });
+  return byHandle?.tags?.includes(PRODUCT_TAG) ? byHandle : null;
 }
 
 export function productIsPublished(product, publicationId) {
@@ -240,7 +252,7 @@ export function buildChecks(core, product) {
       ok: Boolean(
         product &&
         product.title === PRODUCT_TITLE &&
-        product.handle === PRODUCT_HANDLE,
+        (product.id === source?.productId || product.tags?.includes(PRODUCT_TAG)),
       ),
     },
     {
@@ -408,6 +420,7 @@ async function createProduct(admin) {
       product: {
         title: PRODUCT_TITLE,
         handle: PRODUCT_HANDLE,
+        tags: [PRODUCT_TAG],
         descriptionHtml: PRODUCT_DESCRIPTION,
         productType: "Shipping Protection",
         requiresSellingPlan: false,
@@ -430,12 +443,15 @@ function descriptionNeedsReplacing(descriptionHtml) {
 }
 
 // Restores the fields setup relies on without touching the product's status,
-// so repairing a live product never takes it off sale.
+// so repairing a live product never takes it off sale. productUpdate replaces
+// the whole tag list, so the merchant's tags are kept. The handle is left
+// alone: Shopify suffixes it when another product already holds the handle.
 function normalizeProduct(admin, product) {
+  const tags = product.tags ?? [];
   return updateProduct(admin, {
     id: product.id,
     title: PRODUCT_TITLE,
-    handle: PRODUCT_HANDLE,
+    tags: tags.includes(PRODUCT_TAG) ? tags : [...tags, PRODUCT_TAG],
     ...(descriptionNeedsReplacing(product.descriptionHtml)
       ? { descriptionHtml: PRODUCT_DESCRIPTION }
       : {}),
