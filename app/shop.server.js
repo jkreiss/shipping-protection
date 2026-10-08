@@ -47,7 +47,7 @@ export async function ensureInstalledShop(
   if (!shopGid || shop.shopGid === shopGid) return shop;
   return database.$transaction(async (transaction) => {
     await assertSettingsLease(transaction, shopDomain);
-    const updated = await transaction.shop.update({
+    const { count } = await transaction.shop.updateMany({
       where: {
         id: shop.id,
         installationState: "INSTALLED",
@@ -55,8 +55,9 @@ export async function ensureInstalledShop(
       },
       data: { shopGid },
     });
+    if (count !== 1) throw new InstallationAccessLostError();
     await assertSettingsLease(transaction, shopDomain);
-    return updated;
+    return { ...shop, shopGid };
   });
 }
 

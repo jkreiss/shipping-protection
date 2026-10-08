@@ -10,6 +10,7 @@ import {
   reconcilePublishedPricingRule,
 } from "./pricing-rule.server";
 import { InstallationAccessLostError, ensureInstalledShop, withShopSettingsLock } from "./shop.server";
+import { settingsLeaseContext } from "./settings-lease-context.server";
 import { UserFacingError } from "./user-facing-error";
 import { disableShopProtection, enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
 import { observedShopifyCapabilities, resolveConfiguration } from "./merchant/resolve-configuration";
@@ -345,25 +346,29 @@ async function runSetup(admin, shopDomain) {
     // Only a store that wasn't live gets its partial setup disabled; a live
     // store keeps the configuration it was already charging.
     if (disabledContract) {
-      const attempts = [
-        writeJsonMetafield(
-          admin,
-          core.shop.id,
-          SHOP_CONFIG_KEY,
-          disabledContract,
-        ),
-      ];
-      if (transformId) {
-        attempts.push(
+      // Disabling is the safe direction even after the lease is lost or another
+      // owner took over, so run outside the lease, which would abort the writes.
+      await settingsLeaseContext.exit(() => {
+        const attempts = [
           writeJsonMetafield(
             admin,
-            transformId,
-            FUNCTION_CONFIG_KEY,
+            core.shop.id,
+            SHOP_CONFIG_KEY,
             disabledContract,
           ),
-        );
-      }
-      await Promise.allSettled(attempts);
+        ];
+        if (transformId) {
+          attempts.push(
+            writeJsonMetafield(
+              admin,
+              transformId,
+              FUNCTION_CONFIG_KEY,
+              disabledContract,
+            ),
+          );
+        }
+        return Promise.allSettled(attempts);
+      });
     }
     throw error;
   }

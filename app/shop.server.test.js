@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  InstallationAccessLostError,
   ensureInstalledShop,
   recordGrantedScopes,
   redactCustomerOrders,
@@ -359,4 +360,34 @@ test("a pre-reinstall read cannot update the current Shopify identity", async ()
     $transaction: transaction,
   }, 0)).rejects.toThrow(/access|installation/i);
   expect(transaction).not.toHaveBeenCalled();
+});
+
+describe("Shopify identity update", () => {
+  const installed = { id: "shop-1", installationState: "INSTALLED", installationGeneration: 2, shopGid: "gid://shopify/Shop/1" };
+  const identityDatabase = (count) => {
+    const transaction = { shop: { updateMany: vi.fn().mockResolvedValue({ count }) } };
+    return {
+      transaction,
+      shop: { findUnique: async () => installed },
+      $transaction: async (run) => run(transaction),
+    };
+  };
+
+  test("an uninstall racing the update is lost access, not a server error", async () => {
+    const db = identityDatabase(0);
+    await expect(
+      ensureInstalledShop("one.myshopify.com", "gid://shopify/Shop/2", db),
+    ).rejects.toBeInstanceOf(InstallationAccessLostError);
+    expect(db.transaction.shop.updateMany).toHaveBeenCalledWith({
+      where: { id: "shop-1", installationState: "INSTALLED", installationGeneration: 2 },
+      data: { shopGid: "gid://shopify/Shop/2" },
+    });
+  });
+
+  test("returns the shop with the new Shopify identity", async () => {
+    const db = identityDatabase(1);
+    expect(
+      await ensureInstalledShop("one.myshopify.com", "gid://shopify/Shop/2", db),
+    ).toEqual({ ...installed, shopGid: "gid://shopify/Shop/2" });
+  });
 });
