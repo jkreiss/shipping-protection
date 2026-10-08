@@ -2,6 +2,7 @@ import prisma from "./db.server";
 import { adminGraphql } from "./order-shopify.server";
 import { aggregateAnalytics, analyticsRange, dailyTrend } from "./analytics";
 import { logEvent } from "./observability.server";
+import { retentionCutoff } from "./order-retention";
 
 // The worker reconciles every shop about every 10 minutes, so an older last
 // sync means it is down or falling behind. Single orders that fail to store
@@ -60,8 +61,11 @@ async function readShopAnalytics({ admin, shopDomain, shop, search, database, no
       behind: Boolean(syncedAt) && now.getTime() - syncedAt.getTime() > SYNC_STALE_MS,
       cursor: Boolean(shop.orderReconciliationCursor),
       reconciledThrough: shop.orderReconciliationSince?.toISOString() ?? null,
-      historyLimited: !shop.orderHistoryStartAt || !shop.orderReconciliationSince ||
-        !range.start || range.start < shop.orderHistoryStartAt.toISOString().slice(0, 10),
+      // Before the first backfill or the retention cutoff, orders are missing
+      // locally, so totals for those dates are incomplete.
+      historyLimited: !shop.orderHistoryStartAt || !shop.orderReconciliationSince || !range.start ||
+        range.start < shop.orderHistoryStartAt.toISOString().slice(0, 10) ||
+        range.start < retentionCutoff(now).toISOString().slice(0, 10),
     },
   };
 }
