@@ -23,6 +23,11 @@ Overview:
 - shows status and rate, five metric tiles, a 30-day revenue chart, recent activity, and a short data-quality warning only when there are issues
 - do not add date-range pickers, breakdowns, exports, or a separate Analytics page until deeper reporting is actually needed
 
+Dates and money use explicit `en-US` formatting. Overview sync timestamps, recent
+activity dates, and claim submitted dates use Shopify’s `ianaTimezone`. Chart
+labels represent merchant calendar dates and are formatted in UTC to preserve
+the date-only value through server rendering and browser hydration.
+
 Settings: protection readiness, a grouped **Checkout offer** block (pricing and
 customer-facing text), and "Can't see protection at checkout?" placement
 instructions. Hide setup actions when ready; show "Set up protection" for a first

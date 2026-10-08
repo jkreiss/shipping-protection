@@ -879,3 +879,21 @@ passed. `verify:postgres` and `verify:webhook-postgres` passed against a disposa
 PostgreSQL 17, including new cases for a delivery in backoff joining a batch with
 its attempts unchanged and for redaction before an order is stored. Staging
 behavior has not been exercised.
+
+## Section 6 Admin UI verification (2026-10-08)
+
+The Admin UI fixes were implemented from `main` at `8b3fa96`. See
+[review dispositions](reviews/2026-10-admin-ui-fixes.md) for every section 6
+finding and its regression evidence. Local verification passed: 769 tests
+(two skipped) across 44 suites, lint, repository typecheck (including generated
+Cart Transform types), and the production build. No deployment or authenticated
+live-store browser check was performed for this change.
+
+Both `AnalyticsShop` and `ClaimsShop` queries passed the cached Shopify Dev MCP
+server's schema validation for Admin API `2026-07`. Full route UI validation
+initially failed because the MCP type environment could not resolve
+`@shopify/shopify-app-react-router/server`; the repository typecheck passed with
+that dependency. UI-only validation passed for Overview, Claims, and Settings against Polaris
+App Home `v1.0`, without server imports/loaders. Local tests exercise mounted
+React effects and hydration; the MCP check validates component types, not a
+live Shopify Admin session.
