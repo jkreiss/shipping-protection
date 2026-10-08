@@ -85,13 +85,13 @@ export async function claimDelivery(database = prisma) {
       "leaseToken" = ${leaseToken},
       "leaseUntil" = NOW() + INTERVAL '15 minutes', "updatedAt" = NOW()
     WHERE id IN (SELECT id FROM batch)
-    RETURNING id, "shopId", "shopifyOrderId", topic, attempts`;
+    RETURNING id, "shopId", "shopifyOrderId", topic, attempts, "errorMessage"`;
   if (rows.length === 0) return null;
   return {
     shopId: rows[0].shopId,
     shopifyOrderId: rows[0].shopifyOrderId,
     leaseToken,
-    deliveries: rows.map(({ id, topic, attempts }) => ({ id, topic, attempts })),
+    deliveries: rows.map(({ id, topic, attempts, errorMessage }) => ({ id, topic, attempts, errorMessage })),
   };
 }
 
@@ -140,19 +140,26 @@ export async function processNextDelivery({
     for (const report of afterCommit) report();
     logEvent("webhook_processed", { ...context, durationMs: Date.now() - started });
   } catch (error) {
+    let failed = batch.deliveries;
     if (error?.code === "P2034") {
       // Concurrent work on the same shop, not a problem with these deliveries:
-      // requeue soon and give back the attempt the claim spent.
-      await database.webhookDelivery.updateMany({
-        where: { shopId, leaseToken, status: "PROCESSING" },
-        data: {
-          status: "PENDING", attempts: { decrement: 1 },
-          nextAttemptAt: new Date(Date.now() + 1_000 + Math.floor(Math.random() * 2_000)),
-          leaseToken: null, leaseUntil: null, errorMessage: "P2034",
-        },
-      });
-      logEvent("webhook_conflict_requeued", { ...context, durationMs: Date.now() - started });
-      return true;
+      // requeue soon and give back the attempt the claim spent. A delivery that
+      // already lost to a conflict last time is not given back, so a conflict
+      // that never clears backs off, alerts, and eventually fails.
+      const fresh = batch.deliveries.filter(({ errorMessage }) => errorMessage !== "P2034");
+      failed = batch.deliveries.filter(({ errorMessage }) => errorMessage === "P2034");
+      if (fresh.length > 0) {
+        await database.webhookDelivery.updateMany({
+          where: { id: { in: fresh.map(({ id }) => id) }, shopId, leaseToken, status: "PROCESSING" },
+          data: {
+            status: "PENDING", attempts: { decrement: 1 },
+            nextAttemptAt: new Date(Date.now() + 1_000 + Math.floor(Math.random() * 2_000)),
+            leaseToken: null, leaseUntil: null, errorMessage: "P2034",
+          },
+        });
+        logEvent("webhook_conflict_requeued", { ...context, durationMs: Date.now() - started });
+      }
+      if (failed.length === 0) return true;
     }
     // Without access, keep retrying quietly so a reinstall still processes the
     // queue; after the retry budget the deliveries fail, still without an alert.
@@ -160,7 +167,7 @@ export async function processNextDelivery({
     const unavailable = error instanceof OrderUnavailableError;
     const permanent = error instanceof PermanentOrderError;
     // Each delivery keeps its own attempt count, so reschedule them one by one.
-    for (const delivery of batch.deliveries) {
+    for (const delivery of failed) {
       const terminal = permanent || delivery.attempts >= MAX_DELIVERY_ATTEMPTS;
       await database.webhookDelivery.updateMany({
         where: { id: delivery.id, shopId, leaseToken, status: "PROCESSING" },

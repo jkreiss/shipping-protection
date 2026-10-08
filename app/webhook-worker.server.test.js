@@ -20,6 +20,10 @@ function worker({
   adminForShop,
   shopifyOrder = order,
   graphqlError,
+  deliveries = [
+    { id: "d-1", topic: "ORDERS_PAID", attempts: MAX_DELIVERY_ATTEMPTS },
+    { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2 },
+  ],
 }) {
   const updates = [];
   const database = {
@@ -33,10 +37,7 @@ function worker({
     return { json: async () => ({ data: { order: shopifyOrder } }) };
   } };
   const batch = { shopId: "shop-1", shopifyOrderId: order.id, leaseToken: "lease-1",
-    deliveries: [
-      { id: "d-1", topic: "ORDERS_PAID", attempts: MAX_DELIVERY_ATTEMPTS },
-      { id: "d-2", topic: "ORDERS_UPDATED", attempts: 2 },
-    ] };
+    deliveries };
   const run = async () => {
     const stderr = [];
     const stdout = [];
@@ -123,6 +124,46 @@ describe("worker conflict handling", () => {
     // Even the delivery on its last attempt goes back to the queue, not to FAILED.
     expect(updates[0].data).toMatchObject({ status: "PENDING", attempts: { decrement: 1 }, leaseToken: null });
     expect(updates[0].data.nextAttemptAt.getTime() - Date.now()).toBeLessThanOrEqual(5_000);
+  });
+
+  test("spends attempts, backs off, and alerts when the same conflict keeps coming back", async () => {
+    const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
+    const { run, updates } = worker({ transactionError: conflict, deliveries: [
+      { id: "d-1", topic: "ORDERS_PAID", attempts: 3, errorMessage: "P2034" },
+    ] });
+    const { stderr } = await run();
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0].where).toMatchObject({ id: "d-1", status: "PROCESSING" });
+    expect(updates[0].data).toMatchObject({ status: "PENDING", errorMessage: "P2034" });
+    expect(updates[0].data.attempts).toBeUndefined();
+    expect(updates[0].data.nextAttemptAt.getTime() - Date.now()).toBeGreaterThan(5_000);
+    expect(stderr.filter(({ event }) => event === "webhook_retry")).toHaveLength(1);
+  });
+
+  test("fails a delivery whose conflicts used up its attempts", async () => {
+    const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
+    const { run, updates } = worker({ transactionError: conflict, deliveries: [
+      { id: "d-1", topic: "ORDERS_PAID", attempts: MAX_DELIVERY_ATTEMPTS, errorMessage: "P2034" },
+    ] });
+    const { stderr } = await run();
+
+    expect(statuses(updates)).toEqual([["d-1", "FAILED"]]);
+    expect(stderr.filter(({ event }) => event === "webhook_terminal")).toHaveLength(1);
+  });
+
+  test("gives back the attempt only for deliveries whose conflict is new", async () => {
+    const conflict = Object.assign(new Error("write conflict"), { code: "P2034" });
+    const { run, updates } = worker({ transactionError: conflict, deliveries: [
+      { id: "d-1", topic: "ORDERS_PAID", attempts: 3, errorMessage: "P2034" },
+      { id: "d-2", topic: "ORDERS_UPDATED", attempts: 1, errorMessage: null },
+    ] });
+    await run();
+
+    const givenBack = updates.filter(({ data }) => data.attempts);
+    expect(givenBack).toHaveLength(1);
+    expect(givenBack[0].where.id).toEqual({ in: ["d-2"] });
+    expect(updates.filter(({ data }) => !data.attempts).map(({ where }) => where.id)).toEqual(["d-1"]);
   });
 
   test("still fails a delivery on its last attempt for other errors", async () => {
