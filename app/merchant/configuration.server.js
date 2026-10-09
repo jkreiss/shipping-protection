@@ -1,5 +1,6 @@
 import { withInstalledShopWrite } from "../settings-lease-context.server.js";
 import prisma from "../db.server";
+import { isInstalledAtGeneration } from "../shop.server.js";
 
 export async function getShopConfiguration(
   shopDomain,
@@ -9,7 +10,7 @@ export async function getShopConfiguration(
     where: { shopDomain },
     include: { configuration: true },
   });
-  if (!shop || shop.installationState !== "INSTALLED")
+  if (!isInstalledAtGeneration(shop))
     throw new Error("Installed shop is unavailable.");
   if (shop.configuration) return shop.configuration;
   return withInstalledShopWrite(

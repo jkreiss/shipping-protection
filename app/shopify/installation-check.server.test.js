@@ -14,7 +14,17 @@ function adminReturning(response) {
 
 describe("shopifyInstallationActive", () => {
   test("is true when Shopify returns the app installation", async () => {
-    const admin = adminReturning({ data: { shop: { id: "gid://shopify/Shop/1" }, currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } } });
+    const admin = adminReturning({ data: { shop: { id: "gid://shopify/Shop/1", myshopifyDomain: "one.myshopify.com" }, currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } } });
+    await expect(shopifyInstallationActive("one.myshopify.com", { loadAdmin: async () => ({ admin }) })).resolves.toBe(true);
+  });
+
+  test("is false when Shopify answers without an installation", async () => {
+    const admin = adminReturning({ data: { shop: { id: "gid://shopify/Shop/1", myshopifyDomain: "one.myshopify.com" }, currentAppInstallation: null } });
+    await expect(shopifyInstallationActive("one.myshopify.com", { loadAdmin: async () => ({ admin }) })).resolves.toBe(false);
+  });
+
+  test("keeps a shop whose myshopify domain changed: a working installation is installed", async () => {
+    const admin = adminReturning({ data: { shop: { id: "gid://shopify/Shop/1", myshopifyDomain: "renamed.myshopify.com" }, currentAppInstallation: { id: "gid://shopify/AppInstallation/1" } } });
     await expect(shopifyInstallationActive("one.myshopify.com", { loadAdmin: async () => ({ admin }) })).resolves.toBe(true);
   });
 

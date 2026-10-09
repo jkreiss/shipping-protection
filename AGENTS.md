@@ -11,6 +11,8 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 - Preserve financial idempotency and historical auditability. Changes must never block checkout.
 - The initial release is for US stores. US copy may offer protection for stolen, damaged, and undelivered packages. Australian stores come later with their own wording and settings; for them, never sell or gate existing Australian Consumer Law remedies as protection.
 - Do not invent legal/compliance guarantees. Customer-facing copy uses “shipping protection” unless legal review confirms otherwise.
+- Before fixing a bug you were asked to fix, step back and find its root cause; fix that rather than patching the symptom where it surfaced.
+- Don't hide broken functionality: let it fail fast and visibly (throw, report) instead of masking it with silent fallbacks or defaults. Checkout is the exception: it must never be blocked, so degrade there and report the failure.
 
 ## Keeping docs current
 

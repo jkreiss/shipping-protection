@@ -32,6 +32,21 @@ export class InstallationAccessLostError extends Error {
   }
 }
 
+// The Admin API shop must be the shop the session authenticated, so a token
+// can't publish one shop's configuration under another shop's records.
+export function assertSessionShop(core, shopDomain) {
+  if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
+}
+
+// Whether a Shop row is installed and, when a generation is given, still the
+// installation that generation was read from (no uninstall or reinstall since).
+export function isInstalledAtGeneration(shop, expectedGeneration) {
+  return Boolean(
+    shop && shop.installationState === "INSTALLED" &&
+    (expectedGeneration === undefined || shop.installationGeneration === expectedGeneration),
+  );
+}
+
 export async function ensureInstalledShop(
   shopDomain,
   shopGid = undefined,
@@ -39,10 +54,7 @@ export async function ensureInstalledShop(
   expectedGeneration = undefined,
 ) {
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (
-    !shop || shop.installationState !== "INSTALLED" ||
-    (expectedGeneration !== undefined && shop.installationGeneration !== expectedGeneration)
-  )
+  if (!isInstalledAtGeneration(shop, expectedGeneration))
     throw new InstallationAccessLostError();
   if (!shopGid || shop.shopGid === shopGid) return shop;
   return database.$transaction(async (transaction) => {
