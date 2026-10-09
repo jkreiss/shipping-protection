@@ -180,11 +180,21 @@ describe("settings controls", () => {
 
   test("disables all settings actions while a change is saving", () => {
     mocks.saving = true;
+    const page = render();
+    const actions = page.querySelectorAll("s-button:not([href])");
+    expect(actions.length).toBeGreaterThan(0);
     expect(
-      [...render().querySelectorAll("s-button")].every((button) =>
-        button.hasAttribute("disabled"),
-      ),
+      [...actions].every((button) => button.hasAttribute("disabled")),
     ).toBe(true);
+  });
+
+  test("keeps the checkout editor link usable while a change is saving", () => {
+    mocks.saving = true;
+    const link = render().querySelector(
+      's-button[href="shopify://admin/settings/checkout/editor"]',
+    );
+    expect(link?.getAttribute("target")).toBe("_top");
+    expect(link?.hasAttribute("disabled")).toBe(false);
   });
 });
 
