@@ -10,7 +10,6 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 - Keep secrets and privileged operations server-side. Treat external input, including AI output, as untrusted.
 - Preserve financial idempotency and historical auditability. Changes must never block checkout.
 - The initial release is for US stores. US copy may offer protection for stolen, damaged, and undelivered packages. Australian stores come later with their own wording and settings; for them, never sell or gate existing Australian Consumer Law remedies as protection.
-- Do not invent legal/compliance guarantees. Customer-facing copy uses “shipping protection” unless legal review confirms otherwise.
 - Before fixing a bug you were asked to fix, step back and find its root cause; fix that rather than patching the symptom where it surfaced.
 - Don't hide broken functionality: let it fail fast and visibly (throw, report) instead of masking it with silent fallbacks or defaults. Checkout is the exception: it must never be blocked, so degrade there and report the failure.
 
@@ -19,11 +18,11 @@ This repository is a multi-tenant Shopify app for merchant-provided shipping pro
 - When a change alters setup, commands, configuration, deployment, or behavior that `README.md` or `docs/` describes, update that documentation in the same change. Only write what you have verified in code, config, or command output; leave uncertain details out rather than guessing.
 - `README.md` is the owner's concise operator reference. Keep it short and current; put design detail in `docs/agents/` and release evidence, one-off migration notes, and recovery procedures in `docs/production-readiness.md`.
 
-## Codex workspaces
+## Agent workspaces
 
 - Create Codex Git worktrees as sibling directories in the parent `yasas` directory, using `../insurance-<task-name>` relative to this repository root. Keep worktrees outside this repository so Shopify CLI does not discover conflicting app configurations during type checking or releases.
 - Reuse the current worktree when already working in one; do not create nested worktrees.
-- After merging, remove Codex-created worktrees only when they are clean and their commits are merged. Preserve other agents' worktrees and unfinished work.
+- After merging, remove agent-created worktrees only when they are clean and their commits are merged. Preserve other agents' worktrees and unfinished work.
 
 ## Build and type checking
 
