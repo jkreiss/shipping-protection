@@ -283,17 +283,18 @@ export function calculateRoundedFee(amounts, rateBasisPoints, minorUnits) {
   const scaleDigits = Math.max(
     ...parsed.map(({ fraction }) => fraction.length),
   );
-  // Shopify CLI's ES6 bundle lowers ** to Math.pow, which rejects BigInt.
-  // Construct decimal powers as integers to keep the bundled arithmetic exact.
+  // Shopify CLI's ES6 bundle lowers ** to Math.pow, which rejects BigInt, and
+  // warns on BigInt literals. Construct values with BigInt() instead.
   const scale = BigInt("1" + "0".repeat(scaleDigits));
+  const two = BigInt(2);
   const subtotal = parsed.reduce((sum, { whole, fraction }) => {
     const paddedFraction = fraction.padEnd(scaleDigits, "0");
     return sum + BigInt(whole) * scale + BigInt(paddedFraction || "0");
-  }, 0n);
+  }, BigInt(0));
   const numerator =
     subtotal * BigInt(rateBasisPoints) * BigInt("1" + "0".repeat(minorUnits));
-  const denominator = scale * 10_000n;
-  const roundedMinor = (numerator * 2n + denominator) / (denominator * 2n);
+  const denominator = scale * BigInt(10_000);
+  const roundedMinor = (numerator * two + denominator) / (denominator * two);
   if (roundedMinor > BigInt(Number.MAX_SAFE_INTEGER)) return null;
 
   // Convert only the rounded fee. Its decimal representation must retain every
