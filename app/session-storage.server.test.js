@@ -2,7 +2,11 @@ import { adminApiVersion } from "./shopify/api-version.server.js";
 // @vitest-environment node
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { ShopAwareSessionStorage } from "./session-storage.server.js";
-import { ensureInstalledShop, markShopUninstalled } from "./shop.server.js";
+import {
+  InstallationAccessLostError,
+  ensureInstalledShop,
+  markShopUninstalled,
+} from "./shop.server.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -62,22 +66,15 @@ function fixture(initial = null, realVerification = false) {
   };
   db.shop.createMany = async ({ data }) =>
     db.shop.upsert({ create: data, update: {} });
-  const delegateFactory = (database) => ({
-    storeSession: async (session) => {
-      await database.session.upsert({
-        where: { id: session.id },
-        create: session,
-        update: session,
-      });
-      return true;
-    },
+  const delegate = {
+    sessionToRow: (session) => session,
     loadSession: async (id) => sessions.get(id),
     isReady: async () => true,
-  });
+  };
   const verifySession = vi.fn(async () => identity);
   const storage = new ShopAwareSessionStorage(db, {
     ...(realVerification ? {} : { verifySession }),
-    delegateFactory,
+    delegate,
   });
   const session = {
     id: `offline_${domain}`,
@@ -126,6 +123,91 @@ describe("installation session lifecycle", () => {
       installationGeneration: 2,
       activePricingRuleId: "history",
     });
+  });
+  test("a transient verification failure still stores a refreshed token for an installed shop", async () => {
+    const f = fixture({ shopGid: identity.shop.id });
+    f.verifySession.mockRejectedValue(new Error("Shopify HTTP 503"));
+    expect(await f.storage.storeSession(f.session)).toBe(true);
+    expect(f.sessions.get(f.session.id).accessToken).toBe("test-token");
+    expect(f.db.shop.update).not.toHaveBeenCalled();
+    expect(f.row().installationGeneration).toBe(0);
+  });
+  test.each([
+    ["uninstalled", { installationState: "UNINSTALLED" }],
+    ["missing", null],
+  ])(
+    "a transient verification failure for a %s shop is not stored",
+    async (_name, initial) => {
+      const f = fixture(initial);
+      f.verifySession.mockRejectedValue(new Error("Shopify HTTP 503"));
+      await expect(f.storage.storeSession(f.session)).rejects.toThrow(
+        "Shopify HTTP 503",
+      );
+      expect(f.sessions.size).toBe(0);
+    },
+  );
+  test.each([
+    ["a 401", () => ({ response: { code: 401 } })],
+    ["InstallationAccessLostError", () => new InstallationAccessLostError()],
+  ])("%s during verification of an installed shop is not stored", async (_n, make) => {
+    const f = fixture({});
+    f.verifySession.mockRejectedValue(make());
+    await expect(f.storage.storeSession(f.session)).rejects.toMatchObject({
+      response: { code: 401 },
+    });
+    expect(f.sessions.size).toBe(0);
+  });
+  test("a transient verification failure cannot store across a changed generation", async () => {
+    const f = fixture({});
+    f.verifySession.mockImplementationOnce(async () => {
+      await markShopUninstalled(domain, f.db);
+      await f.storage.storeSession({ ...f.session, accessToken: "new-token" });
+      throw new Error("Shopify HTTP 503");
+    });
+    await expect(
+      f.storage.storeSession({ ...f.session, accessToken: "old-token" }),
+    ).rejects.toMatchObject({ response: { code: 401 } });
+    expect(f.row().installationGeneration).toBe(2);
+    expect(f.sessions.get(f.session.id).accessToken).toBe("new-token");
+  });
+  test("concurrent exchanges after one reinstall both store without a second increment", async () => {
+    const f = fixture({
+      installationState: "UNINSTALLED",
+      installationGeneration: 1,
+    });
+    f.verifySession.mockImplementationOnce(async () => {
+      Object.assign(f.row(), {
+        installationState: "INSTALLED",
+        installationGeneration: 2,
+      });
+      return identity;
+    });
+    expect(await f.storage.storeSession(f.session)).toBe(true);
+    expect(f.row()).toMatchObject({
+      installationState: "INSTALLED",
+      installationGeneration: 2,
+    });
+    expect(f.sessions.get(f.session.id).accessToken).toBe("test-token");
+    const loaded = await f.storage.loadSession(f.session.id);
+    await f.storage.storeSession({ ...loaded, accessToken: "refreshed" });
+    expect(f.row().installationGeneration).toBe(2);
+  });
+  test("an exchange that missed more than one generation still loses access", async () => {
+    const f = fixture({
+      installationState: "UNINSTALLED",
+      installationGeneration: 1,
+    });
+    f.verifySession.mockImplementationOnce(async () => {
+      Object.assign(f.row(), {
+        installationState: "INSTALLED",
+        installationGeneration: 3,
+      });
+      return identity;
+    });
+    await expect(f.storage.storeSession(f.session)).rejects.toMatchObject({
+      response: { code: 401 },
+    });
+    expect(f.sessions.size).toBe(0);
   });
   test.each(["invalid", "mismatch", "no installation"])(
     "rejects %s token without persisting",

@@ -72,10 +72,18 @@ function extendDeadline(shop, waitMs) {
 }
 
 async function waitForShop(shop, sleep) {
-  while (shop && (shopReadyAt.get(shop) ?? 0) > Date.now()) {
-    await sleep(Math.min(MAX_WAIT_MS, shopReadyAt.get(shop) - Date.now()));
+  // Siblings can keep extending the deadline; stop waiting after MAX_WAIT_MS.
+  const until = Date.now() + MAX_WAIT_MS;
+  let now;
+  while (
+    shop &&
+    (now = Date.now()) < until &&
+    (shopReadyAt.get(shop) ?? 0) > now
+  ) {
+    await sleep(Math.min(shopReadyAt.get(shop), until) - now);
   }
-  if (shop) shopReadyAt.delete(shop);
+  if (shop && (shopReadyAt.get(shop) ?? 0) <= Date.now())
+    shopReadyAt.delete(shop);
 }
 
 async function throttleBackoff(shop, cost, attempt, sleep) {
@@ -159,6 +167,8 @@ export async function adminGraphql(
       return payload.data;
     }
   } catch (error) {
+    // withShopSettingsLock already reported the lease loss.
+    if (lease?.signal.aborted) throw lease.signal.reason;
     if (isAccessLost(error))
       logEvent("shopify_access_lost", { operation, shop });
     else reportFailure("shopify_graphql_failed", error, { operation });

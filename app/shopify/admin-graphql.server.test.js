@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import process from "node:process";
 import { adminGraphql, isAccessLost } from "./admin-graphql.server";
+import { settingsLeaseContext } from "../settings-lease-context.server";
+import { UserFacingError } from "../user-facing-error";
 
 const QUERY = `#graphql
   query ShopName { shop { name } }
@@ -460,5 +462,76 @@ describe("throttle siblings and fallback", () => {
       },
     );
     expect(waits).toEqual([30_000]);
+  });
+});
+
+describe("shop wait cap", () => {
+  test("siblings that keep extending the deadline cannot hold a call past thirty seconds", async () => {
+    vi.useFakeTimers();
+    const shop = "capped.myshopify.com";
+    const gates = [];
+    const siblings = Array.from({ length: 5 }, () =>
+      adminGraphql(
+        { graphql: () => new Promise((resolve) => gates.push(resolve)) },
+        QUERY,
+        {},
+        { shop },
+      ),
+    );
+    await vi.waitFor(() => expect(gates).toHaveLength(5));
+    const expensive = {
+      json: async () => ({
+        data: {},
+        extensions: {
+          cost: cost({ requested: 1000, available: 0, restoreRate: 100 }),
+        },
+      }),
+    };
+    gates.shift()(expensive);
+    await siblings.shift();
+    const waits = [];
+    const data = await adminGraphql(
+      fakeAdmin([{ data: { ok: true } }]),
+      QUERY,
+      {},
+      {
+        shop,
+        sleep: async (ms) => {
+          waits.push(ms);
+          vi.setSystemTime(Date.now() + ms);
+          gates.shift()?.(expensive);
+          await siblings.shift();
+        },
+      },
+    );
+    expect(data).toEqual({ ok: true });
+    expect(waits.reduce((total, ms) => total + ms, 0)).toBe(30_000);
+  });
+});
+
+describe("settings lease loss during a wait", () => {
+  test("surfaces the lease error and does not report a Shopify failure", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const controller = new AbortController();
+    const lost = new UserFacingError("This settings change was interrupted.");
+    const lease = {
+      shopDomain: "lease.myshopify.com",
+      signal: controller.signal,
+      assertHeld: async () => {},
+    };
+    const sleep = (_ms, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted", "AbortError")),
+        );
+        controller.abort(lost);
+      });
+    const throttled = throttledError(cost({ requested: 200, available: 0 }));
+    await expect(
+      settingsLeaseContext.run(lease, () =>
+        adminGraphql(fakeAdmin([throttled]), QUERY, {}, { sleep }),
+      ),
+    ).rejects.toBe(lost);
+    expect(stderr.mock.calls.join("")).not.toContain("shopify_graphql_failed");
   });
 });

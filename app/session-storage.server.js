@@ -1,7 +1,7 @@
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import { InstallationAccessLostError, lockShopRow } from "./shop.server.js";
 import { adminApiVersion } from "./shopify/api-version.server.js";
-import { adminGraphql } from "./shopify/admin-graphql.server.js";
+import { adminGraphql, isAccessLost } from "./shopify/admin-graphql.server.js";
 
 export const SESSION_INSTALLATION_QUERY = `#graphql
   query VerifySessionInstallation {
@@ -46,19 +46,13 @@ async function verifyInstallation(session) {
   );
 }
 
-const prismaDelegate = (database) => new PrismaSessionStorage(database);
-
 export class ShopAwareSessionStorage {
   constructor(
     database,
-    {
-      verifySession = verifyInstallation,
-      delegateFactory = prismaDelegate,
-    } = {},
+    { verifySession = verifyInstallation, delegate } = {},
   ) {
     this.database = database;
-    this.delegateFactory = delegateFactory;
-    this.delegate = delegateFactory(database);
+    this.delegate = delegate ?? new PrismaSessionStorage(database);
     this.verifySession = verifySession;
     this.generations = new WeakMap();
   }
@@ -71,11 +65,22 @@ export class ShopAwareSessionStorage {
       this.generations.get(session) ?? before?.installationGeneration ?? 0;
     // Shopify invalidates a token by saving the loaded session without a token.
     // Keep that SDK behavior, but never create an installation from such a save.
-    const verified = session.accessToken
-      ? await this.verifySession(session)
-      : null;
+    let verified = null;
+    let unverified = false;
+    if (session.accessToken) {
+      try {
+        verified = await this.verifySession(session);
+      } catch (error) {
+        // A refresh has already consumed the old refresh token, so an installed
+        // shop keeps the new one through a transient verification failure.
+        if (isAccessLost(error) || before?.installationState !== "INSTALLED")
+          throw error;
+        unverified = true;
+      }
+    }
     if (
       session.accessToken &&
+      !unverified &&
       (!verified?.currentAppInstallation?.id ||
         verified?.shop?.myshopifyDomain !== session.shop ||
         !/^gid:\/\/shopify\/Shop\/\d+$/.test(verified.shop.id))
@@ -86,8 +91,15 @@ export class ShopAwareSessionStorage {
       if (!session.accessToken && !before)
         throw new InstallationAccessLostError();
       const shop = await lockShopRow(transaction, session.shop);
+      // A sibling exchange that read the same uninstalled shop may have
+      // completed this reinstall first; one generation ahead is that reinstall.
+      const reinstalled =
+        verified &&
+        before?.installationState === "UNINSTALLED" &&
+        shop.installationState === "INSTALLED" &&
+        shop.installationGeneration === generation + 1;
       if (
-        shop.installationGeneration !== generation ||
+        (shop.installationGeneration !== generation && !reinstalled) ||
         (!verified && shop.installationState !== "INSTALLED")
       ) {
         throw new InstallationAccessLostError();
@@ -110,12 +122,16 @@ export class ShopAwareSessionStorage {
         });
       }
       // The SDK retains all online/offline and rotating refresh-token fields.
-      const stored =
-        await this.delegateFactory(transaction).storeSession(session);
-      if (!stored) throw new InstallationAccessLostError();
+      const data = this.delegate.sessionToRow(session);
+      await transaction.session.upsert({
+        where: { id: session.id },
+        update: data,
+        create: data,
+      });
       this.generations.set(
         session,
-        generation + (shop.installationState === "UNINSTALLED" ? 1 : 0),
+        shop.installationGeneration +
+          (shop.installationState === "UNINSTALLED" ? 1 : 0),
       );
       return true;
     });

@@ -148,8 +148,7 @@ Supabase API URL is needed by these services.
 
 Optional web/worker variable: `SENTRY_DSN` for a **load-specific** monitoring
 project. Leave it unset to use structured logs only; do not inherit production's
-DSN. `SHOP_CUSTOM_DOMAIN` is unnecessary for synthetic `load-N.myshopify.com`
-shops and should remain unset. `WORKER_CONCURRENCY` accepts 1–16 (default 4);
+DSN. `WORKER_CONCURRENCY` accepts 1–16 (default 4);
 the explicit value above is deliberately paired with the example pool limits.
 
 ### Deployment checks and next step

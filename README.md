@@ -266,11 +266,6 @@ to `production` directly. In GitHub branch settings, `production` requires the
 `verify` check and linear history, and blocks force pushes, deletion, and
 bypassing. It doesn't require pull requests, because releases are direct pushes.
 
-The installation-generation/settings-owner migration must precede the updated
-web and worker processes. Coordinate their restart so no older process can
-save sessions or settings without the new guards. See
-[merchant authentication release checks](docs/production-readiness.md#merchant-authentication-and-settings-guards).
-
 ## Draft changelogs
 
 Every push to `main` creates or updates one **Next release** draft in GitHub

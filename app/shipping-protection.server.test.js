@@ -61,12 +61,14 @@ vi.mock("./merchant/configuration.server", () => ({
   disableShopProtection: mocks.disableShopProtection,
 }));
 
+import { settingsLeaseContext } from "./settings-lease-context.server";
 import { activatePricingRule, disableShippingProtection, readShippingProtectionState, setupShippingProtection } from "./shipping-protection.server";
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.ensureInstalledShop.mockReset().mockResolvedValue({ installationGeneration: 0 });
   mocks.disableKnownConfiguration.mockReset();
+  mocks.writeJsonMetafield.mockReset();
   mocks.disableShopProtection.mockReset();
   mocks.publishSnapshot.mockReset();
   mocks.reconcilePublishedPricingRule.mockReset();
@@ -587,6 +589,32 @@ describe("repairing a live store", () => {
     expect(mocks.ensureTransform).toHaveBeenCalledWith({}, expect.anything(),
       expect.objectContaining({ enabled: false }), { overwrite: true });
     expect(disabledWrites().length).toBeGreaterThan(0);
+  });
+
+  test("still disables a partial setup after the settings lease is lost", async () => {
+    const disabled = { ...liveContract, enabled: false };
+    mocks.loadCore.mockResolvedValue(coreWith({ shopConfig: disabled, transformConfig: disabled }));
+    const controller = new AbortController();
+    const lease = { shopDomain: "one.myshopify.com", signal: controller.signal, assertHeld: async () => {} };
+    const lost = new Error("This settings change was interrupted.");
+    mocks.createAndPublishPricingRule.mockImplementationOnce(async () => {
+      controller.abort(lost);
+      throw lost;
+    });
+    // Like adminGraphql, writes made inside an aborted lease are refused.
+    const afterLoss = [];
+    mocks.writeJsonMetafield.mockImplementation(async (_admin, ownerId) => {
+      const store = settingsLeaseContext.getStore();
+      if (controller.signal.aborted) afterLoss.push({ ownerId, inLease: Boolean(store) });
+      if (store?.signal.aborted) throw store.signal.reason;
+    });
+
+    await expect(settingsLeaseContext.run(lease, () => setupShippingProtection({}, "one.myshopify.com"))).rejects.toBe(lost);
+
+    expect(afterLoss).toEqual([
+      { ownerId: "gid://shopify/Shop/1", inLease: false },
+      { ownerId: "transform-1", inLease: false },
+    ]);
   });
 });
 
