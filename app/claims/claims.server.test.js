@@ -28,3 +28,21 @@ test("claims reject an unavailable tenant before reading Shopify or claims", asy
   expect(admin.graphql).not.toHaveBeenCalled();
   expect(database.claim.findMany).not.toHaveBeenCalled();
 });
+
+test("claims read Shopify, settings and claims together, newest first with a stable order", async () => {
+  let claimsRead;
+  const claimsStarted = new Promise((resolve) => { claimsRead = resolve; });
+  const database = {
+    shop: { findUnique: vi.fn().mockResolvedValue({ id: "shop-1", installationState: "INSTALLED", configuration: {} }) },
+    claim: { findMany: vi.fn(async () => { claimsRead(); return []; }) },
+  };
+  // Shopify answers only once the claims query has started, so a serial read would hang.
+  const admin = { graphql: vi.fn(async () => {
+    await claimsStarted;
+    return { json: async () => ({ data: { shop: { ianaTimezone: "UTC" } } }) };
+  }) };
+
+  await readClaimsOverview(admin, "one.myshopify.com", database);
+
+  expect(database.claim.findMany.mock.calls[0][0].orderBy).toEqual([{ submittedAt: "desc" }, { id: "desc" }]);
+}, 2_000);

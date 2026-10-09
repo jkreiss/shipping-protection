@@ -6,34 +6,56 @@ export const RETENTION_INTERVAL_MS = 24 * 60 * 60_000;
 export const RETENTION_BATCH_SIZE = 500;
 // One purge turn is time-boxed so reconciliation keeps running during a backlog.
 export const RETENTION_BUDGET_MS = 60_000;
+// Prisma's default 5-second interactive transaction is too short for a full
+// batch on a busy database.
+export const RETENTION_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 10_000 };
+const FINISHED_DELIVERY = { in: ["PROCESSED", "FAILED"] };
 
-// Deletes up to batchSize orders placed before the cutoff, all from the shop
-// holding the oldest one, with their lines, purchases, refunds, claims, and
-// webhook deliveries. One shop per batch keeps each transaction to a fixed
-// handful of statements. Returns the number of orders deleted.
-export async function purgeExpiredOrderBatch(transaction, cutoff, batchSize = RETENTION_BATCH_SIZE) {
-  const oldest = await transaction.order.findFirst({
-    where: { shopifyCreatedAt: { lt: cutoff } },
-    orderBy: [{ shopifyCreatedAt: "asc" }, { id: "asc" }],
-    select: { shopId: true },
+export async function shopsWithExpiredOrders(database, cutoff, skipShopIds = []) {
+  const shops = await database.shop.findMany({
+    where: { id: { notIn: [...skipShopIds] }, orders: { some: { shopifyCreatedAt: { lt: cutoff } } } },
+    orderBy: { id: "asc" }, select: { id: true },
   });
-  if (!oldest) return 0;
+  return shops.map(({ id }) => id);
+}
+
+// Deletes up to batchSize of one shop's orders placed before the cutoff, with
+// their lines, purchases, refunds, claims, and webhook deliveries. selected is
+// what the batch found (fewer than batchSize means the shop is done); deleted
+// can be lower when a customer redaction removed some first.
+export async function purgeExpiredShopBatch(transaction, shopId, cutoff, batchSize = RETENTION_BATCH_SIZE) {
   const orders = await transaction.order.findMany({
-    where: { shopId: oldest.shopId, shopifyCreatedAt: { lt: cutoff } },
+    where: { shopId, shopifyCreatedAt: { lt: cutoff } },
     orderBy: [{ shopifyCreatedAt: "asc" }, { id: "asc" }],
     take: batchSize,
     select: { id: true, shopifyOrderId: true },
   });
-  await deleteOrderRecords(transaction, oldest.shopId,
+  if (orders.length === 0) return { selected: 0, deleted: 0 };
+  const deleted = await deleteOrderRecords(transaction, shopId,
     orders.map((order) => order.id), orders.map((order) => order.shopifyOrderId));
-  return orders.length;
+  return { selected: orders.length, deleted };
 }
 
-// Purges in short transactions so a backlog never holds long locks, stopping
-// when the budget runs out or the worker stops; complete is false then, and the
-// next turn continues. Once complete, finished webhook deliveries past the
-// cutoff go too, even when their order was never stored. onProgress runs after
-// each batch so the worker stays visibly alive.
+// Finished deliveries received before the cutoff, even when their order was
+// never stored. Deleting by id keeps each statement small.
+export async function purgeExpiredDeliveryBatch(database, cutoff, batchSize = RETENTION_BATCH_SIZE) {
+  const rows = await database.webhookDelivery.findMany({
+    where: { receivedAt: { lt: cutoff }, status: FINISHED_DELIVERY }, select: { id: true }, take: batchSize,
+  });
+  if (rows.length === 0) return { selected: 0, deleted: 0 };
+  const { count } = await database.webhookDelivery.deleteMany({
+    where: { id: { in: rows.map(({ id }) => id) }, status: FINISHED_DELIVERY },
+  });
+  return { selected: rows.length, deleted: count };
+}
+
+// Purges shop by shop in short transactions, so a backlog never holds long
+// locks and one shop that keeps failing can't hold back the rest: its error
+// goes to onShopFailure and the run moves on. Stops when the budget runs out
+// or the worker stops; complete is false then, and the next turn continues
+// (pass the failed shops back as skipShopIds). Once every shop is done, old
+// finished deliveries go too. onProgress runs after each batch so the worker
+// stays visibly alive.
 export async function purgeExpiredOrders({
   database = prisma,
   now = new Date(),
@@ -41,24 +63,42 @@ export async function purgeExpiredOrders({
   budgetMs = RETENTION_BUDGET_MS,
   shouldStop = () => false,
   onProgress = () => {},
+  onShopFailure = () => {},
+  skipShopIds = [],
   clock = Date.now,
 } = {}) {
   const cutoff = retentionCutoff(now);
   const deadline = clock() + budgetMs;
+  const outOfTurn = () => shouldStop() || clock() >= deadline;
+  const failedShopIds = [];
   let ordersDeleted = 0;
-  let complete = false;
-  while (!shouldStop() && clock() < deadline) {
-    const deleted = await database.$transaction((transaction) => purgeExpiredOrderBatch(transaction, cutoff, batchSize));
-    ordersDeleted += deleted;
-    onProgress();
-    if (deleted === 0) {
-      complete = true;
-      break;
+  let deliveriesDeleted = 0;
+  const finish = (complete) => ({ cutoff, ordersDeleted, deliveriesDeleted, failedShopIds, complete });
+
+  for (const shopId of await shopsWithExpiredOrders(database, cutoff, skipShopIds)) {
+    try {
+      for (;;) {
+        if (outOfTurn()) return finish(false);
+        const { selected, deleted } = await database.$transaction(
+          (transaction) => purgeExpiredShopBatch(transaction, shopId, cutoff, batchSize),
+          RETENTION_TRANSACTION_OPTIONS,
+        );
+        ordersDeleted += deleted;
+        onProgress();
+        if (selected < batchSize) break;
+      }
+    } catch (error) {
+      failedShopIds.push(shopId);
+      onShopFailure(shopId, error);
     }
   }
-  if (!complete) return { cutoff, ordersDeleted, deliveriesDeleted: 0, complete };
-  const { count: deliveriesDeleted } = await database.webhookDelivery.deleteMany({
-    where: { receivedAt: { lt: cutoff }, status: { in: ["PROCESSED", "FAILED"] } },
-  });
-  return { cutoff, ordersDeleted, deliveriesDeleted, complete };
+  for (;;) {
+    if (outOfTurn()) return finish(false);
+    const { selected, deleted } = await purgeExpiredDeliveryBatch(database, cutoff, batchSize);
+    deliveriesDeleted += deleted;
+    if (selected === 0) break;
+    onProgress();
+    if (selected < batchSize) break;
+  }
+  return finish(true);
 }

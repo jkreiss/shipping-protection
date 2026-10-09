@@ -90,7 +90,7 @@ describe("worker runtime", () => {
 
   test("purges expired orders at most once per interval", async () => {
     const cutoff = new Date("2024-10-07T00:00:00.000Z");
-    const purgeOrders = vi.fn(async ({ onProgress }) => { onProgress(); return { cutoff, ordersDeleted: 3, deliveriesDeleted: 1, complete: true }; });
+    const purgeOrders = vi.fn(async ({ onProgress }) => { onProgress(); return { cutoff, ordersDeleted: 3, deliveriesDeleted: 1, failedShopIds: [], complete: true }; });
     const runtime = createWorkerRuntime({
       database: databaseWith([]), adminForShop: vi.fn(), purgeOrders, retentionIntervalMs: 1_000, concurrency: 1,
     });
@@ -109,8 +109,8 @@ describe("worker runtime", () => {
   test("continues an unfinished purge on the next pass", async () => {
     const cutoff = new Date("2024-10-07T00:00:00.000Z");
     const purgeOrders = vi.fn()
-      .mockResolvedValueOnce({ cutoff, ordersDeleted: 500, deliveriesDeleted: 0, complete: false })
-      .mockResolvedValueOnce({ cutoff, ordersDeleted: 20, deliveriesDeleted: 4, complete: true });
+      .mockResolvedValueOnce({ cutoff, ordersDeleted: 500, deliveriesDeleted: 0, failedShopIds: [], complete: false })
+      .mockResolvedValueOnce({ cutoff, ordersDeleted: 20, deliveriesDeleted: 4, failedShopIds: [], complete: true });
     const runtime = createWorkerRuntime({
       database: databaseWith([]), adminForShop: vi.fn(), purgeOrders, retentionIntervalMs: 1_000, concurrency: 1,
     });
@@ -137,6 +137,51 @@ describe("worker runtime", () => {
     await runtime.retentionPass(1_500);
 
     expect(purgeOrders).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledWith("retention_purge_failed", expect.any(Error), expect.any(Object));
+  });
+
+  test("skips a failed shop for the rest of the run, then retries it next run", async () => {
+    const cutoff = new Date("2024-10-07T00:00:00.000Z");
+    const failure = new Error("lock timeout");
+    const purgeOrders = vi.fn()
+      .mockImplementationOnce(async ({ onShopFailure }) => {
+        onShopFailure("shop-a", failure);
+        return { cutoff, ordersDeleted: 500, deliveriesDeleted: 0, failedShopIds: ["shop-a"], complete: false };
+      })
+      .mockResolvedValueOnce({ cutoff, ordersDeleted: 10, deliveriesDeleted: 2, failedShopIds: [], complete: true })
+      .mockResolvedValueOnce({ cutoff, ordersDeleted: 0, deliveriesDeleted: 0, failedShopIds: [], complete: true });
+    const runtime = createWorkerRuntime({
+      database: databaseWith([]), adminForShop: vi.fn(), purgeOrders, retentionIntervalMs: 1_000, concurrency: 1,
+    });
+
+    await runtime.retentionPass(5_000);
+    await runtime.retentionPass(5_001);
+    await runtime.retentionPass(6_001);
+
+    expect(reportFailure).toHaveBeenCalledWith("retention_shop_failed", failure, { shopId: "shop-a" });
+    expect(purgeOrders.mock.calls[0][0].skipShopIds).toEqual([]);
+    expect(purgeOrders.mock.calls[1][0].skipShopIds).toEqual(["shop-a"]);
+    expect(purgeOrders.mock.calls[2][0].skipShopIds).toEqual([]);
+    expect(logEvent).toHaveBeenCalledWith("retention_purge_completed", expect.objectContaining({ ordersDeleted: 10, shopsFailed: 1 }));
+  });
+
+  test("keeps skipping a failed shop when a later error aborts the run", async () => {
+    const cutoff = new Date("2024-10-07T00:00:00.000Z");
+    const purgeOrders = vi.fn()
+      .mockImplementationOnce(async ({ onShopFailure }) => {
+        onShopFailure("shop-a", new Error("lock timeout"));
+        throw new Error("delivery sweep failed");
+      })
+      .mockResolvedValueOnce({ cutoff, ordersDeleted: 0, deliveriesDeleted: 0, failedShopIds: [], complete: true });
+    const runtime = createWorkerRuntime({
+      database: databaseWith([]), adminForShop: vi.fn(), purgeOrders,
+      retentionIntervalMs: 10_000, retentionFailureBackoffMs: 500, concurrency: 1,
+    });
+
+    await runtime.retentionPass(1_000);
+    await runtime.retentionPass(1_500);
+
+    expect(purgeOrders.mock.calls[1][0].skipShopIds).toEqual(["shop-a"]);
     expect(reportFailure).toHaveBeenCalledWith("retention_purge_failed", expect.any(Error), expect.any(Object));
   });
 });

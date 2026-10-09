@@ -3,6 +3,7 @@ import {
   MAX_CONSECUTIVE_ORDER_FAILURES, RECONCILIATION_INTERVAL_MS, RECONCILIATION_OVERLAP_MS,
   reconcileOrders, reconciliationDue, shopsToReportBehind, SYNC_BEHIND_MS, SYNC_BEHIND_REPORT_EVERY_MS, syncBehindMinutes,
 } from "./order-reconciliation.server";
+import { retentionCutoff } from "./order-retention.js";
 
 const shopDomain = "one.myshopify.com";
 const minute = 60_000;
@@ -243,6 +244,18 @@ describe("pending refund recheck", () => {
       take: 20,
     });
     expect(args.where.updatedAt.lt.getTime()).toBeLessThanOrEqual(before - RECONCILIATION_INTERVAL_MS + 1000);
+  });
+
+  test("leaves out refunds on orders past retention, which are never stored again", async () => {
+    const { admin } = fakeAdmin([[]]);
+    const { database } = fakeDatabase();
+    database.protectionRefund.findMany = vi.fn(async () => []);
+
+    await reconcileOrders({ admin, shopDomain, database, persist: async () => {} });
+
+    const { where } = database.protectionRefund.findMany.mock.calls[0][0];
+    expect(where.order.shopifyCreatedAt.gte).toBeInstanceOf(Date);
+    expect(Math.abs(where.order.shopifyCreatedAt.gte.getTime() - retentionCutoff(new Date()).getTime())).toBeLessThan(5_000);
   });
 
   test("reports progress after each refund recheck", async () => {

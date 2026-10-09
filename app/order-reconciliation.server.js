@@ -4,6 +4,7 @@ import { adminGraphql, fetchShopifyOrder, normalizeFetchedOrder, ORDERS_QUERY, P
 import { retrySerializationFailures } from "./serializable-retry.server.js";
 import { queueOrderRefresh } from "./webhook-inbox.server.js";
 import { reportFailure } from "./observability.server.js";
+import { retentionCutoff } from "./order-retention.js";
 
 const BACKFILL_MS = 60 * 86400000;
 // Each window starts this far before the last one ended, to catch orders
@@ -227,6 +228,9 @@ export async function reconcileOrders({
     where: {
       shopId: shop.id, status: "PENDING",
       updatedAt: { lt: new Date(Date.now() - RECONCILIATION_INTERVAL_MS) },
+      // An order past retention is never stored again, so its updatedAt would
+      // never move and it would hold the front of the queue until the purge.
+      order: { shopifyCreatedAt: { gte: retentionCutoff() } },
     },
     orderBy: { updatedAt: "asc" },
     select: { orderId: true, order: { select: { shopifyOrderId: true } } },

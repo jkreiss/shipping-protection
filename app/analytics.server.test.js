@@ -27,6 +27,27 @@ describe("analytics database scope", () => {
     expect(result.sync.historyLimited).toBe(false);
   });
 
+  test("flags history as limited for a range reaching past the retention cutoff", async () => {
+    const shop = {
+      id: "shop-1", orderHistoryStartAt: new Date("2024-01-01T00:00:00Z"),
+      orderReconciliationSince: new Date("2026-10-07T00:00:00Z"), orderReconciliationCursor: null,
+    };
+    const database = {
+      shop: { findUnique: vi.fn().mockResolvedValue(shop) },
+      order: { findMany: vi.fn().mockResolvedValue([]) },
+      protectionRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const admin = { graphql: async () => ({ json: async () => ({ data: {
+      shop: { currencyCode: "USD", ianaTimezone: "UTC" },
+    } }) }) };
+    const now = new Date("2026-10-08T12:00:00Z");
+    const read = (start) => readAnalytics({ admin, shopDomain: "one.myshopify.com", database, now,
+      search: new URLSearchParams(`range=custom&start=${start}&end=2026-10-01`) });
+
+    expect((await read("2024-06-01")).sync.historyLimited).toBe(true);
+    expect((await read("2024-10-08")).sync.historyLimited).toBe(false);
+  });
+
   test("overview reads a fixed 30-day window and tenant-scoped recent activity", async () => {
     const order = { name: "#1001", shopifyOrderId: "gid://shopify/Order/1" };
     const database = {

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import process from "node:process";
 import * as Sentry from "@sentry/node";
-import { failureCode, reportCondition, reportFailure, scrubEvent, sentryOptions, expectWorkerLoops, workerHeartbeat } from "./observability.server.js";
+import { errorName, failureCode, reportCondition, reportFailure, scrubEvent, sentryOptions, expectWorkerLoops, workerHeartbeat } from "./observability.server.js";
 
-vi.mock("@sentry/node", () => ({ init: vi.fn(), captureMessage: vi.fn(), captureCheckIn: vi.fn() }));
+vi.mock("@sentry/node", () => ({ init: vi.fn(), captureMessage: vi.fn(), captureException: vi.fn(), captureCheckIn: vi.fn() }));
 
 function capture() {
   const writes = [];
@@ -11,7 +11,11 @@ function capture() {
   return () => writes.map((line) => JSON.parse(line));
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
 
 class PrismaClientInitializationError extends Error {
   constructor(message, errorCode) {
@@ -20,6 +24,9 @@ class PrismaClientInitializationError extends Error {
     this.errorCode = errorCode;
   }
 }
+
+// Like Shopify's API errors: a subclass that never sets name, so name is "Error".
+class HttpResponseError extends Error {}
 
 describe("failure reports", () => {
   test("name the error class and the loop without the error message", () => {
@@ -53,6 +60,67 @@ describe("failure reports", () => {
     expect(logged()[0].errorName).toBe("Error");
   });
 
+  test("name the subclass when the error's name is the generic Error", () => {
+    expect(errorName(new HttpResponseError("order #1001"))).toBe("HttpResponseError");
+    expect(errorName(new Error("x"))).toBe("Error");
+  });
+
+  test("send the exception to Sentry with only code-path tags, and log its event ID", () => {
+    vi.stubEnv("SENTRY_DSN", "https://dsn");
+    Sentry.captureException.mockReturnValue("evt-1");
+    const logged = capture();
+    const error = new HttpResponseError("order #1001 failed");
+
+    reportFailure("webhook_retry", error, {
+      shop: "one.myshopify.com", shopId: "shop-1", shopifyOrderId: "gid://shopify/Order/1001",
+      chargedFeeAmount: "4.00", intent: "anything a form sent", path: "/app/claims/7", topic: "ORDERS_PAID",
+    });
+
+    const [sent, context] = Sentry.captureException.mock.calls[0];
+    expect(context).toEqual({
+      level: "error",
+      tags: { event: "webhook_retry", code: "PROCESSING_ERROR", errorName: "HttpResponseError", topic: "ORDERS_PAID" },
+      fingerprint: ["{{ default }}", "webhook_retry"],
+    });
+    expect(sent).not.toBe(error);
+    expect(sent).toMatchObject({ name: "HttpResponseError", message: "webhook_retry" });
+    expect(sent.stack).not.toContain("order #1001");
+    expect(sent.stack.split("\n").slice(1)).toEqual(error.stack.split("\n").slice(1));
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
+    expect(logged()[0]).toMatchObject({ event: "webhook_retry", shopId: "shop-1", sentryEventId: "evt-1" });
+  });
+
+  test("send each report of the same error, which Sentry would otherwise drop as already captured", () => {
+    vi.stubEnv("SENTRY_DSN", "https://dsn");
+    capture();
+    const error = new Error("Shopify returned no GraphQL data.");
+
+    reportFailure("shopify_graphql_failed", error, { operation: "OrderForIngestion" });
+    reportFailure("webhook_terminal", error, { topic: "ORDERS_PAID" });
+
+    const [[first], [second]] = Sentry.captureException.mock.calls;
+    expect(first).not.toBe(second);
+    expect([first.message, second.message]).toEqual(["shopify_graphql_failed", "webhook_terminal"]);
+  });
+
+  test("send a stand-in exception for a thrown non-Error value", () => {
+    vi.stubEnv("SENTRY_DSN", "https://dsn");
+    capture();
+    reportFailure("worker_loop_failed", "a string with order data", { loop: "delivery" });
+    const [sent, context] = Sentry.captureException.mock.calls[0];
+    expect(sent).toBeInstanceOf(Error);
+    expect(sent.message).toBe("worker_loop_failed");
+    expect(context.tags).toEqual({ event: "worker_loop_failed", code: "PROCESSING_ERROR", errorName: "Unknown", loop: "delivery" });
+  });
+
+  test("send nothing to Sentry and log no event ID without a DSN", () => {
+    vi.stubEnv("SENTRY_DSN", "");
+    const logged = capture();
+    reportFailure("worker_loop_failed", new Error("x"));
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(logged()[0]).not.toHaveProperty("sentryEventId");
+  });
+
   test("reports non-Error values without failing", () => {
     const logged = capture();
     reportFailure("worker_loop_failed", "a string with order data");
@@ -79,6 +147,30 @@ describe("Sentry events", () => {
     expect(event).not.toHaveProperty("extra");
     expect(event).not.toHaveProperty("contexts");
     expect(JSON.stringify(event)).not.toContain("jane@example.com");
+  });
+
+  test("puts the event name in the exception value and drops free-text types, user and host", () => {
+    const event = scrubEvent({
+      tags: { event: "webhook_terminal" },
+      user: { ip_address: "1.2.3.4" },
+      server_name: "railway-host",
+      exception: { values: [
+        { type: "HttpResponseError", value: "order #1001 failed" },
+        { type: "jane@example.com", value: "cause with data" },
+      ] },
+    });
+    expect(event.exception.values).toEqual([
+      { type: "HttpResponseError", value: "webhook_terminal" },
+      { type: "Error", value: "webhook_terminal" },
+    ]);
+    expect(event).not.toHaveProperty("user");
+    expect(event).not.toHaveProperty("server_name");
+    expect(JSON.stringify(event)).not.toContain("jane@example.com");
+  });
+
+  test("scrub the exception value when the event tag is not a plain event name", () => {
+    const event = scrubEvent({ tags: { event: "order 1001 failed" }, exception: { values: [{ type: "Error", value: "x" }] } });
+    expect(event.exception.values[0].value).toBe("[scrubbed]");
   });
 
   test("handle events that have no exception", () => {
@@ -152,5 +244,14 @@ describe("condition reports", () => {
     expect(entry).toMatchObject({ level: "error", event: "order_sync_behind", shopId: "shop_1", minutesBehind: 45 });
     expect(entry).not.toHaveProperty("code");
     expect(entry).not.toHaveProperty("errorName");
+  });
+
+  test("send Sentry only the event name, keeping shop fields in the log", () => {
+    vi.stubEnv("SENTRY_DSN", "https://dsn");
+    Sentry.captureMessage.mockReturnValue("evt-2");
+    const logged = capture();
+    reportCondition("order_sync_behind", { shopId: "shop_1", minutesBehind: 45 });
+    expect(Sentry.captureMessage).toHaveBeenCalledWith("order_sync_behind", { level: "error", tags: { event: "order_sync_behind" } });
+    expect(logged()[0]).toMatchObject({ shopId: "shop_1", sentryEventId: "evt-2" });
   });
 });

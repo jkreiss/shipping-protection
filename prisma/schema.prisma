@@ -198,6 +198,8 @@ model WebhookDelivery {
   @@index([shopId, topic, status])
   @@index([shopId, shopifyOrderId, status])
   @@index([status, nextAttemptAt, leaseUntil])
+  // The retention purge sweeps finished deliveries received before its cutoff.
+  @@index([status, receivedAt])
 }
 
 model Order {
@@ -239,7 +241,8 @@ model Order {
   @@unique([id, shopId])
   @@index([shopId, shopifyUpdatedAt, shopifyOrderId])
   @@index([shopId, firstPaidAt])
-  @@index([shopifyCreatedAt])
+  // The retention purge finds each shop's orders placed before its cutoff.
+  @@index([shopId, shopifyCreatedAt])
 }
 
 model ProtectionRefund {

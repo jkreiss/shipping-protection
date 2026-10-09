@@ -4,7 +4,7 @@ import prisma from "../app/db.server.js";
 import { persistNormalizedOrder } from "../app/order-ingestion.server.js";
 import { normalizeGraphqlOrder } from "../app/order-normalization.js";
 import { reconcileOrders } from "../app/order-reconciliation.server.js";
-import { purgeExpiredOrderBatch } from "../app/order-retention.server.js";
+import { purgeExpiredDeliveryBatch, purgeExpiredShopBatch, shopsWithExpiredOrders } from "../app/order-retention.server.js";
 import { redactCustomerOrders, redactShopData } from "../app/shop.server.js";
 
 const rollback = new Error("POSTGRES_VERIFICATION_ROLLBACK");
@@ -348,7 +348,10 @@ try {
       shopId: otherShop.id, protectionPurchaseId: expiredPurchase.id, type: "LOST",
     } });
     await transaction.claimEvent.create({ data: { shopId: otherShop.id, claimId: expiredClaim.id, type: "SUBMITTED" } });
-    assert.equal(await purgeExpiredOrderBatch(transaction, new Date("2024-06-01T00:00:00.000Z")), 1);
+    const purgeCutoff = new Date("2024-06-01T00:00:00.000Z");
+    assert.ok((await shopsWithExpiredOrders(transaction, purgeCutoff)).includes(otherShop.id));
+    assert.ok(!(await shopsWithExpiredOrders(transaction, purgeCutoff, [otherShop.id])).includes(otherShop.id));
+    assert.deepEqual(await purgeExpiredShopBatch(transaction, otherShop.id, purgeCutoff), { selected: 1, deleted: 1 });
     assert.equal(await transaction.claim.count({ where: { id: expiredClaim.id } }), 0);
     assert.equal(await transaction.order.count({ where: { id: expiredOrder.id } }), 0);
     assert.equal(await transaction.orderLine.count({ where: { orderId: expiredOrder.id } }), 0);
@@ -358,6 +361,13 @@ try {
     assert.equal(await transaction.claimEvent.count({ where: { claimId: expiredClaim.id } }), 0);
     assert.equal(await transaction.order.count({ where: { id: otherOrder.id } }), 1);
     assert.equal(await transaction.order.count({ where: { id: paidOrder.id } }), 1);
+    const oldDelivery = await transaction.webhookDelivery.create({ data: {
+      shopId: otherShop.id, shopifyOrderId: "gid://shopify/Order/8999", webhookId: "expired-orphan-delivery",
+      topic: "ORDERS_PAID", status: "PROCESSED", receivedAt: expiredAt,
+    } });
+    const sweep = await purgeExpiredDeliveryBatch(transaction, purgeCutoff, 10_000);
+    assert.ok(sweep.deleted >= 1);
+    assert.equal(await transaction.webhookDelivery.count({ where: { id: oldDelivery.id } }), 0);
     // Customer redaction removes only the named order in the requesting shop,
     // including its confirmed purchase and append-only claim events.
     assert.equal(await redactCustomerOrders(transaction, shop.shopDomain, [9001]), 1);

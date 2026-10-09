@@ -120,8 +120,10 @@ The worker also deletes order records placed more than 24 months ago, with
 their purchases, refunds, claims, and webhook deliveries: on start, then daily.
 This is the privacy policy's retention ceiling, and ingestion never stores an
 order already past it. Watch `retention_purge_completed`. A backlog runs in
-one-minute turns between reconciliation passes (`retention_purge_paused`);
-`retention_purge_failed` retries after an hour.
+one-minute turns between reconciliation passes (`retention_purge_paused`). A
+shop whose purge fails is reported as `retention_shop_failed`, skipped for the
+rest of that run, and retried the next day; `retention_purge_failed` (the whole
+run) retries after an hour.
 
 ## Merchant analytics
 
@@ -192,10 +194,12 @@ deploy separately through Shopify CLI. The load environment also needs a
    pooler's pool size (**Database → Settings**). With a pool size of 15: web
    `3`, worker `4` with `WORKER_CONCURRENCY=2` (7 normally, 14 during a deploy).
 
-   Send Sentry alerts for `webhook_terminal` and `protection_price_unmatched` to
-   the operator. A burst of `protection_price_unmatched` (say 3 or more in an
-   hour) usually means the Cart Transform failed and protection is being charged
-   $0.00 on every cart.
+   Send Sentry alerts for the `event` tags `webhook_terminal` and
+   `protection_price_unmatched` to the operator. Sentry carries only the error
+   class, event name and code path; find the shop and order in the Railway log
+   line with the same `sentryEventId`. A burst of `protection_price_unmatched`
+   (say 3 or more in an hour) usually means the Cart Transform failed and
+   protection is being charged $0.00 on every cart.
 3. On the web service, set **Pre-Deploy Command** to `npx prisma migrate deploy`,
    start command to `npm run start`, and health check path to `/healthz`. Create
    the worker from the same image with start command `npm run worker` and no
