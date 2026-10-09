@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   InstallationAccessLostError,
+  deleteShopData,
   ensureInstalledShop,
   recordGrantedScopes,
   redactCustomerOrders,
@@ -389,5 +390,87 @@ describe("Shopify identity update", () => {
     expect(
       await ensureInstalledShop("one.myshopify.com", "gid://shopify/Shop/2", db),
     ).toEqual({ ...installed, shopGid: "gid://shopify/Shop/2" });
+  });
+});
+
+describe("shop redaction", () => {
+  function shopDatabase(seen, locked = seen) {
+    const deleted = () => vi.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue(locked ? [locked] : []),
+      $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+      shop: {
+        findUnique: vi.fn().mockResolvedValue(locked && { id: "shop-1" }),
+        update: vi.fn().mockResolvedValue({}),
+        deleteMany: deleted(),
+      },
+      claimEvent: { deleteMany: deleted() },
+      claim: { deleteMany: deleted() },
+      protectionRefund: { deleteMany: deleted() },
+      protectionPurchase: { deleteMany: deleted() },
+      orderLine: { deleteMany: deleted() },
+      order: { deleteMany: deleted() },
+      pricingRule: { deleteMany: deleted() },
+      session: { deleteMany: deleted() },
+    };
+    const db = {
+      shop: { findUnique: vi.fn().mockResolvedValue(seen) },
+      $transaction: (run) => run(tx),
+    };
+    return { tx, db };
+  }
+  const installed = { installationState: "INSTALLED", installationGeneration: 2 };
+  const uninstalled = { installationState: "UNINSTALLED", installationGeneration: 3 };
+
+  test("keeps the data of a shop Shopify says is installed", async () => {
+    const { tx, db } = shopDatabase(installed);
+    const isInstalled = vi.fn().mockResolvedValue(true);
+    expect(await deleteShopData("one.myshopify.com", { isInstalled, database: db })).toBe(false);
+    expect(isInstalled).toHaveBeenCalledWith("one.myshopify.com");
+    expect(tx.shop.deleteMany).not.toHaveBeenCalled();
+    expect(tx.order.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test("deletes a shop marked installed whose uninstall was lost", async () => {
+    const { tx, db } = shopDatabase(installed);
+    const isInstalled = vi.fn().mockResolvedValue(false);
+    expect(await deleteShopData("one.myshopify.com", { isInstalled, database: db })).toBe(true);
+    expect(tx.order.deleteMany).toHaveBeenCalledWith({ where: { shopId: "shop-1" } });
+  });
+
+  test("deletes an uninstalled shop without asking Shopify", async () => {
+    const { tx, db } = shopDatabase(uninstalled);
+    const isInstalled = vi.fn();
+    expect(await deleteShopData("one.myshopify.com", { isInstalled, database: db })).toBe(true);
+    expect(isInstalled).not.toHaveBeenCalled();
+    expect(tx.shop.deleteMany).toHaveBeenCalledWith({
+      where: { shopDomain: "one.myshopify.com" },
+    });
+  });
+
+  test("keeps the data when a reinstall finishes during the check", async () => {
+    const { tx, db } = shopDatabase(uninstalled, { installationState: "INSTALLED", installationGeneration: 4 });
+    expect(await deleteShopData("one.myshopify.com", { isInstalled: vi.fn(), database: db })).toBe(false);
+    expect(tx.shop.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test("still deletes when an uninstall lands during the check", async () => {
+    const { tx, db } = shopDatabase(installed, uninstalled);
+    const isInstalled = vi.fn().mockResolvedValue(false);
+    expect(await deleteShopData("one.myshopify.com", { isInstalled, database: db })).toBe(true);
+    expect(tx.shop.deleteMany).toHaveBeenCalled();
+  });
+
+  test("propagates an inconclusive check so Shopify retries", async () => {
+    const { tx, db } = shopDatabase(installed);
+    const isInstalled = vi.fn().mockRejectedValue(new Error("timeout"));
+    await expect(deleteShopData("one.myshopify.com", { isInstalled, database: db })).rejects.toThrow("timeout");
+    expect(tx.shop.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test("a shop that is not stored is a no-op", async () => {
+    const { tx, db } = shopDatabase(null);
+    await expect(deleteShopData("gone.myshopify.com", { isInstalled: vi.fn(), database: db })).resolves.toBe(false);
+    expect(tx.shop.deleteMany).not.toHaveBeenCalled();
   });
 });

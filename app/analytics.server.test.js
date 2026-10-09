@@ -24,6 +24,8 @@ describe("analytics database scope", () => {
       gte: new Date("2026-09-09T00:00:00Z"), lt: new Date("2026-09-14T00:00:00Z"),
     });
     expect(refundWhere.shopId).toBe("shop-1");
+    // Unresolved refunds are not limited to the range, so old ones stay visible.
+    expect(refundWhere.OR[1]).toEqual({ status: { in: ["PENDING", "UNATTRIBUTED"] } });
     expect(result.sync.historyLimited).toBe(false);
   });
 

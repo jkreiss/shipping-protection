@@ -75,6 +75,26 @@ function shopMoney(moneySet, fallback = "0") {
   return moneySet?.shopMoney?.amount ?? fallback;
 }
 
+// What a line was discounted by in total, scaled. `discountedTotalSet` leaves
+// out order-level discounts (and code-based ones by default), so the paid amount
+// comes from the line's discount allocations, which cover every discount
+// application. The larger of the two discounts is used, so the amount can only
+// be lower than `discountedTotalSet` alone, never higher. A payload without
+// allocations, or with one that can't be read in the shop currency, keeps
+// `discountedTotalSet`: losing the whole order over one allocation would be worse.
+function lineDiscountScaled(line, preDiscountAmount, currencyCode) {
+  const pre = moneyToScaled(preDiscountAmount);
+  const lineLevel = pre - moneyToScaled(shopMoney(line.discountedTotalSet, preDiscountAmount));
+  let allocated = 0n;
+  for (const allocation of line.discountAllocations ?? []) {
+    const money = allocation.allocatedAmountSet?.shopMoney;
+    if (!money || money.currencyCode !== currencyCode) return lineLevel;
+    allocated += moneyToScaled(money.amount);
+  }
+  const total = allocated > lineLevel ? allocated : lineLevel;
+  return total > pre ? pre : total;
+}
+
 export function normalizeGraphqlOrder(order) {
   if (!order || typeof order !== "object" || !Array.isArray(order.lineItems?.nodes)) {
     throw new Error("Malformed Admin GraphQL order.");
@@ -111,7 +131,7 @@ export function normalizeGraphqlOrder(order) {
     }
     const unit = shopMoney(line.originalUnitPriceSet);
     const preDiscountAmount = multiplyMoney(unit, quantity);
-    const finalAmount = shopMoney(line.discountedTotalSet, preDiscountAmount);
+    const discount = lineDiscountScaled(line, preDiscountAmount, currencyCode);
     return {
       shopifyLineItemId: requiredString(line.id, "line item id"),
       productId: line.product?.id ?? null,
@@ -122,10 +142,8 @@ export function normalizeGraphqlOrder(order) {
       currencyCode,
       originalUnitAmount: scaledToMoney(moneyToScaled(unit)),
       preDiscountAmount,
-      totalDiscountAmount: scaledToMoney(
-        moneyToScaled(preDiscountAmount) - moneyToScaled(finalAmount),
-      ),
-      finalAmount: scaledToMoney(moneyToScaled(finalAmount)),
+      totalDiscountAmount: scaledToMoney(discount),
+      finalAmount: scaledToMoney(moneyToScaled(preDiscountAmount) - discount),
       protectionAttributes: allowListedAttributes(line.customAttributes),
       // Shopify rejects Cart Transform operations on carts with a selling plan, so those carts keep the $0.00 price.
       hasSellingPlan: Boolean(line.sellingPlan),

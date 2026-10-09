@@ -46,7 +46,9 @@ async function readShopAnalytics({ admin, shopDomain, shop, search, database, no
     } }),
     database.protectionRefund.findMany({ where: { shopId: shop.id,
       ...(!includeTest ? { order: { isTest: false } } : {}),
-      OR: [{ succeededAt: dateFilter }, { status: { in: ["PENDING", "UNATTRIBUTED"] }, createdAt: dateFilter }],
+      // Unresolved refunds stay in the review notice whatever the range, until
+      // they settle or retention removes them.
+      OR: [{ succeededAt: dateFilter }, { status: { in: ["PENDING", "UNATTRIBUTED"] } }],
     }, select: {
       status: true, amount: true, currencyCode: true, succeededAt: true,
       order: { select: { isTest: true } },

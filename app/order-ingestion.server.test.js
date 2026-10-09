@@ -72,7 +72,21 @@ function transaction(rules = [rule]) {
   });
   const createMany = vi.fn();
   let storedOrder = null;
+  const refunds = new Map();
   return {
+    protectionRefund: {
+      upsert: vi.fn(async ({ where, create, update }) => {
+        const key = where.shopId_shopifyRefundId.shopifyRefundId;
+        refunds.set(key, refunds.has(key) ? { ...refunds.get(key), ...update } : { ...create });
+      }),
+      updateMany: vi.fn(async ({ where, data }) => {
+        for (const id of where.shopifyRefundId.in) {
+          const row = refunds.get(id);
+          if (row && where.status.in.includes(row.status)) refunds.set(id, { ...row, ...data });
+        }
+      }),
+    },
+    storedRefunds: () => Object.fromEntries(refunds),
     pricingRule: { findMany: vi.fn().mockResolvedValue(rules) },
     order: {
       findUnique: vi.fn(async () => storedOrder),
@@ -579,5 +593,86 @@ describe("live price check", () => {
     } finally {
       events.restore();
     }
+  });
+});
+
+describe("order-level discounts", () => {
+  test("records the fee collected after an order discount but still matches the price charged", async () => {
+    const events = stderrEvents();
+    try {
+      const tx = transaction();
+      const paid = normalizedOrder(attributed);
+      paid.paidAt = new Date("2026-09-23T00:02:00Z");
+      // A 20% order discount: checkout allocates a share to each line, and
+      // normalization has already taken it off finalAmount. The list prices the
+      // Cart Transform charged against are unchanged.
+      Object.assign(paid.lines[0], { totalDiscountAmount: "20.0000", finalAmount: "80.0000" });
+      Object.assign(paid.lines[1], { totalDiscountAmount: "0.0500", finalAmount: "0.2000" });
+      const afterCommit = [];
+
+      await persistNormalizedOrder(tx, shop, paid, afterCommit);
+      for (const report of afterCommit) report();
+
+      expect(tx.storedPurchase()).toMatchObject({
+        feeAmount: "0.2000", coveredMerchandiseAmount: "80.0000", eligibleSubtotalAmount: "100.0000",
+        pricingCheck: "MATCHED",
+      });
+      expect(tx.storedOrder()).toMatchObject({ paidProtected: true, paidProtectionFee: "0.2000" });
+      expect(events.named("protection_price_unmatched")).toEqual([]);
+    } finally {
+      events.restore();
+    }
+  });
+});
+
+describe("protection refund rows", () => {
+  const protectionLine = "gid://shopify/LineItem/2";
+  const money = (amount) => ({ shopMoney: { amount, currencyCode: "AUD" } });
+  function refundOf({ transactionStatus, total }) {
+    return {
+      id: "gid://shopify/Refund/1",
+      totalRefundedSet: money(total),
+      refundLineItems: { nodes: [{ lineItem: { id: protectionLine }, quantity: 1, subtotalSet: money("0.25") }] },
+      transactions: { nodes: [{
+        kind: "REFUND", status: transactionStatus, processedAt: "2026-09-23T00:05:00Z",
+        amountSet: money(total),
+      }] },
+    };
+  }
+  function paidOrder(refund, updatedAt) {
+    const order = normalizedOrder(attributed);
+    order.paidAt = new Date("2026-09-23T00:02:00Z");
+    order.shopifyUpdatedAt = new Date(updatedAt);
+    order.refunds = [refund];
+    return order;
+  }
+
+  test("marks a pending refund ignored once its transaction fails and nothing was refunded", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, paidOrder(refundOf({ transactionStatus: "PENDING", total: "0.25" }), "2026-09-23T00:06:00Z"));
+    expect(tx.storedRefunds()["gid://shopify/Refund/1"]).toMatchObject({ status: "PENDING", amount: "0.2500" });
+
+    await persistNormalizedOrder(tx, shop, paidOrder(refundOf({ transactionStatus: "FAILURE", total: "0.00" }), "2026-09-23T00:07:00Z"));
+
+    expect(tx.storedRefunds()["gid://shopify/Refund/1"]).toMatchObject({ status: "IGNORED", amount: "0.2500", succeededAt: null });
+  });
+
+  test("an unprotected order writes nothing for its ignored refunds", async () => {
+    const tx = transaction();
+    const order = normalizedOrder();
+    order.refunds = [refundOf({ transactionStatus: "SUCCESS", total: "0.25" })];
+    await persistNormalizedOrder(tx, shop, order);
+    expect(tx.protectionRefund.updateMany).not.toHaveBeenCalled();
+    expect(tx.storedRefunds()).toEqual({});
+  });
+
+  test("never removes a confirmed refund, even if a later snapshot classifies it as ignored", async () => {
+    const tx = transaction();
+    await persistNormalizedOrder(tx, shop, paidOrder(refundOf({ transactionStatus: "SUCCESS", total: "0.25" }), "2026-09-23T00:06:00Z"));
+    expect(tx.storedRefunds()["gid://shopify/Refund/1"]).toMatchObject({ status: "CONFIRMED", amount: "0.2500" });
+
+    await persistNormalizedOrder(tx, shop, paidOrder(refundOf({ transactionStatus: "FAILURE", total: "0.00" }), "2026-09-23T00:07:00Z"));
+
+    expect(tx.storedRefunds()["gid://shopify/Refund/1"]).toMatchObject({ status: "CONFIRMED", amount: "0.2500" });
   });
 });

@@ -44,6 +44,10 @@ function protectionAttribution(line, rules) {
 // attributed rule's rate? The Function prices in the customer's (presentment)
 // currency, so compare there when Shopify returned those amounts. A mismatch
 // usually means the Function failed and the variant's fallback price applied.
+// This compares list unit prices (originalUnitPriceSet), which are before every
+// discount: the Cart Transform prices the line before an order-level discount
+// takes its share. Never compare `finalAmount` here; that is what the buyer paid
+// after all discounts, and is what the recorded fee and covered amounts use.
 export function livePriceCheck(normalized, eligibleLines, protectedLines, rule) {
   if (!rule) return { pricingCheck: null, expectedFee: null, chargedFee: null, currencyCode: null };
   const relevant = [...eligibleLines, ...protectedLines];
@@ -216,6 +220,8 @@ export async function persistNormalizedOrder(
     const eligibleSubtotal = lines
       .filter((line) => !line.isProtection && line.requiresShipping)
       .reduce((sum, line) => sum + survivingShare(line, line.preDiscountAmount), 0n);
+    // The fee actually collected: after every discount, including the share of
+    // an order-level discount that checkout allocates to the protection line.
     const fee = protectedLines.reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n);
     const { pricingCheck, expectedFee, chargedFee, currencyCode: checkedCurrency } = livePriceCheck(
       normalized,
@@ -276,6 +282,7 @@ async function persistOrderRefunds(transaction, shop, order, normalized, lines, 
   const protectionLineIds = paidPurchase?.protectionLineIds ?? [];
   const currencyCode = paidPurchase?.currencyCode ?? normalized.currencyCode;
   const knownLineIds = [...new Set([...lines.map((line) => line.shopifyLineItemId), ...protectionLineIds])];
+  const ignoredRefundIds = [];
   for (const refund of normalized.refunds) {
     const result = classifyProtectionRefund(refund, {
       currencyCode,
@@ -283,12 +290,26 @@ async function persistOrderRefunds(transaction, shop, order, normalized, lines, 
       knownLineIds,
       protectedOrder: Boolean(paidPurchase),
     });
-    if (result.status === "IGNORED") continue;
+    if (result.status === "IGNORED") {
+      ignoredRefundIds.push(refund.id);
+      continue;
+    }
     await transaction.protectionRefund.upsert({
       where: { shopId_shopifyRefundId: { shopId: shop.id, shopifyRefundId: refund.id } },
       create: { shopId: shop.id, orderId: order.id, shopifyRefundId: refund.id,
         status: result.status, amount: result.amount, currencyCode, succeededAt: result.succeededAt },
       update: { status: result.status, amount: result.amount, currencyCode, succeededAt: result.succeededAt },
+    });
+  }
+  // A refund stored while its money was still moving can turn out to owe nothing
+  // (for example, its transaction failed). Mark that row IGNORED so it leaves the
+  // recheck queue and the totals but stays on record; a settled (CONFIRMED)
+  // refund is never changed. Only a protected order has stored refunds.
+  if (paidPurchase && ignoredRefundIds.length > 0) {
+    await transaction.protectionRefund.updateMany({
+      where: { shopId: shop.id, orderId: order.id, shopifyRefundId: { in: ignoredRefundIds },
+        status: { in: ["PENDING", "UNATTRIBUTED"] } },
+      data: { status: "IGNORED", succeededAt: null },
     });
   }
 }

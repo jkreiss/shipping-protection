@@ -56,6 +56,7 @@ enum ProtectionRefundStatus {
   PENDING
   CONFIRMED
   UNATTRIBUTED
+  IGNORED
 }
 
 enum ClaimType {

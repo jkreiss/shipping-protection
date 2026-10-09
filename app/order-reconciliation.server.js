@@ -1,9 +1,9 @@
 import prisma from "./db.server.js";
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
-import { adminGraphql, fetchShopifyOrder, normalizeFetchedOrder, ORDERS_QUERY, PermanentOrderError } from "./order-shopify.server.js";
+import { adminGraphql, fetchShopifyOrder, normalizeFetchedOrder, ORDERS_QUERY, OrderUnavailableError, PermanentOrderError } from "./order-shopify.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
 import { queueOrderRefresh } from "./webhook-inbox.server.js";
-import { reportFailure } from "./observability.server.js";
+import { logEvent, reportFailure } from "./observability.server.js";
 import { retentionCutoff } from "./order-retention.js";
 
 const BACKFILL_MS = 60 * 86400000;
@@ -242,6 +242,19 @@ export async function reconcileOrders({
       const order = await fetchShopifyOrder(admin, entry.order.shopifyOrderId, options);
       await storeOrder(database, persist, shop, order);
     } catch (error) {
+      if (error instanceof OrderUnavailableError) {
+        // Deleted, or older than the 60 days this app can read: Shopify's answer
+        // won't change, so stop polling (the worker treats it the same way). The
+        // refund's money was never seen to settle, so it must not count as
+        // refunded; UNATTRIBUTED keeps the row and its amount in the dashboard's
+        // review notice for the merchant to check in Shopify, and is not rechecked.
+        await database.protectionRefund.updateMany({
+          where: { shopId: shop.id, orderId: entry.orderId, status: "PENDING" },
+          data: { status: "UNATTRIBUTED" },
+        });
+        logEvent("refund_recheck_order_unavailable", { shopId: shop.id, shopifyOrderId: entry.order.shopifyOrderId });
+        continue;
+      }
       reportFailure("refund_recheck_failed", error, { shopId: shop.id, shopifyOrderId: entry.order.shopifyOrderId });
       // Move it to the back of the queue so one bad order can't hold the front.
       await database.protectionRefund.updateMany({

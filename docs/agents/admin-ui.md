@@ -54,6 +54,18 @@ a change is saving.
 The Overview also shows "Off" with a link to manage protection in Settings;
 reserve "Finish setup" for stores whose setup actually needs attention.
 
+Errors: the `/app` route's `ErrorBoundary` passes thrown route responses
+(`isRouteErrorResponse`) to Shopify's `boundary.error` and renders a plain "This page couldn't load"
+page with the nav and a Reload button for everything else (a GraphQL throttle
+or timeout in a loader, a database error). It never shows the error: React
+Router sanitizes loader errors in production, so even a `UserFacingError`
+message does not reach the browser, and other messages may hold Shopify or
+database details. Server-side `handleError` in `entry.server.jsx` reports the
+failure; boundaries must not report it again. `root.jsx` has a last-resort
+`ErrorBoundary` with a minimal document: "Page not found" with a link to `/app`
+for a 404, otherwise a link that retries the same URL. Both links keep the query
+string, which carries the shop and host that embedded authentication needs.
+
 Copy:
 
 - plain language merchants understand, with no basis points or internal jargon
