@@ -23,10 +23,17 @@ const definitions = {
 test.each([
   "shopify.app.toml",
   "shopify.app.production.toml",
+  "shopify.app.staging.toml",
   "shopify.app.staging.toml.example",
 ])("%s declares the same protection contracts", (file) => {
   expect(parseTOML(read(file)).shop.metafields.app).toEqual(definitions);
 });
+test.each(["shopify.app.staging.toml", "shopify.app.staging.toml.example"])(
+  "%s deploys its app configuration",
+  (file) => {
+    expect(parseTOML(read(file)).build.include_config_on_deploy).toBe(true);
+  },
+);
 test("checkout subscribes to both app-owned protection contracts", () => {
   expect(
     parseTOML(read("extensions/insurance-ext/shopify.extension.toml"))

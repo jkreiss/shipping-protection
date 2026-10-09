@@ -3,7 +3,7 @@ import {
   assertSettingsLease,
   settingsLeaseContext,
 } from "./settings-lease-context.server.js";
-import { reportFailure } from "./observability.server.js";
+import { logEvent, reportFailure } from "./observability.server.js";
 import prisma from "./db.server.js";
 import { UserFacingError } from "./user-facing-error.js";
 
@@ -32,6 +32,21 @@ export class InstallationAccessLostError extends Error {
   }
 }
 
+// The Admin API shop must be the shop the session authenticated, so a token
+// can't publish one shop's configuration under another shop's records.
+export function assertSessionShop(core, shopDomain) {
+  if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
+}
+
+// Whether a Shop row is installed and, when a generation is given, still the
+// installation that generation was read from (no uninstall or reinstall since).
+export function isInstalledAtGeneration(shop, expectedGeneration) {
+  return Boolean(
+    shop && shop.installationState === "INSTALLED" &&
+    (expectedGeneration === undefined || shop.installationGeneration === expectedGeneration),
+  );
+}
+
 export async function ensureInstalledShop(
   shopDomain,
   shopGid = undefined,
@@ -39,10 +54,7 @@ export async function ensureInstalledShop(
   expectedGeneration = undefined,
 ) {
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (
-    !shop || shop.installationState !== "INSTALLED" ||
-    (expectedGeneration !== undefined && shop.installationGeneration !== expectedGeneration)
-  )
+  if (!isInstalledAtGeneration(shop, expectedGeneration))
     throw new InstallationAccessLostError();
   if (!shopGid || shop.shopGid === shopGid) return shop;
   return database.$transaction(async (transaction) => {
@@ -80,8 +92,34 @@ export async function markShopUninstalled(shopDomain, database = prisma) {
   });
 }
 
-export async function deleteShopData(shopDomain) {
-  await prisma.$transaction((transaction) => redactShopData(transaction, shopDomain));
+// shop/redact is delivered at least 48 hours after uninstall and can be retried,
+// so it can follow a reinstall. A row still marked INSTALLED can also be one
+// whose app/uninstalled delivery was lost, so Shopify decides: isInstalled asks
+// it with the stored token, and data is kept only when the app can still reach
+// the shop. isInstalled throws when it can't tell, so Shopify retries the
+// webhook. Returns whether the shop's data was deleted.
+export async function deleteShopData(shopDomain, { isInstalled, database = prisma }) {
+  const seen = await database.shop.findUnique({
+    where: { shopDomain },
+    select: { installationState: true, installationGeneration: true },
+  });
+  if (!seen) return false;
+  if (seen.installationState === "INSTALLED" && (await isInstalled(shopDomain))) {
+    logEvent("shop_redact_skipped_installed", { shop: shopDomain });
+    return false;
+  }
+  return database.$transaction(async (transaction) => {
+    const [shop] =
+      await transaction.$queryRaw`SELECT "installationState", "installationGeneration" FROM "Shop" WHERE "shopDomain" = ${shopDomain} FOR UPDATE`;
+    if (!shop) return false;
+    // A reinstall finished while Shopify was being asked.
+    if (shop.installationState === "INSTALLED" && shop.installationGeneration !== seen.installationGeneration) {
+      logEvent("shop_redact_skipped_installed", { shop: shopDomain });
+      return false;
+    }
+    await redactShopData(transaction, shopDomain);
+    return true;
+  });
 }
 
 export async function redactShopData(transaction, shopDomain) {

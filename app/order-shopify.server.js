@@ -5,6 +5,7 @@ import { adminGraphql } from "./shopify/admin-graphql.server.js";
 export const LINE_FIELDS = `id quantity currentQuantity requiresShipping
   originalUnitPriceSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
   discountedTotalSet { shopMoney { amount currencyCode } }
+  discountAllocations { allocatedAmountSet { shopMoney { amount currencyCode } } }
   product { id } variant { id } customAttributes { key value }
   sellingPlan { sellingPlanId }`;
 export const REFUND_LINE_FIELDS = `lineItem { id } quantity subtotalSet { shopMoney { amount currencyCode } }`;

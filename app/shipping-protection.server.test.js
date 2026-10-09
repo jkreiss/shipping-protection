@@ -62,6 +62,7 @@ vi.mock("./merchant/configuration.server", () => ({
 }));
 
 import { settingsLeaseContext } from "./settings-lease-context.server";
+import { InstallationAccessLostError } from "./shop.server";
 import { activatePricingRule, disableShippingProtection, readShippingProtectionState, setupShippingProtection } from "./shipping-protection.server";
 
 beforeEach(() => {
@@ -217,6 +218,58 @@ describe("turning shipping protection off", () => {
     const state = await disableShippingProtection({}, "one.myshopify.com");
 
     expect(state.pricing).toMatchObject({ ruleId: "rule-1", ruleVersion: 3, rateBasisPoints: 40 });
+  });
+
+  test("setup adopts a newer rate that reached checkout before republishing", async () => {
+    // A v4 save timed out after Shopify applied it to the pricing function, so
+    // the database still has v3 active while checkout charges v4.
+    const newer = { ...contract, ruleId: "rule-2", ruleVersion: 4, rateBasisPoints: 60 };
+    core.transformConfig = { ...newer };
+    mocks.reconcilePublishedPricingRule.mockImplementation(async (_domain, snapshot) => {
+      if (snapshot.ruleId === "rule-2") {
+        mocks.getActivePricingRule.mockResolvedValue({
+          ...ruleFor(contract.productId, contract.variantId), ruleId: "rule-2", version: 4, rateBasisPoints: 60,
+        });
+      }
+    });
+    mocks.repairProduct.mockResolvedValue({ product: { id: contract.productId }, variantId: contract.variantId });
+    mocks.ensureTransform.mockResolvedValue({ id: "transform-1" });
+    mocks.loadProduct.mockResolvedValue({ status: "UNLISTED", variantsCount: { count: 1 }, variants: { nodes: [{}] } });
+    mocks.publishSnapshot.mockImplementation(async (_admin, snapshot) => {
+      core.shopConfig = snapshot;
+      core.transformConfig = snapshot;
+    });
+    mocks.enableShopProtection.mockResolvedValue({
+      protectionEnabled: true, protectionRateEditable: true, attachmentStrategy: "CHECKOUT_UI_CART_TRANSFORM",
+    });
+
+    const state = await setupShippingProtection({}, "one.myshopify.com");
+
+    expect(mocks.reconcilePublishedPricingRule).toHaveBeenCalledWith(
+      "one.myshopify.com", expect.objectContaining({ ruleId: "rule-2", ruleVersion: 4 }), undefined, 0,
+    );
+    expect(mocks.publishSnapshot).toHaveBeenCalledWith({}, expect.objectContaining({ ruleId: "rule-2", rateBasisPoints: 60 }));
+    expect(mocks.publishSnapshot).not.toHaveBeenCalledWith({}, expect.objectContaining({ rateBasisPoints: 40 }));
+    expect(state.pricing.rateBasisPoints).toBe(60);
+  });
+
+  test("state reads adopt the rule checkout charges even when the shop copy lags", async () => {
+    core.transformConfig = { ...contract, ruleId: "rule-2", ruleVersion: 4, rateBasisPoints: 60 };
+
+    await readShippingProtectionState({}, "one.myshopify.com");
+
+    expect(mocks.reconcilePublishedPricingRule).toHaveBeenCalledWith(
+      "one.myshopify.com", expect.objectContaining({ ruleId: "rule-2" }), undefined, 0,
+    );
+  });
+
+  test("leaves disagreeing copies alone when neither is charging", async () => {
+    core.shopConfig = { ...contract, enabled: false, ruleId: "rule-2", ruleVersion: 4, rateBasisPoints: 60 };
+    core.transformConfig = { ...contract, enabled: false };
+
+    await readShippingProtectionState({}, "one.myshopify.com");
+
+    expect(mocks.reconcilePublishedPricingRule).not.toHaveBeenCalled();
   });
 
   test("restores protection at its saved rate through setup", async () => {
@@ -623,7 +676,11 @@ describe("installation generation of a fetched protection snapshot", () => {
   test("captures the generation before Shopify fetch and rejects a reinstall during it", async () => {
     const core = await mocks.loadCore();
     let generation = 0;
-    mocks.ensureInstalledShop.mockImplementation(async () => ({ installationGeneration: generation }));
+    // As the real ensureInstalledShop does, reject a generation other than the expected one.
+    mocks.ensureInstalledShop.mockImplementation(async (_domain, _gid, _db, expected) => {
+      if (expected !== undefined && expected !== generation) throw new InstallationAccessLostError();
+      return { installationGeneration: generation };
+    });
     mocks.loadCore.mockImplementationOnce(async () => {
       generation = 2;
       return { ...core, shopConfig: { ...core.shopConfig, schemaVersion: 2 }, transformConfig: { ...core.shopConfig, schemaVersion: 2 } };

@@ -1,5 +1,5 @@
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import { InstallationAccessLostError, lockShopRow } from "./shop.server.js";
+import { InstallationAccessLostError, isInstalledAtGeneration, lockShopRow } from "./shop.server.js";
 import { adminApiVersion } from "./shopify/api-version.server.js";
 import { adminGraphql, isAccessLost } from "./shopify/admin-graphql.server.js";
 
@@ -10,6 +10,19 @@ export const SESSION_INSTALLATION_QUERY = `#graphql
   }
 `;
 
+// Decides "is the app installed" from a SESSION_INSTALLATION_QUERY result:
+// Shopify answered for this shop, with a well-formed shop ID, and reports a
+// current installation of this app.
+function installationConfirmed(data, shopDomain) {
+  return Boolean(
+    data?.currentAppInstallation?.id &&
+    data.shop?.myshopifyDomain === shopDomain &&
+    /^gid:\/\/shopify\/Shop\/\d+$/.test(data.shop.id),
+  );
+}
+
+// Uses its own transport because the session being verified isn't stored yet,
+// so unauthenticated.admin can't load it; a 401 means the token is rejected.
 async function verifyInstallation(session) {
   if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(session.shop))
     throw new InstallationAccessLostError();
@@ -81,9 +94,7 @@ export class ShopAwareSessionStorage {
     if (
       session.accessToken &&
       !unverified &&
-      (!verified?.currentAppInstallation?.id ||
-        verified?.shop?.myshopifyDomain !== session.shop ||
-        !/^gid:\/\/shopify\/Shop\/\d+$/.test(verified.shop.id))
+      !installationConfirmed(verified, session.shop)
     ) {
       throw new InstallationAccessLostError();
     }
@@ -143,7 +154,7 @@ export class ShopAwareSessionStorage {
     const shop = await this.database.shop.findUnique({
       where: { shopDomain: candidate.shop },
     });
-    if (!shop || shop.installationState !== "INSTALLED") return undefined;
+    if (!isInstalledAtGeneration(shop)) return undefined;
     // Read after the generation snapshot: a token from before reinstall must
     // never be labelled with the new generation (including token invalidation).
     const session = await this.delegate.loadSession(id);

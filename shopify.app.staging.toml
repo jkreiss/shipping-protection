@@ -7,6 +7,7 @@ embedded = true
 
 [build]
 automatically_update_urls_on_dev = false
+include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-07"
@@ -46,3 +47,8 @@ redirect_urls = [ "https://insurance-backend-staging.up.railway.app/auth/callbac
 type = "json"
 name = "Shipping protection configuration"
 description = "Checkout-only shipping protection product and pricing contract"
+
+[shop.metafields.app.shipping_protection_offer]
+type = "json"
+name = "Shipping protection checkout offer"
+description = "Per-store selection preference and customer-facing checkout text"

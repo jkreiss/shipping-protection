@@ -139,8 +139,8 @@ export function basisPointsToPercent(rateBasisPoints) {
 }
 
 // Server copy of the Cart Transform's fee calculation, used to check that a
-// paid order was charged the live price. Extensions can't import app code;
-// test-fixtures/pricing-fees.json keeps the copies identical.
+// paid order was charged the live price. The Function and the checkout block
+// keep their own copies; app/pricing-copies.test.js keeps all three identical.
 const ZERO_MINOR_UNIT_CURRENCIES = new Set([
   "BIF",
   "CLP",

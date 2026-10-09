@@ -7,6 +7,7 @@ import { reportFailure } from "./observability.server.js";
 import { randomUUID } from "node:crypto";
 import prisma from "./db.server";
 import { retrySerializationFailures } from "./serializable-retry.server";
+import { isInstalledAtGeneration } from "./shop.server";
 import {
   PRICING_BASIS,
   pricingContractForRule,
@@ -20,6 +21,13 @@ function sanitizeFailure(error) {
     .replace(/\b(password|secret|token)=([^\s;]+)/gi, "$1=[redacted]")
     .replace(/[\r\n\t]+/g, " ")
     .slice(0, 500);
+}
+
+// Publication pins the installation it started under. An uninstall or
+// reinstall since then must not activate, publish, or fail its rule.
+function assertPublicationShop(shop, installationGeneration) {
+  if (!isInstalledAtGeneration(shop, installationGeneration))
+    throw new Error("Installed shop changed during pricing publication.");
 }
 
 // With onlyIfNewer, a rule that a newer one has already replaced is left alone
@@ -37,14 +45,7 @@ async function finalizeRule(
           where: { id: shopId },
           include: { activePricingRule: true },
         });
-        if (
-          !shop ||
-          shop.installationState !== "INSTALLED" ||
-          (installationGeneration !== undefined &&
-            shop.installationGeneration !== installationGeneration)
-        ) {
-          throw new Error("Installed shop changed during pricing publication.");
-        }
+        assertPublicationShop(shop, installationGeneration);
         await guardInstalledShopWrite(transaction, shop);
         if (onlyIfNewer && shop.activePricingRule?.version > rule.version)
           return null;
@@ -131,12 +132,7 @@ export async function createAndPublishPricingRule({
   try {
     await assertSettingsLease(database, shopDomain);
     const shop = await database.shop.findUnique({ where: { shopDomain } });
-    if (
-      !shop ||
-      shop.installationState !== "INSTALLED" ||
-      shop.installationGeneration !== installationGeneration
-    )
-      throw new Error("Installed shop changed during pricing publication.");
+    assertPublicationShop(shop, installationGeneration);
     await publishSnapshot(admin, snapshot);
     published = true;
     const active = await finalizeRule(database, pending.shopId, pending, {
@@ -151,10 +147,7 @@ export async function createAndPublishPricingRule({
           database,
           shopDomain,
           async (transaction, shop) => {
-            if (shop.installationGeneration !== installationGeneration)
-              throw new Error(
-                "Installed shop changed during pricing publication.",
-              );
+            assertPublicationShop(shop, installationGeneration);
             await transaction.pricingRule.update({
               where: { id_shopId: { id: pending.id, shopId: pending.shopId } },
               data: {
@@ -187,12 +180,7 @@ export async function reconcilePublishedPricingRule(
     return null;
 
   const shop = await database.shop.findUnique({ where: { shopDomain } });
-  if (
-    !shop ||
-    shop.installationState !== "INSTALLED" ||
-    shop.installationGeneration !== installationGeneration
-  )
-    return null;
+  if (!isInstalledAtGeneration(shop, installationGeneration)) return null;
   const rule = await database.pricingRule.findFirst({
     where: {
       shopId: shop.id,

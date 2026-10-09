@@ -77,6 +77,9 @@ checkout bundle: Shopify CLI lowers BigInt exponentiation to `Math.pow`, which
 rejects BigInt values. Checkout now constructs decimal powers from integer
 strings. Pricing fixtures also execute the ES6-transformed code, covering normal
 fees, long decimals, currency precision and unsafe final-fee rejection.
+`app/pricing-copies.test.js` runs the three copies side by side over every ISO
+currency, about 2,800 fee inputs (including exact half-unit boundaries) and the
+contract fixtures, the Function included, so a change to one copy fails there.
 Shared copy/configuration fixtures check server/checkout
 acceptance, including v1/v2 contracts, malformed fields, C1/bidi/zero-width/BOM
 and separator rejection, and preservation of Unicode/emoji/plain markup and
@@ -803,7 +806,7 @@ Do not infer readiness for unrelated merchants from a single successful order.
 
 ## Section 8 operations fixes (2026-10-08)
 
-Production and the staging template now declare both JSON shop metafields,
+Production, the tracked staging config, and the staging template now declare both JSON shop metafields,
 `shipping_protection_config` and `shipping_protection_offer`, referenced by the
 checkout extension. No migration is needed. The legacy pricing command and the
 current checkout editing command use the same operator implementation and
@@ -820,7 +823,9 @@ Railway's Wait for CI waits for workflows; confirm it on both services in each
 environment. This change does not alter Railway settings or deploy Shopify.
 
 Before release: validate the app configuration, deploy the staging Shopify app
-version, confirm the `shipping_protection_offer` definition exists there, and test
+version (the tracked `shopify.app.staging.toml` gained the offer definition and
+`include_config_on_deploy = true` on 2026-10-09; before that, a staging deploy
+would not have created the definition), confirm the `shipping_protection_offer` definition exists there, and test
 the checkout block with a paid protection order. Record the actual staging and
 production results only after these external checks. Docker and disposable CI
 verification evidence is recorded below when completed.

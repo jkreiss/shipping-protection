@@ -4,6 +4,7 @@ import { fetchShopifyOrder, normalizeFetchedOrder, OrderUnavailableError, Perman
 import { persistNormalizedOrder } from "./order-ingestion.server.js";
 import { failureCode, logEvent, reportFailure } from "./observability.server.js";
 import { retrySerializationFailures } from "./serializable-retry.server.js";
+import { isInstalledAtGeneration } from "./shop.server.js";
 import { isAccessLost } from "./shopify/admin-graphql.server.js";
 
 // With retryDelayMs, a temporary error (network, Shopify outage, database) is
@@ -114,7 +115,7 @@ export async function processNextDelivery({
   };
   try {
     const shop = await database.shop.findUnique({ where: { id: shopId }, select: { id: true, shopDomain: true, installationState: true } });
-    if (!shop || shop.installationState !== "INSTALLED") {
+    if (!isInstalledAtGeneration(shop)) {
       throw new ShopUninstalledError("Shop is not installed.");
     }
     const { admin } = await adminForShop(shop.shopDomain);

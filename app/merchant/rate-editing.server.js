@@ -1,6 +1,6 @@
 import { withInstalledShopWrite } from "../settings-lease-context.server.js";
 import prisma from "../db.server.js";
-import { withShopSettingsLock } from "../shop.server.js";
+import { isInstalledAtGeneration, withShopSettingsLock } from "../shop.server.js";
 import { UserFacingError } from "../user-facing-error.js";
 
 // Operator-only: do not expose this setter through merchant settings actions.
@@ -39,7 +39,7 @@ export async function setProtectionEditing(
     where: { shopDomain },
     select: { id: true, installationState: true },
   });
-  if (!shop || shop.installationState !== "INSTALLED") {
+  if (!isInstalledAtGeneration(shop)) {
     throw new UserFacingError(
       "Choose an installed store before changing checkout editing access.",
     );

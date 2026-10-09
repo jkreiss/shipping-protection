@@ -1,6 +1,6 @@
 import { withInstalledShopWrite } from "../settings-lease-context.server.js";
 import prisma from "../db.server.js";
-import { withShopSettingsLock } from "../shop.server.js";
+import { assertSessionShop, withShopSettingsLock } from "../shop.server.js";
 import {
   loadCore,
   writeJsonMetafield,
@@ -40,8 +40,7 @@ export async function updateCheckoutOffer(
         );
       }
       const core = await loadCore(admin);
-      if (core.shop.myshopifyDomain !== shopDomain)
-        throw new Error("Shopify shop identity does not match the session.");
+      assertSessionShop(core, shopDomain);
       const offer = {
         ...checkoutOfferForSettings(
           settings,

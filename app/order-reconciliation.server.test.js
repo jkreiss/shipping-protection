@@ -4,6 +4,7 @@ import {
   reconcileOrders, reconciliationDue, shopsToReportBehind, SYNC_BEHIND_MS, SYNC_BEHIND_REPORT_EVERY_MS, syncBehindMinutes,
 } from "./order-reconciliation.server";
 import { retentionCutoff } from "./order-retention.js";
+import * as observability from "./observability.server.js";
 
 const shopDomain = "one.myshopify.com";
 const minute = 60_000;
@@ -308,6 +309,46 @@ describe("pending refund recheck", () => {
       data: { updatedAt: expect.any(Date) },
     });
     expect(result.complete).toBe(true);
+  });
+});
+
+describe("pending refund recheck for an unavailable order", () => {
+  test("stops rechecking it, keeps the row unresolved and does not alert", async () => {
+    const pending = [
+      { orderId: "order-7", order: { shopifyOrderId: id(7) } },
+      { orderId: "order-8", order: { shopifyOrderId: id(8) } },
+    ];
+    const { admin, fetched } = fakeAdmin([[
+      { id: id(7), updatedAt: "2026-09-29T00:00:00Z" },
+      { id: id(8), updatedAt: "2026-09-29T00:00:00Z" },
+    ]], { unavailable: [id(7)] });
+    const { database } = fakeDatabase({ localOrders: [
+      { shopifyOrderId: id(7), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+      { shopifyOrderId: id(8), shopifyUpdatedAt: new Date("2026-09-29T00:00:00Z") },
+    ] });
+    database.protectionRefund.findMany = vi.fn(async () => pending);
+    database.protectionRefund.updateMany = vi.fn(async () => ({ count: 1 }));
+    const persist = vi.fn(async () => {});
+    const report = vi.spyOn(observability, "reportFailure").mockImplementation(() => {});
+    const onProgress = vi.fn();
+
+    try {
+      await reconcileOrders({ admin, shopDomain, database, persist, onProgress });
+
+      expect(fetched).toEqual([id(7), id(8)]);
+      // Only the readable order is stored again; the other is closed out, never confirmed.
+      expect(persist).toHaveBeenCalledTimes(1);
+      expect(database.protectionRefund.updateMany).toHaveBeenCalledTimes(1);
+      expect(database.protectionRefund.updateMany).toHaveBeenCalledWith({
+        where: { shopId: "shop-1", orderId: "order-7", status: "PENDING" },
+        data: { status: "UNATTRIBUTED" },
+      });
+      expect(report).not.toHaveBeenCalledWith("refund_recheck_failed", expect.anything(), expect.anything());
+      // One listing page, then both rechecks still report progress.
+      expect(onProgress).toHaveBeenCalledTimes(3);
+    } finally {
+      report.mockRestore();
+    }
   });
 });
 
