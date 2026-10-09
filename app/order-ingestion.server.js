@@ -109,6 +109,8 @@ export async function persistNormalizedOrder(
     liveQuantity: line.quantity - (line.removedQuantity ?? 0),
     isProtection: Boolean(line.variantId && protectionVariants.has(line.variantId)),
   }));
+  // The merchandise protection covers and the Cart Transform prices.
+  const shippableMerchandise = lines.filter((line) => !line.isProtection && line.requiresShipping);
   const existing = await transaction.order.findUnique({
     where: { shopId_shopifyOrderId: { shopId: shop.id, shopifyOrderId: normalized.shopifyOrderId } },
   });
@@ -124,9 +126,8 @@ export async function persistNormalizedOrder(
       version: normalized.shopifyUpdatedAt.toISOString(), reason: "same-second", database: transaction,
     });
   }
-  const eligible = lines.some((line) => !line.isProtection && line.requiresShipping && line.liveQuantity > 0);
-  const coveredMerchandise = scaledToMoney(lines
-    .filter((line) => !line.isProtection && line.requiresShipping)
+  const eligible = shippableMerchandise.some((line) => line.liveQuantity > 0);
+  const coveredMerchandise = scaledToMoney(shippableMerchandise
     .reduce((sum, line) => sum + survivingShare(line, line.finalAmount), 0n));
   const protectedLines = lines.filter((line) => line.isProtection && line.liveQuantity > 0);
   // Shopify skips the Cart Transform when any line has a selling plan, so the
@@ -204,7 +205,7 @@ export async function persistNormalizedOrder(
   }
   let confirmedPurchase = existingPurchase?.purchasedAt ? existingPurchase : null;
 
-  if (!confirmedPurchase && (!existing?.firstPaidAt || firstPayment) && purchasable) {
+  if (!confirmedPurchase && !existing?.firstPaidAt && purchasable) {
     const attributions = protectedLines.map((line) => protectionAttribution(line, rules));
     const firstAttribution = attributions[0];
     const allMatch = attributions.every((entry) =>
@@ -217,15 +218,14 @@ export async function persistNormalizedOrder(
     const selected = allMatch ? firstAttribution : {
       ...firstAttribution, rule: null, status: "UNATTRIBUTED",
     };
-    const eligibleSubtotal = lines
-      .filter((line) => !line.isProtection && line.requiresShipping)
+    const eligibleSubtotal = shippableMerchandise
       .reduce((sum, line) => sum + survivingShare(line, line.preDiscountAmount), 0n);
     // The fee actually collected: after every discount, including the share of
     // an order-level discount that checkout allocates to the protection line.
     const fee = protectedLines.reduce((sum, line) => sum + moneyToScaled(line.finalAmount), 0n);
     const { pricingCheck, expectedFee, chargedFee, currencyCode: checkedCurrency } = livePriceCheck(
       normalized,
-      lines.filter((line) => !line.isProtection && line.requiresShipping),
+      shippableMerchandise,
       protectedLines,
       selected.rule,
     );

@@ -77,6 +77,9 @@ checkout bundle: Shopify CLI lowers BigInt exponentiation to `Math.pow`, which
 rejects BigInt values. Checkout now constructs decimal powers from integer
 strings. Pricing fixtures also execute the ES6-transformed code, covering normal
 fees, long decimals, currency precision and unsafe final-fee rejection.
+`app/pricing-copies.test.js` runs the three copies side by side over every ISO
+currency, about 2,800 fee inputs (including exact half-unit boundaries) and the
+contract fixtures, the Function included, so a change to one copy fails there.
 Shared copy/configuration fixtures check server/checkout
 acceptance, including v1/v2 contracts, malformed fields, C1/bidi/zero-width/BOM
 and separator rejection, and preservation of Unicode/emoji/plain markup and

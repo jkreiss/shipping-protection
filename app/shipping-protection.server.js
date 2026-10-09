@@ -9,7 +9,7 @@ import {
   getActivePricingRule,
   reconcilePublishedPricingRule,
 } from "./pricing-rule.server";
-import { InstallationAccessLostError, ensureInstalledShop, withShopSettingsLock } from "./shop.server";
+import { assertSessionShop, ensureInstalledShop, withShopSettingsLock } from "./shop.server";
 import { settingsLeaseContext } from "./settings-lease-context.server";
 import { UserFacingError } from "./user-facing-error";
 import { disableShopProtection, enableShopProtection, getShopConfiguration } from "./merchant/configuration.server";
@@ -36,10 +36,6 @@ function legacyContractFor(productId, variantId, enabled) {
   };
 }
 
-function assertSessionShop(core, shopDomain) {
-  if (shopDomain !== core.shop.myshopifyDomain) throw new Error("Shopify shop identity does not match the session.");
-}
-
 // Orders are recognised as protected by the active rule's variant, so the rule
 // must describe the product checkout actually sells. A legacy setup without a
 // rule, or a rule left on a replaced product, needs a setup update to publish one.
@@ -58,6 +54,23 @@ function pricingRuleCheck(seed, activeRule) {
   };
 }
 
+// The published rule to adopt into the database: the pricing function's copy
+// when it is on, since that is what checkout charges, otherwise the two copies'
+// rule when they agree. Copies that disagree with neither charging are left
+// alone. Reconciling only ever moves to a newer rule the database knows, so an
+// interrupted rate save that reached Shopify is adopted, never rolled back.
+// Turning off an offer preserves its published rule, so this also runs while off.
+async function reconcilePublishedRule(core, domain, installationGeneration) {
+  const { shopConfig, transformConfig } = core;
+  const contract =
+    transformConfig?.enabled && transformConfig.schemaVersion === 2
+      ? transformConfig
+      : shopConfig?.schemaVersion === 2 && sameContract(shopConfig, transformConfig, shopConfig.enabled)
+        ? shopConfig
+        : null;
+  if (contract) await reconcilePublishedPricingRule(domain, contract, undefined, installationGeneration);
+}
+
 export async function readShippingProtectionState(admin, shopDomain) {
   const { installationGeneration } = await ensureInstalledShop(shopDomain);
   return (await loadShippingProtectionState(admin, shopDomain, await loadCore(admin), installationGeneration)).state;
@@ -68,16 +81,8 @@ export async function readShippingProtectionState(admin, shopDomain) {
 async function loadShippingProtectionState(admin, shopDomain, core, installationGeneration) {
   const domain = shopDomain ?? core.shop.myshopifyDomain;
   assertSessionShop(core, domain);
-  const installed = await ensureInstalledShop(domain, core.shop.id, undefined, installationGeneration);
-  if (installed.installationGeneration !== installationGeneration) throw new InstallationAccessLostError();
-  if (
-    core.shopConfig?.schemaVersion === 2 &&
-    sameContract(core.shopConfig, core.transformConfig, core.shopConfig.enabled)
-  ) {
-    // Turning off an offer preserves its published rule. Finish an interrupted
-    // rate save even while off, so restoring protection keeps that same rate.
-    await reconcilePublishedPricingRule(domain, core.shopConfig, undefined, installationGeneration);
-  }
+  await ensureInstalledShop(domain, core.shop.id, undefined, installationGeneration);
+  await reconcilePublishedRule(core, domain, installationGeneration);
   const seed = core.shopConfig ?? core.transformConfig;
   const activeRule = await getActivePricingRule(domain);
   const product = await findProduct(admin, seed?.productId, {
@@ -240,7 +245,7 @@ async function runSetup(admin, shopDomain) {
     throw new UserFacingError("The Online Store sales channel is needed to offer protection. Add it in Shopify, then run setup again.");
   }
   assertFunctionDeployed(core);
-  await ensureInstalledShop(domain, core.shop.id);
+  const { installationGeneration } = await ensureInstalledShop(domain, core.shop.id);
   const existingContract = core.shopConfig ?? core.transformConfig;
   // A store already offering protection keeps its live configuration until
   // setup publishes the repaired one, so a failed repair never switches it off.
@@ -255,6 +260,9 @@ async function runSetup(admin, shopDomain) {
   try {
     if (!liveContract) await disableKnownConfiguration(admin, core, existingContract);
 
+    // Before reading the active rule, so setup never republishes an older rate
+    // over one a timed-out save already put in Shopify.
+    await reconcilePublishedRule(core, domain, installationGeneration);
     const activeRule = await getActivePricingRule(domain);
     const existingProduct = await findProduct(
       admin,

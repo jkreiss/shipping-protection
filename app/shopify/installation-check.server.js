@@ -12,10 +12,14 @@ function refreshRejected(error) {
 }
 
 // Whether the app is installed on the shop now, by Shopify's answer to the
-// stored token. A rejected or missing token means it isn't. Anything else
-// (including a failed token refresh, which the Shopify library reports as a
-// bare 500) is reported and thrown, so a webhook that depends on it fails and
-// Shopify retries it; if it never resolves, the report is what an operator acts on.
+// stored token. Any installation the token reaches counts: this decides whether
+// shop/redact deletes data, so it doesn't add the domain and shop-ID checks a
+// new session must pass. A token refresh along the way still saves the session
+// under those checks, so a renamed myshopify domain can read as "not installed"
+// then. A rejected or missing token means it isn't installed. Anything else (including a failed token refresh, which
+// the Shopify library reports as a bare 500) is reported and thrown, so a
+// webhook that depends on it fails and Shopify retries it; if it never
+// resolves, the report is what an operator acts on.
 export async function shopifyInstallationActive(
   shop,
   { loadAdmin = unauthenticated.admin } = {},
