@@ -76,13 +76,31 @@ describe("failure reports", () => {
       chargedFeeAmount: "4.00", intent: "anything a form sent", path: "/app/claims/7", topic: "ORDERS_PAID",
     });
 
-    expect(Sentry.captureException).toHaveBeenCalledWith(error, {
+    const [sent, context] = Sentry.captureException.mock.calls[0];
+    expect(context).toEqual({
       level: "error",
       tags: { event: "webhook_retry", code: "PROCESSING_ERROR", errorName: "HttpResponseError", topic: "ORDERS_PAID" },
       fingerprint: ["{{ default }}", "webhook_retry"],
     });
+    expect(sent).not.toBe(error);
+    expect(sent).toMatchObject({ name: "HttpResponseError", message: "webhook_retry" });
+    expect(sent.stack).not.toContain("order #1001");
+    expect(sent.stack.split("\n").slice(1)).toEqual(error.stack.split("\n").slice(1));
     expect(Sentry.captureMessage).not.toHaveBeenCalled();
     expect(logged()[0]).toMatchObject({ event: "webhook_retry", shopId: "shop-1", sentryEventId: "evt-1" });
+  });
+
+  test("send each report of the same error, which Sentry would otherwise drop as already captured", () => {
+    vi.stubEnv("SENTRY_DSN", "https://dsn");
+    capture();
+    const error = new Error("Shopify returned no GraphQL data.");
+
+    reportFailure("shopify_graphql_failed", error, { operation: "OrderForIngestion" });
+    reportFailure("webhook_terminal", error, { topic: "ORDERS_PAID" });
+
+    const [[first], [second]] = Sentry.captureException.mock.calls;
+    expect(first).not.toBe(second);
+    expect([first.message, second.message]).toEqual(["shopify_graphql_failed", "webhook_terminal"]);
   });
 
   test("send a stand-in exception for a thrown non-Error value", () => {

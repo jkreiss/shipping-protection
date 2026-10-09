@@ -164,6 +164,26 @@ describe("worker runtime", () => {
     expect(purgeOrders.mock.calls[2][0].skipShopIds).toEqual([]);
     expect(logEvent).toHaveBeenCalledWith("retention_purge_completed", expect.objectContaining({ ordersDeleted: 10, shopsFailed: 1 }));
   });
+
+  test("keeps skipping a failed shop when a later error aborts the run", async () => {
+    const cutoff = new Date("2024-10-07T00:00:00.000Z");
+    const purgeOrders = vi.fn()
+      .mockImplementationOnce(async ({ onShopFailure }) => {
+        onShopFailure("shop-a", new Error("lock timeout"));
+        throw new Error("delivery sweep failed");
+      })
+      .mockResolvedValueOnce({ cutoff, ordersDeleted: 0, deliveriesDeleted: 0, failedShopIds: [], complete: true });
+    const runtime = createWorkerRuntime({
+      database: databaseWith([]), adminForShop: vi.fn(), purgeOrders,
+      retentionIntervalMs: 10_000, retentionFailureBackoffMs: 500, concurrency: 1,
+    });
+
+    await runtime.retentionPass(1_000);
+    await runtime.retentionPass(1_500);
+
+    expect(purgeOrders.mock.calls[1][0].skipShopIds).toEqual(["shop-a"]);
+    expect(reportFailure).toHaveBeenCalledWith("retention_purge_failed", expect.any(Error), expect.any(Object));
+  });
 });
 
 test("superseded reconciliation turns retry without failure backoff or alerts", async () => {

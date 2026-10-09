@@ -89,9 +89,13 @@ export function createWorkerRuntime({
       const result = await purgeOrders({
         database, shouldStop: () => stopping, onProgress: () => workerHeartbeat("reconciliation"),
         skipShopIds: [...retentionFailedShops],
-        onShopFailure: (shopId, error) => reportFailure("retention_shop_failed", error, { shopId }),
+        // Recorded as it happens, so a later error that aborts the run can't
+        // lose it and get the shop retried and reported again after the backoff.
+        onShopFailure: (shopId, error) => {
+          retentionFailedShops.add(shopId);
+          reportFailure("retention_shop_failed", error, { shopId });
+        },
       });
-      for (const shopId of result.failedShopIds) retentionFailedShops.add(shopId);
       const shopsFailed = retentionFailedShops.size;
       if (result.complete) retentionFailedShops = new Set();
       retentionDueAt = result.complete ? now + retentionIntervalMs : now;

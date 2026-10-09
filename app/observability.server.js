@@ -109,14 +109,26 @@ function writeError(entry, sentryEventId) {
   process.stderr.write(`${JSON.stringify({ ...entry, ...(sentryEventId ? { sentryEventId } : {}) })}\n`);
 }
 
+// Each report sends its own copy of the error: Sentry silently drops a second
+// capture of the same Error object, so a worker's webhook_terminal after
+// adminGraphql's shopify_graphql_failed would otherwise never arrive. Only the
+// class name and stack frames carry over; a thrown non-Error keeps nothing.
+function sentryException(event, error, name) {
+  const sent = new Error(event);
+  sent.name = name;
+  const stack = error instanceof Error && typeof error.stack === "string" ? error.stack : "";
+  const frames = stack.indexOf("\n    at ");
+  if (frames >= 0) sent.stack = `${name}: ${event}${stack.slice(frames)}`;
+  return sent;
+}
+
 export function reportFailure(event, error, fields = {}) {
   const code = failureCode(error);
   const name = errorName(error);
   let sentryEventId;
   if (process.env.SENTRY_DSN) {
-    // A thrown non-Error is replaced so nothing it holds is serialized. The
-    // fingerprint keeps different events apart even when they share a stack.
-    sentryEventId = Sentry.captureException(error instanceof Error ? error : new Error(event), {
+    // The fingerprint keeps different events apart even when they share a stack.
+    sentryEventId = Sentry.captureException(sentryException(event, error, name), {
       level: "error",
       tags: sentryTags(event, fields, { code, errorName: name }),
       fingerprint: ["{{ default }}", event],
