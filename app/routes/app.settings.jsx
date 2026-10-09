@@ -389,10 +389,19 @@ export default function Settings() {
             Completing setup here prepares the offer; you choose where it
             appears in Shopify&apos;s checkout editor.
           </s-paragraph>
+          <s-stack direction="inline">
+            <s-button
+              href="shopify://admin/settings/checkout/editor"
+              target="_top"
+            >
+              Open checkout editor
+            </s-button>
+          </s-stack>
           <s-ordered-list>
             <s-list-item>
-              In Shopify, go to Settings → Checkout → Configure → Edit to open
-              the checkout editor.
+              Click Open checkout editor. To get there yourself, go to Settings
+              → Checkout in Shopify and click Customize. Depending on your
+              Shopify admin version, this may be Configure → Edit instead.
             </s-list-item>
             <s-list-item>
               Add the Shipping Protection block to your checkout and save.

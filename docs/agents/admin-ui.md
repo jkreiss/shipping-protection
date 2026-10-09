@@ -41,8 +41,11 @@ Copy has its own operator-controlled editing permission.
 Locked stores see current values without the corresponding form. Enforce both
 permissions server-side, and preserve the other settings when saving one editor.
 Blank copy fields restore the defaults; always show the fee beside the
-label. The placement instructions use Settings → Checkout → Configure →
-Edit and suggest placing the block directly under “Shipping method”.
+label. The placement section has an "Open checkout editor" button that opens
+`shopify://admin/settings/checkout/editor` in the top frame. Its instructions
+also give the manual path, Settings → Checkout → Customize, noting that some
+Shopify admin versions use Configure → Edit, and suggest placing the block
+directly under “Shipping method”.
 
 Existing checkout protection setups have a "Turn off shipping protection"
 button. Confirmed disabled checkout and pricing configurations show "Off" and
