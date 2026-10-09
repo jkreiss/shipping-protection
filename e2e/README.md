@@ -179,7 +179,7 @@ records, or changes permissions.
 | `lifecycle.spec.js` | Paid protected orders at 1% and 2%, historical purchase snapshots, an unprotected control order, webhook ingestion, protection-only refund, Overview deltas, exclusion of test orders from live totals |
 
 ```sh
-npm run test:e2e:list                 # Lists 10 tests; needs no credentials/browser
+npm run test:e2e:list                 # Lists 12 tests; needs no credentials/browser
 npm run typecheck:e2e                # Strict JS/JSDoc checks
 npm run test:e2e -- --project=desktop
 npm run test:e2e -- --project=mobile-checkout
