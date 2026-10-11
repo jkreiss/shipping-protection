@@ -173,6 +173,14 @@ configuration. Distribution cannot be changed after selection.
 Listing copy, media and reviewer test steps are drafted in
 [App Store listing draft](app-store-listing.md).
 
+Since 2026-10-12 the production Railway environment serves a custom-distribution
+app (`shopify.app.custom.toml`, client ID `b0adf390…`) instead of the public app,
+which stays a draft until there is a brand name, legal entity and domain. A
+custom-distribution app installs on one store or on stores in the same Plus
+organization. Custom apps that contain Shopify Functions work only on Plus
+stores, and they can't charge through Shopify billing. Moving that store to the
+public app later means installing the public app and pointing an environment at it.
+
 ## 3. Operator and environment worksheet
 
 Keep secrets in the platform's secret storage, not in this document or a release

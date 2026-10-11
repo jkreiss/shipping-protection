@@ -26,6 +26,11 @@ Shopify app and use its ID and credentials. For staging, copy
 uses `shopify.app.production.toml`. Each environment has its own Shopify app,
 Railway environment, secrets, and database; never use production for local work.
 
+The production Railway environment currently serves `shopify.app.custom.toml`,
+a custom-distribution app installed on one Plus store, while the public app in
+`shopify.app.production.toml` waits for App Store submission. Release with
+`--config custom` until the public app goes live.
+
 Set `DATABASE_URL` in `.env` to the Supabase **Connect** → Session pooler URL
 (port 5432) with a percent-encoded password and
 `schema=public&sslmode=require`. Keep **Integrations → Data API** disabled in
@@ -213,8 +218,8 @@ deploy separately through Shopify CLI. The load environment also needs a
    matching backend passes smoke checks; app versions don't deploy the web app:
 
    ```sh
-   npm exec --yes --package=@shopify/cli@4.8.5 -- shopify app config validate --json --config production
-   npx shopify app deploy --config production
+   npm exec --yes --package=@shopify/cli@4.8.5 -- shopify app config validate --json --config custom
+   npx shopify app deploy --config custom
    ```
 
    Configuration validation uses temporary CLI `4.8.5`; the project stays pinned
@@ -257,7 +262,7 @@ Every push to `main` deploys to staging. Production deploys only when the
 
    ```sh
    git checkout production && git pull
-   npx shopify app deploy --config production
+   npx shopify app deploy --config custom
    git checkout main
    ```
 
