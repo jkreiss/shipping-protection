@@ -231,11 +231,11 @@ deploy separately through Shopify CLI. The load environment also needs a
    [readiness runbook](docs/production-readiness.md). Keep real customer charges
    disabled until approved protection terms and a claims process exist.
 
-**To do (no custom domain yet):** once production has its domain, create a
-Sentry Uptime monitor on `https://<domain>/healthz` that alerts on any non-200,
-and confirm it fires against a stopped staging web service. Railway's health
-check only gates deploys, so a web outage goes unnoticed until then. Also set
-`SENTRY_WORKER_MONITOR` on the worker.
+Production web uptime is watched by an UptimeRobot HTTP monitor on
+`https://insurance-backend-production-82be.up.railway.app/healthz` (set up
+2026-10-12), because Railway's health check only gates deploys. Move it to the
+custom domain once there is one. **To do:** set `SENTRY_WORKER_MONITOR` on the
+worker so a stalled worker also alerts.
 
 ## Release to production
 
