@@ -233,8 +233,8 @@ deploy separately through Shopify CLI. The load environment also needs a
 
 Production web uptime is watched by an UptimeRobot HTTP monitor on
 `https://insurance-backend-production-82be.up.railway.app/healthz` (set up
-2026-10-12), because Railway's health check only gates deploys. Move it to the
-custom domain once there is one. **To do:** set `SENTRY_WORKER_MONITOR` on the
+2026-10-12), because Railway's health check only gates deploys. Once production
+has a custom domain, replace it with a Sentry Uptime monitor on that domain. **To do:** set `SENTRY_WORKER_MONITOR` on the
 worker so a stalled worker also alerts.
 
 ## Release to production
