@@ -6,6 +6,11 @@ export const IMPLEMENTED_CAPABILITIES = Object.freeze({
   autoApproval: false,
 });
 
+// The Claims & Returns page stays hidden until claims or returns exist to manage.
+export function claimsPageAvailable(implemented = IMPLEMENTED_CAPABILITIES) {
+  return Boolean(implemented.claimIntake || implemented.returns);
+}
+
 export function resolveConfiguration(
   settings,
   capabilities,

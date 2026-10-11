@@ -4,7 +4,7 @@ import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ data: null }));
+const mocks = vi.hoisted(() => ({ data: null, claimsPage: true }));
 vi.mock("preact/jsx-runtime", async () => ({
   ...(await vi.importActual("react/jsx-runtime")),
   ...(await vi.importActual("react/jsx-dev-runtime")),
@@ -18,6 +18,10 @@ vi.mock("./shopify.server", () => ({ authenticate: { admin: vi.fn() } }));
 vi.mock("./analytics.server", () => ({ readOverview: vi.fn() }));
 vi.mock("./shipping-protection.server", () => ({ readShippingProtectionState: vi.fn() }));
 vi.mock("./claims/claims.server", () => ({ readClaimsOverview: vi.fn() }));
+vi.mock("./merchant/resolve-configuration", async () => ({
+  ...(await vi.importActual("./merchant/resolve-configuration")),
+  claimsPageAvailable: () => mocks.claimsPage,
+}));
 import Overview from "./routes/app.overview";
 import Claims, { loader as claimsLoader } from "./routes/app.claims";
 import { authenticate } from "./shopify.server";
@@ -95,4 +99,19 @@ test("Claims loader passes the authenticated Admin client and tenant", async () 
   readClaimsOverview.mockResolvedValue({ claims: [], timeZone: "America/New_York" });
   await expect(claimsLoader({ request })).resolves.toMatchObject({ timeZone: "America/New_York" });
   expect(readClaimsOverview).toHaveBeenCalledWith(admin, "trusted.myshopify.com");
+});
+
+test("Claims loader returns 404 while claims and returns are unavailable", async () => {
+  mocks.claimsPage = false;
+  try {
+    authenticate.admin.mockResolvedValue({ admin: {}, session: { shop: "trusted.myshopify.com" } });
+    readClaimsOverview.mockClear();
+    const response = await claimsLoader({ request: new Request("https://app.example/app/claims") })
+      .catch((thrown) => thrown);
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(404);
+    expect(readClaimsOverview).not.toHaveBeenCalled();
+  } finally {
+    mocks.claimsPage = true;
+  }
 });

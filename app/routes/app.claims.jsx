@@ -2,9 +2,11 @@ import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { readClaimsOverview } from "../claims/claims.server";
+import { claimsPageAvailable } from "../merchant/resolve-configuration";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
+  if (!claimsPageAvailable()) throw new Response("Not Found", { status: 404 });
   return readClaimsOverview(admin, session.shop);
 };
 

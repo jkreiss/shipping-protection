@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { observedShopifyCapabilities, resolveConfiguration } from "./resolve-configuration";
+import {
+  claimsPageAvailable,
+  IMPLEMENTED_CAPABILITIES,
+  observedShopifyCapabilities,
+  resolveConfiguration,
+} from "./resolve-configuration";
 
 const enabled = {
   protectionEnabled: true,
@@ -72,5 +77,13 @@ describe("merchant configuration resolution", () => {
     expect(resolveConfiguration({ ...enabled, attachmentStrategy: "THEME_CART" }, supported, true))
       .toMatchObject({ strategy: "NONE", reasons: ["Theme cart attachment is not implemented."] });
     expect(resolveConfiguration(enabled, supported, false).strategy).toBe("NONE");
+  });
+});
+
+describe("claimsPageAvailable", () => {
+  test("hides the page until claim intake or returns are implemented", () => {
+    expect(claimsPageAvailable(IMPLEMENTED_CAPABILITIES)).toBe(false);
+    expect(claimsPageAvailable({ claimIntake: true, returns: false })).toBe(true);
+    expect(claimsPageAvailable({ claimIntake: false, returns: true })).toBe(true);
   });
 });

@@ -170,6 +170,8 @@ a pilot is a separate distribution decision and must match backend authenticatio
 configuration. Distribution cannot be changed after selection.
 [Shopify distribution](https://shopify.dev/docs/apps/launch/distribution),
 [listing visibility](https://shopify.dev/docs/apps/launch/distribution/visibility).
+Listing copy, media and reviewer test steps are drafted in
+[App Store listing draft](app-store-listing.md).
 
 ## 3. Operator and environment worksheet
 

@@ -10,9 +10,11 @@ Navigation under the app:
 
 ```text
 Overview            /app/overview  (dashboard; /app redirects here)
-Claims & Returns    /app/claims
+Claims & Returns    /app/claims    (hidden until implemented)
 Settings            /app/settings
 ```
+
+Claims & Returns appears in the menu, and `/app/claims` answers instead of returning 404, only once `IMPLEMENTED_CAPABILITIES` marks claim intake or returns as implemented (`claimsPageAvailable` in `app/merchant/resolve-configuration.js`). Shopify's App Store review rejects pages for features that don't exist yet.
 
 App Bridge hides the `rel="home"` link from the sidebar. That is why the dashboard has its own `/app/overview` route: so "Overview" appears as a menu item.
 
